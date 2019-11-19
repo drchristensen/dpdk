@@ -51,6 +51,10 @@
 #include "eal_hugepages.h"
 #include "eal_options.h"
 
+#ifdef RTE_EAL_VFIO
+#include "eal_vfio.h"
+#endif
+
 #define PFN_MASK_SIZE	8
 
 /**
@@ -153,7 +157,11 @@ rte_iova_t
 rte_mem_virt2iova(const void *virtaddr)
 {
 	if (rte_eal_iova_mode() == RTE_IOVA_VA)
+#ifdef RTE_EAL_VFIO
+		return rte_vfio_virt2iova(virtaddr);
+#else
 		return (uintptr_t)virtaddr;
+#endif
 	return rte_mem_virt2phy(virtaddr);
 }
 

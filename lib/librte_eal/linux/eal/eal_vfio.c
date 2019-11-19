@@ -56,10 +56,18 @@ static struct vfio_config *default_vfio_cfg = &vfio_cfgs[0];
 
 static int vfio_type1_dma_map(int);
 static int vfio_type1_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
-static int vfio_spapr_dma_map(int);
-static int vfio_spapr_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+rte_iova_t vfio_type1_virt2iova(const void *);
+#if defined(RTE_ARCH_PPC_64)
+static int vfio_spapr1_dma_map(int);
+static int vfio_spapr1_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+rte_iova_t vfio_spapr1_virt2iova(const void *);
+static int vfio_spapr2_dma_map(int);
+static int vfio_spapr2_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+rte_iova_t vfio_spapr2_virt2iova(const void *);
+#endif
 static int vfio_noiommu_dma_map(int);
 static int vfio_noiommu_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+rte_iova_t vfio_noiommu_virt2iova(const void *);
 static int vfio_dma_mem_map(struct vfio_config *vfio_cfg, uint64_t vaddr,
 		uint64_t iova, uint64_t len, int do_map);
 
@@ -70,21 +78,34 @@ static const struct vfio_iommu_type iommu_types[] = {
 		.type_id = RTE_VFIO_TYPE1,
 		.name = "Type 1",
 		.dma_map_func = &vfio_type1_dma_map,
-		.dma_user_map_func = &vfio_type1_dma_mem_map
+		.dma_user_map_func = &vfio_type1_dma_mem_map,
+		.virt2iova_func = &vfio_type1_virt2iova
 	},
-	/* ppc64 IOMMU, otherwise known as spapr */
+#if defined(RTE_ARCH_PPC_64)
+	/* ppc64 VM IOMMU, otherwise known as spapr v1*/
 	{
-		.type_id = RTE_VFIO_SPAPR,
-		.name = "sPAPR",
-		.dma_map_func = &vfio_spapr_dma_map,
-		.dma_user_map_func = &vfio_spapr_dma_mem_map
+		.type_id = RTE_VFIO_SPAPR1,
+		.name = "sPAPR v1",
+		.dma_map_func = &vfio_spapr1_dma_map,
+		.dma_user_map_func = &vfio_spapr1_dma_mem_map,
+		.virt2iova_func = &vfio_spapr1_virt2iova
 	},
+	/* ppc64 IOMMU, otherwise known as spapr v2*/
+	{
+		.type_id = RTE_VFIO_SPAPR2,
+		.name = "sPAPR v2",
+		.dma_map_func = &vfio_spapr2_dma_map,
+		.dma_user_map_func = &vfio_spapr2_dma_mem_map,
+		.virt2iova_func = &vfio_spapr1_virt2iova
+	},
+#endif
 	/* IOMMU-less mode */
 	{
 		.type_id = RTE_VFIO_NOIOMMU,
 		.name = "No-IOMMU",
 		.dma_map_func = &vfio_noiommu_dma_map,
-		.dma_user_map_func = &vfio_noiommu_dma_mem_map
+		.dma_user_map_func = &vfio_noiommu_dma_mem_map,
+		.virt2iova_func = &vfio_noiommu_virt2iova
 	},
 };
 
@@ -1234,6 +1255,21 @@ rte_vfio_get_group_num(const char *sysfs_base,
 	return 1;
 }
 
+rte_iova_t
+rte_vfio_virt2iova(const void *virtaddr)
+{
+	/* Verify an IOMMU has been enabled */
+	if (default_vfio_cfg->vfio_iommu_type == 0)
+#if defined(RTE_ARCH_PPC_64)
+		/* DRC - Very bad! Need a better solution. */
+		return 0;
+#elif
+		return (uintptr_t)virtaddr;
+#endif
+	else
+		return default_vfio_cfg->vfio_iommu_type->virt2iova_func(virtaddr);
+}
+
 static int
 type1_map_contig(const struct rte_memseg_list *msl, const struct rte_memseg *ms,
 		size_t len, void *arg)
@@ -1340,8 +1376,122 @@ vfio_type1_dma_map(int vfio_container_fd)
 	return rte_memseg_walk(type1_map, &vfio_container_fd);
 }
 
+rte_iova_t
+vfio_type1_virt2iova(const void *virtaddr)
+{
+	return (uintptr_t)virtaddr;
+}
+
+
+#if defined(RTE_ARCH_PPC_64)
+/* Maintain the virt2iova mapping range */
+uint64_t spapr1_virt_start = 0;
+uint64_t spapr1_virt_len = 0;
+
 static int
-vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
+vfio_spapr1_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
+                uint64_t len, int do_map)
+{
+	struct vfio_iommu_type1_dma_map dma_map;
+	struct vfio_iommu_type1_dma_unmap dma_unmap;
+	int ret;
+
+	/*
+	 * Unlike the sPAPR v2 IOMMU, v1 can't create new DMA windows,
+	 * its stuck with the window size set at system boot. All that
+	 * can be done is attempt a mapping and fail if there's no room.
+	*/
+	if (do_map != 0) {
+
+		/* If this is the first mapping save the vaddr */
+		if (spapr1_virt_start == 0)
+			spapr1_virt_start = vaddr;
+
+		RTE_LOG(DEBUG, EAL, "  [DRC] map request: "
+				"vaddr = 0x%"PRIx64", iova = 0x%"PRIx64", len = 0x%"PRIx64"])\n",
+				vaddr, iova, len);
+
+		memset(&dma_map, 0, sizeof(dma_map));
+		dma_map.argsz = sizeof(struct vfio_iommu_type1_dma_map);
+		dma_map.vaddr = vaddr;
+		dma_map.size = len;
+		dma_map.iova = iova;
+		dma_map.flags = VFIO_DMA_MAP_FLAG_READ |
+			VFIO_DMA_MAP_FLAG_WRITE;
+
+		ret = ioctl(vfio_container_fd, VFIO_IOMMU_MAP_DMA, &dma_map);
+		if (ret) {
+			RTE_LOG(ERR, EAL, "  cannot set up DMA mapping, "
+					"error %i (%s)\n", errno, strerror(errno));
+			return -1;
+		}
+	} else {
+		RTE_LOG(DEBUG, EAL, "  [DRC] unmap request: "
+			"iova = 0x%"PRIx64", len = 0x%"PRIu64"])\n", iova, len);
+
+		memset(&dma_unmap, 0, sizeof(dma_unmap));
+		dma_unmap.argsz = sizeof(struct vfio_iommu_type1_dma_unmap);
+		dma_unmap.size = len;
+		dma_unmap.iova = iova;
+
+		ret = ioctl(vfio_container_fd, VFIO_IOMMU_UNMAP_DMA, &dma_unmap);
+		if (ret) {
+			RTE_LOG(ERR, EAL, "  cannot clear DMA remapping, error %i (%s)\n",
+					errno, strerror(errno));
+			return -1;
+		}
+	}
+	return 0;
+}
+
+static int
+vfio_spapr1_map_walk(const struct rte_memseg_list *msl,
+                const struct rte_memseg *ms, void *arg)
+{
+	int *vfio_container_fd = arg;
+
+	if (msl->external)
+		return 0;
+
+	return vfio_spapr1_dma_mem_map(*vfio_container_fd,
+			ms->addr_64, ms->iova, ms->len, 1);
+}
+
+
+static int
+vfio_spapr1_dma_map(int vfio_container_fd)
+{
+	struct vfio_iommu_spapr_tce_info info = {
+		.argsz = sizeof(info)
+	};
+	int ret = ioctl(vfio_container_fd, VFIO_IOMMU_ENABLE);
+	if (ret) {
+		RTE_LOG(ERR, EAL, "  cannot enable iommu, "
+				"error %i (%s)\n", errno, strerror(errno));
+		return -1;
+	}
+  
+	ret = ioctl(vfio_container_fd,
+			VFIO_IOMMU_SPAPR_TCE_GET_INFO, &info);
+	if (ret) {
+		RTE_LOG(ERR, EAL, "  cannot get iommu info, "
+				"error %i (%s)\n", errno, strerror(errno));
+		return -1;
+	}
+	spapr1_virt_len = info.dma32_window_size;
+
+	return rte_memseg_walk(vfio_spapr1_map_walk, &vfio_container_fd);
+}
+
+rte_iova_t
+vfio_spapr1_virt2iova(const void *vaddr)
+{
+	return (uint64_t)vaddr - spapr1_virt_start;
+}
+
+
+static int
+vfio_spapr2_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		uint64_t len, int do_map)
 {
 	struct vfio_iommu_type1_dma_map dma_map;
@@ -1422,7 +1572,7 @@ struct spapr_remap_walk_param {
 };
 
 static int
-vfio_spapr_map_walk(const struct rte_memseg_list *msl,
+vfio_spapr2_map_walk(const struct rte_memseg_list *msl,
 		const struct rte_memseg *ms, void *arg)
 {
 	struct spapr_remap_walk_param *param = arg;
@@ -1438,12 +1588,12 @@ vfio_spapr_map_walk(const struct rte_memseg_list *msl,
 	if (ms->addr_64 == param->addr_64)
 		return 0;
 
-	return vfio_spapr_dma_do_map(param->vfio_container_fd, ms->addr_64, ms->iova,
+	return vfio_spapr2_dma_do_map(param->vfio_container_fd, ms->addr_64, ms->iova,
 			ms->len, 1);
 }
 
 static int
-vfio_spapr_unmap_walk(const struct rte_memseg_list *msl,
+vfio_spapr2_unmap_walk(const struct rte_memseg_list *msl,
 		const struct rte_memseg *ms, void *arg)
 {
 	struct spapr_remap_walk_param *param = arg;
@@ -1459,7 +1609,7 @@ vfio_spapr_unmap_walk(const struct rte_memseg_list *msl,
 	if (ms->addr_64 == param->addr_64)
 		return 0;
 
-	return vfio_spapr_dma_do_map(param->vfio_container_fd, ms->addr_64, ms->iova,
+	return vfio_spapr2_dma_do_map(param->vfio_container_fd, ms->addr_64, ms->iova,
 			ms->len, 0);
 }
 
@@ -1470,7 +1620,7 @@ struct spapr_walk_param {
 };
 
 static int
-vfio_spapr_window_size_walk(const struct rte_memseg_list *msl,
+vfio_spapr2_window_size_walk(const struct rte_memseg_list *msl,
 		const struct rte_memseg *ms, void *arg)
 {
 	struct spapr_walk_param *param = arg;
@@ -1497,7 +1647,7 @@ vfio_spapr_window_size_walk(const struct rte_memseg_list *msl,
 }
 
 static int
-vfio_spapr_create_new_dma_window(int vfio_container_fd,
+vfio_spapr2_create_new_dma_window(int vfio_container_fd,
 		struct vfio_iommu_spapr_tce_create *create) {
 	struct vfio_iommu_spapr_tce_remove remove = {
 		.argsz = sizeof(remove),
@@ -1563,7 +1713,7 @@ vfio_spapr_create_new_dma_window(int vfio_container_fd,
 }
 
 static int
-vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
+vfio_spapr2_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		uint64_t len, int do_map)
 {
 	struct spapr_walk_param param;
@@ -1588,7 +1738,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 	param.addr_64 = vaddr;
 
 	/* we're inside a callback so use thread-unsafe version */
-	if (rte_memseg_walk_thread_unsafe(vfio_spapr_window_size_walk,
+	if (rte_memseg_walk_thread_unsafe(vfio_spapr2_window_size_walk,
 				&param) < 0) {
 		RTE_LOG(ERR, EAL, "Could not get window size\n");
 		ret = -1;
@@ -1616,7 +1766,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			};
 
 			/* release all maps before recreating the window */
-			if (rte_memseg_walk_thread_unsafe(vfio_spapr_unmap_walk,
+			if (rte_memseg_walk_thread_unsafe(vfio_spapr2_unmap_walk,
 					&remap_param) < 0) {
 				RTE_LOG(ERR, EAL, "Could not release DMA maps\n");
 				ret = -1;
@@ -1626,7 +1776,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			for (i = 0; i < user_mem_maps->n_maps; i++) {
 				struct user_mem_map *map =
 						&user_mem_maps->maps[i];
-				if (vfio_spapr_dma_do_map(vfio_container_fd,
+				if (vfio_spapr2_dma_do_map(vfio_container_fd,
 						map->addr, map->iova, map->len,
 						0)) {
 					RTE_LOG(ERR, EAL, "Could not release user DMA maps\n");
@@ -1635,7 +1785,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 				}
 			}
 			create.window_size = rte_align64pow2(iova + len);
-			if (vfio_spapr_create_new_dma_window(vfio_container_fd,
+			if (vfio_spapr2_create_new_dma_window(vfio_container_fd,
 					&create) < 0) {
 				RTE_LOG(ERR, EAL, "Could not create new DMA window\n");
 				ret = -1;
@@ -1643,7 +1793,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			}
 			/* we're inside a callback, so use thread-unsafe version
 			 */
-			if (rte_memseg_walk_thread_unsafe(vfio_spapr_map_walk,
+			if (rte_memseg_walk_thread_unsafe(vfio_spapr2_map_walk,
 					&remap_param) < 0) {
 				RTE_LOG(ERR, EAL, "Could not recreate DMA maps\n");
 				ret = -1;
@@ -1653,7 +1803,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			for (i = 0; i < user_mem_maps->n_maps; i++) {
 				struct user_mem_map *map =
 						&user_mem_maps->maps[i];
-				if (vfio_spapr_dma_do_map(vfio_container_fd,
+				if (vfio_spapr2_dma_do_map(vfio_container_fd,
 						map->addr, map->iova, map->len,
 						1)) {
 					RTE_LOG(ERR, EAL, "Could not recreate user DMA maps\n");
@@ -1662,7 +1812,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 				}
 			}
 		}
-		if (vfio_spapr_dma_do_map(vfio_container_fd, vaddr, iova, len, 1)) {
+		if (vfio_spapr2_dma_do_map(vfio_container_fd, vaddr, iova, len, 1)) {
 			RTE_LOG(ERR, EAL, "Failed to map DMA\n");
 			ret = -1;
 			goto out;
@@ -1675,7 +1825,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			goto out;
 		}
 
-		vfio_spapr_dma_do_map(vfio_container_fd, vaddr, iova, len, 0);
+		vfio_spapr2_dma_do_map(vfio_container_fd, vaddr, iova, len, 0);
 	}
 out:
 	rte_spinlock_recursive_unlock(&user_mem_maps->lock);
@@ -1683,7 +1833,7 @@ out:
 }
 
 static int
-vfio_spapr_dma_map(int vfio_container_fd)
+vfio_spapr2_dma_map(int vfio_container_fd)
 {
 	struct vfio_iommu_spapr_tce_create create = {
 		.argsz = sizeof(create),
@@ -1694,24 +1844,31 @@ vfio_spapr_dma_map(int vfio_container_fd)
 	param.addr_64 = 0UL;
 
 	/* create DMA window from 0 to max(phys_addr + len) */
-	rte_memseg_walk(vfio_spapr_window_size_walk, &param);
+	rte_memseg_walk(vfio_spapr2_window_size_walk, &param);
 
 	/* sPAPR requires window size to be a power of 2 */
 	create.window_size = rte_align64pow2(param.window_size);
 	create.page_shift = __builtin_ctzll(param.hugepage_sz);
 	create.levels = 1;
 
-	if (vfio_spapr_create_new_dma_window(vfio_container_fd, &create) < 0) {
+	if (vfio_spapr2_create_new_dma_window(vfio_container_fd, &create) < 0) {
 		RTE_LOG(ERR, EAL, "Could not create new DMA window\n");
 		return -1;
 	}
 
 	/* map all DPDK segments for DMA. use 1:1 PA to IOVA mapping */
-	if (rte_memseg_walk(vfio_spapr_map_walk, &vfio_container_fd) < 0)
+	if (rte_memseg_walk(vfio_spapr2_map_walk, &vfio_container_fd) < 0)
 		return -1;
 
 	return 0;
 }
+
+rte_iova_t
+vfio_spapr2_virt2iova(const void *virtaddr)
+{
+	return (uintptr_t)virtaddr;
+}
+#endif /* RTE_ARCH_PPC_64 */
 
 static int
 vfio_noiommu_dma_map(int __rte_unused vfio_container_fd)
@@ -1728,6 +1885,12 @@ vfio_noiommu_dma_mem_map(int __rte_unused vfio_container_fd,
 {
 	/* No-IOMMU mode does not need DMA mapping */
 	return 0;
+}
+
+rte_iova_t
+vfio_noiommu_virt2iova(const void *virtaddr)
+{
+	return (uintptr_t)virtaddr;
 }
 
 static int
