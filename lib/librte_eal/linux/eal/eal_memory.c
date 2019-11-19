@@ -51,6 +51,10 @@
 #include "eal_hugepages.h"
 #include "eal_options.h"
 
+#ifdef RTE_EAL_VFIO
+#include "eal_vfio.h"
+#endif
+
 #define PFN_MASK_SIZE	8
 
 /**

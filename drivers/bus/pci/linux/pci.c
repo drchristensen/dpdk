@@ -549,7 +549,10 @@ pci_device_iommu_support_va(const struct rte_pci_device *dev)
 bool
 pci_device_iommu_support_va(__rte_unused const struct rte_pci_device *dev)
 {
-	return false;
+	/* DRC - Do we need an IOMMU test here? */
+	uint8_t iommu_mask = 31;
+	rte_mem_set_dma_mask(iommu_mask);
+	return true;
 }
 #else
 bool

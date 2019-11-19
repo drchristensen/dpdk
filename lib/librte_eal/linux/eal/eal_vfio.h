@@ -27,7 +27,7 @@
 #define RTE_VFIO_TYPE1 VFIO_TYPE1_IOMMU
 
 #ifndef VFIO_SPAPR_TCE_v2_IOMMU
-#define RTE_VFIO_SPAPR 7
+#define RTE_VFIO_SPAPR2 7
 #define VFIO_IOMMU_SPAPR_REGISTER_MEMORY _IO(VFIO_TYPE, VFIO_BASE + 17)
 #define VFIO_IOMMU_SPAPR_UNREGISTER_MEMORY _IO(VFIO_TYPE, VFIO_BASE + 18)
 #define VFIO_IOMMU_SPAPR_TCE_CREATE _IO(VFIO_TYPE, VFIO_BASE + 19)
@@ -68,6 +68,7 @@ struct vfio_iommu_spapr_tce_ddw_info {
 
 /* SPAPR_v2 is not present, but SPAPR might be */
 #ifndef VFIO_SPAPR_TCE_IOMMU
+#define RTE_VFIO_SPAPR1 2
 #define VFIO_IOMMU_SPAPR_TCE_GET_INFO _IO(VFIO_TYPE, VFIO_BASE + 12)
 
 struct vfio_iommu_spapr_tce_info {
@@ -80,7 +81,8 @@ struct vfio_iommu_spapr_tce_info {
 #endif /* VFIO_SPAPR_TCE_IOMMU */
 
 #else /* VFIO_SPAPR_TCE_v2_IOMMU */
-#define RTE_VFIO_SPAPR VFIO_SPAPR_TCE_v2_IOMMU
+#define RTE_VFIO_SPAPR1 VFIO_SPAPR_TCE_IOMMU
+#define RTE_VFIO_SPAPR2 VFIO_SPAPR_TCE_v2_IOMMU
 #endif
 
 #define VFIO_MAX_GROUPS RTE_MAX_VFIO_GROUPS
@@ -110,11 +112,19 @@ typedef int (*vfio_dma_func_t)(int);
 typedef int (*vfio_dma_user_func_t)(int fd, uint64_t vaddr, uint64_t iova,
 		uint64_t len, int do_map);
 
+/* DRC */
+/* Custom virtual memory address to IOVA address function prototype.
+ * Accepts a virtual address and returns the IOVA address, as supported
+ * by the IOMMU.  Returns an IOVA address on success or RTE_BAD_IOVA
+ **/
+typedef rte_iova_t (*vfio_virt2iova_func_t)(const void *virtaddr);
+
 struct vfio_iommu_type {
 	int type_id;
 	const char *name;
 	vfio_dma_user_func_t dma_user_map_func;
 	vfio_dma_func_t dma_map_func;
+	vfio_virt2iova_func_t virt2iova_func;
 };
 
 /* get the vfio container that devices are bound to by default */
@@ -126,6 +136,9 @@ vfio_set_iommu_type(int vfio_container_fd);
 
 int
 vfio_get_iommu_type(void);
+
+rte_iova_t
+rte_vfio_virt2iova(const void *virtaddr);
 
 /* check if we have any supported extensions */
 int
