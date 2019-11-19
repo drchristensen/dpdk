@@ -1263,7 +1263,7 @@ rte_vfio_virt2iova(const void *virtaddr)
 #if defined(RTE_ARCH_PPC_64)
 		/* DRC - Very bad! Need a better solution. */
 		return 0;
-#elif
+#else
 		return (uintptr_t)virtaddr;
 #endif
 	else
