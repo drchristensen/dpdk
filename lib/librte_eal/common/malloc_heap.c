@@ -356,7 +356,8 @@ alloc_pages_on_heap(struct malloc_heap *heap, uint64_t pg_sz, size_t elt_size,
 		 * because user is root, give and advice for solving the
 		 * problem.
 		 */
-		if ((rte_eal_iova_mode() == RTE_IOVA_VA) &&
+		if (((rte_eal_iova_mode() == RTE_IOVA_VA) ||
+				(rte_eal_iova_mode() == RTE_IOVA_TA)) &&
 		     rte_eal_using_phys_addrs())
 			RTE_LOG(ERR, EAL,
 				"%s(): Please try initializing EAL with --iova-mode=pa parameter\n",

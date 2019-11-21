@@ -1089,6 +1089,8 @@ eal_parse_iova_mode(const char *name)
 		mode = RTE_IOVA_PA;
 	else if (!strcmp("va", name))
 		mode = RTE_IOVA_VA;
+	else if (!strcmp("ta", name))
+		mode = RTE_IOVA_TA;
 	else
 		return -1;
 

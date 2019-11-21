@@ -330,7 +330,7 @@ typedef uint64_t phys_addr_t;
  * When the physical addressing mode (IOVA as PA) is in use,
  * the translation from an IO virtual address (IOVA) to a physical address
  * is a direct mapping, i.e. the same value.
- * Otherwise, in virtual mode (IOVA as VA), an IOMMU may do the translation.
+ * Otherwise, an IOMMU may do the translation.
  */
 typedef uint64_t rte_iova_t;
 #define RTE_BAD_IOVA ((rte_iova_t)-1)

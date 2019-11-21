@@ -39,9 +39,13 @@ TAILQ_HEAD(rte_bus_list, rte_bus);
 enum rte_iova_mode {
 	RTE_IOVA_DC = 0,	/* Don't care mode */
 	RTE_IOVA_PA = (1 << 0), /* DMA using physical address */
-	RTE_IOVA_VA = (1 << 1)  /* DMA using virtual address */
+	RTE_IOVA_VA = (1 << 1), /* DMA using virtual address */
+	RTE_IOVA_TA = (1 << 2)  /* DMA using translated address */
 };
 
+#define IOVA_STR(mode)  (mode == RTE_IOVA_DC ? "DC" : \
+												(mode == RTE_IOVA_PA ? "PA" : \
+												(mode == RTE_IOVA_VA ? "VA" : "TA")))
 /**
  * Bus specific scan for devices attached on the bus.
  * For each bus object, the scan would be responsible for finding devices and

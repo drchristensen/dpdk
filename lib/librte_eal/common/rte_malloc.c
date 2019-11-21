@@ -323,8 +323,13 @@ rte_malloc_virt2iova(const void *addr)
 	if (elem == NULL)
 		return RTE_BAD_IOVA;
 
-	if (!elem->msl->external && rte_eal_iova_mode() == RTE_IOVA_VA)
-		return (uintptr_t) addr;
+	if (!elem->msl->external) {
+		if (rte_eal_iova_mode() == RTE_IOVA_VA)
+			return (uintptr_t) addr;
+		else if (rte_eal_iova_mode() == RTE_IOVA_VA)
+			/* DRC - Need a function for mem addresses here */
+			return RTE_BAD_IOVA;
+	}
 
 	ms = rte_mem_virt2memseg(addr, elem->msl);
 	if (ms == NULL)

@@ -154,6 +154,9 @@ rte_mem_virt2iova(const void *virtaddr)
 {
 	if (rte_eal_iova_mode() == RTE_IOVA_VA)
 		return (uintptr_t)virtaddr;
+	else if (rte_eal_iova_mode() == RTE_IOVA_TA)
+		/* DRC - Replace with a function call */
+		return RTE_BAD_IOVA;
 	return rte_mem_virt2phy(virtaddr);
 }
 
@@ -759,8 +762,9 @@ remap_segment(struct hugepage_file *hugepages, int seg_start, int seg_end)
 		hfile->orig_va = NULL;
 		hfile->final_va = addr;
 
-		/* rewrite physical addresses in IOVA as VA mode */
-		if (rte_eal_iova_mode() == RTE_IOVA_VA)
+		/* rewrite physical addresses in IOVA as VA/TA mode */
+		if ((rte_eal_iova_mode() == RTE_IOVA_VA) ||
+			(rte_eal_iova_mode() == RTE_IOVA_TA))
 			hfile->physaddr = (uintptr_t)addr;
 
 		/* set up memseg data */
@@ -1425,6 +1429,9 @@ eal_legacy_hugepage_init(void)
 			ms = rte_fbarray_get(arr, cur_seg);
 			if (rte_eal_iova_mode() == RTE_IOVA_VA)
 				ms->iova = (uintptr_t)addr;
+			else if (rte_eal_iova_mode() == RTE_IOVA_TA)
+				/* DRC - How to get this address? */
+				ms->iova = RTE_BAD_IOVA;
 			else
 				ms->iova = RTE_BAD_IOVA;
 			ms->addr = addr;
@@ -1441,6 +1448,7 @@ eal_legacy_hugepage_init(void)
 			RTE_LOG(ERR, EAL,
 				"%s(): couldn't allocate memory due to IOVA exceeding limits of current DMA mask.\n",
 				__func__);
+			/* DRC - Is anything necessary here? */
 			if (rte_eal_iova_mode() == RTE_IOVA_VA &&
 			    rte_eal_using_phys_addrs())
 				RTE_LOG(ERR, EAL,
@@ -1513,7 +1521,8 @@ eal_legacy_hugepage_init(void)
 		}
 
 		if (rte_eal_using_phys_addrs() &&
-				rte_eal_iova_mode() != RTE_IOVA_VA) {
+				(rte_eal_iova_mode() != RTE_IOVA_VA) &&
+				(rte_eal_iova_mode() != RTE_IOVA_TA)) {
 			/* find physical addresses for each hugepage */
 			if (find_physaddrs(&tmp_hp[hp_offset], hpi) < 0) {
 				RTE_LOG(DEBUG, EAL, "Failed to find phys addr "
