@@ -159,8 +159,12 @@ rte_mem_virt2iova(const void *virtaddr)
 	if (rte_eal_iova_mode() == RTE_IOVA_VA)
 		return (uintptr_t)virtaddr;
 	else if (rte_eal_iova_mode() == RTE_IOVA_TA)
-		/* DRC - Replace with a function call */
+/* DRC - Here's the good stuff */
+#ifdef RTE_EAL_VFIO
+    return rte_vfio_virt2iova(virtaddr);
+#else
 		return RTE_BAD_IOVA;
+#endif 
 	return rte_mem_virt2phy(virtaddr);
 }
 

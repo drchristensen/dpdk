@@ -592,7 +592,7 @@ alloc_seg(struct rte_memseg *ms, void *addr, int socket_id,
 	*(volatile int *)addr = *(volatile int *)addr;
 
 	iova = rte_mem_virt2iova(addr);
-	if (iova == RTE_BAD_PHYS_ADDR) {
+	if (iova == RTE_BAD_IOVA) {
 		RTE_LOG(DEBUG, EAL, "%s(): can't get IOVA addr\n",
 			__func__);
 		goto mapped;
