@@ -1258,11 +1258,10 @@ rte_vfio_get_group_num(const char *sysfs_base,
 rte_iova_t
 rte_vfio_virt2iova(const void *virtaddr)
 {
-	/* Verify an IOMMU has been enabled */
 	if (default_vfio_cfg->vfio_iommu_type == 0)
 #if defined(RTE_ARCH_PPC_64)
-		/* DRC - Very bad! Need a better solution. */
-		return 0;
+		/* Assume the worst until an IOMMU is configured. */
+		return RTE_BAD_IOVA;
 #else
 		return (uintptr_t)virtaddr;
 #endif
@@ -1385,8 +1384,10 @@ vfio_type1_virt2iova(const void *virtaddr)
 
 #if defined(RTE_ARCH_PPC_64)
 /* Maintain the virt2iova mapping range */
-uint64_t spapr1_virt_start = 0;
-uint64_t spapr1_virt_len = 0;
+uint64_t spapr1_next_iova_addr = 0;
+uint64_t spapr1_start_vaddr = 0;
+uint64_t spapr1_addr_mask = 0;
+uint64_t spapr1_allocated_len = 0;
 
 static int
 vfio_spapr1_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
@@ -1404,13 +1405,15 @@ vfio_spapr1_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 	if (do_map != 0) {
 
 		/* If this is the first mapping save the vaddr */
-		if (spapr1_virt_start == 0)
-			spapr1_virt_start = vaddr;
+		if (spapr1_start_vaddr == 0)
+			spapr1_start_vaddr = vaddr;
 
 		RTE_LOG(DEBUG, EAL, "  [DRC] map request: "
 				"vaddr = 0x%"PRIx64", iova = 0x%"PRIx64", len = 0x%"PRIx64"])\n",
 				vaddr, iova, len);
 
+		/* DRC - Should we check if vaddr is in range? */
+		/* DRC - Should we check the length? */
 		memset(&dma_map, 0, sizeof(dma_map));
 		dma_map.argsz = sizeof(struct vfio_iommu_type1_dma_map);
 		dma_map.vaddr = vaddr;
@@ -1423,12 +1426,21 @@ vfio_spapr1_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		if (ret) {
 			RTE_LOG(ERR, EAL, "  cannot set up DMA mapping, "
 					"error %i (%s)\n", errno, strerror(errno));
+			RTE_LOG(DEBUG, EAL, "  [DRC] IOMMU params: "
+					"start_vaddr = 0x%"PRIx64", next_iova_addr = 0x%"PRIx64", "
+					"allocated_len = 0x%"PRIx64"])\n",
+					spapr1_start_vaddr, spapr1_next_iova_addr, spapr1_allocated_len);
 			return -1;
 		}
+
+		spapr1_allocated_len += len;
+		spapr1_next_iova_addr += len;
+
 	} else {
 		RTE_LOG(DEBUG, EAL, "  [DRC] unmap request: "
 			"iova = 0x%"PRIx64", len = 0x%"PRIu64"])\n", iova, len);
 
+		/* DRC - How to handle the unmapped holes? */
 		memset(&dma_unmap, 0, sizeof(dma_unmap));
 		dma_unmap.argsz = sizeof(struct vfio_iommu_type1_dma_unmap);
 		dma_unmap.size = len;
@@ -1440,6 +1452,9 @@ vfio_spapr1_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 					errno, strerror(errno));
 			return -1;
 		}
+		
+		spapr1_allocated_len -= len;
+		/* DRC - How do we adjust the next_iova_addr here? */
 	}
 	return 0;
 }
@@ -1464,6 +1479,7 @@ vfio_spapr1_dma_map(int vfio_container_fd)
 	struct vfio_iommu_spapr_tce_info info = {
 		.argsz = sizeof(info)
 	};
+
 	int ret = ioctl(vfio_container_fd, VFIO_IOMMU_ENABLE);
 	if (ret) {
 		RTE_LOG(ERR, EAL, "  cannot enable iommu, "
@@ -1478,7 +1494,8 @@ vfio_spapr1_dma_map(int vfio_container_fd)
 				"error %i (%s)\n", errno, strerror(errno));
 		return -1;
 	}
-	spapr1_virt_len = info.dma32_window_size;
+	spapr1_next_iova_addr = info.dma32_window_start;
+	spapr1_addr_mask = info.dma32_window_size - 1; 
 
 	return rte_memseg_walk(vfio_spapr1_map_walk, &vfio_container_fd);
 }
@@ -1486,7 +1503,10 @@ vfio_spapr1_dma_map(int vfio_container_fd)
 rte_iova_t
 vfio_spapr1_virt2iova(const void *vaddr)
 {
-	return (uint64_t)vaddr - spapr1_virt_start;
+	/* DRC - Overly simple, needs revision */
+	if (spapr1_start_vaddr == 0)
+		return RTE_BAD_IOVA;
+	return (uint64_t)vaddr - spapr1_start_vaddr;
 }
 
 

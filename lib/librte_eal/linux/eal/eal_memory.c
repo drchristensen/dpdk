@@ -159,8 +159,8 @@ rte_mem_virt2iova(const void *virtaddr)
 	if (rte_eal_iova_mode() == RTE_IOVA_VA)
 		return (uintptr_t)virtaddr;
 	else if (rte_eal_iova_mode() == RTE_IOVA_TA)
-/* DRC - Here's the good stuff */
 #ifdef RTE_EAL_VFIO
+		/* DRC - Is VFIO the right place for this? */
     return rte_vfio_virt2iova(virtaddr);
 #else
 		return RTE_BAD_IOVA;
@@ -773,7 +773,7 @@ remap_segment(struct hugepage_file *hugepages, int seg_start, int seg_end)
 		/* rewrite physical addresses in IOVA as VA/TA mode */
 		if ((rte_eal_iova_mode() == RTE_IOVA_VA) ||
 			(rte_eal_iova_mode() == RTE_IOVA_TA))
-			hfile->physaddr = (uintptr_t)addr;
+			hfile->physaddr = rte_mem_virt2iova(addr);
 
 		/* set up memseg data */
 		ms->addr = addr;
@@ -1435,11 +1435,9 @@ eal_legacy_hugepage_init(void)
 			arr = &msl->memseg_arr;
 
 			ms = rte_fbarray_get(arr, cur_seg);
-			if (rte_eal_iova_mode() == RTE_IOVA_VA)
-				ms->iova = (uintptr_t)addr;
-			else if (rte_eal_iova_mode() == RTE_IOVA_TA)
-				/* DRC - How to get this address? */
-				ms->iova = RTE_BAD_IOVA;
+			if ((rte_eal_iova_mode() == RTE_IOVA_VA) ||
+				  (rte_eal_iova_mode() == RTE_IOVA_TA))
+				ms->iova = rte_mem_virt2iova(&addr);
 			else
 				ms->iova = RTE_BAD_IOVA;
 			ms->addr = addr;
