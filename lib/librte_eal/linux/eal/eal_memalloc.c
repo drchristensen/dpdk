@@ -592,11 +592,14 @@ alloc_seg(struct rte_memseg *ms, void *addr, int socket_id,
 	*(volatile int *)addr = *(volatile int *)addr;
 
 	iova = rte_mem_virt2iova(addr);
-	if (iova == RTE_BAD_PHYS_ADDR) {
-		RTE_LOG(DEBUG, EAL, "%s(): can't get IOVA addr\n",
+#ifndef RTE_ARCH_PPC_64
+	/* can't get a valid IOVA on spapr_v1 until AFTER rte_bus_probe() */
+	if (iova == RTE_BAD_IOVA) {
+		RTE_LOG(ERR, EAL, "%s(): can't get IOVA addr\n",
 			__func__);
 		goto mapped;
 	}
+#endif
 
 #ifdef RTE_EAL_NUMA_AWARE_HUGEPAGES
 	ret = get_mempolicy(&cur_socket_id, NULL, 0, addr,

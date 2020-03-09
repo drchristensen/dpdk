@@ -51,6 +51,10 @@
 #include "eal_hugepages.h"
 #include "eal_options.h"
 
+#ifdef RTE_EAL_VFIO
+#include "eal_vfio.h"
+#endif
+
 #define PFN_MASK_SIZE	8
 
 /**
@@ -154,6 +158,13 @@ rte_mem_virt2iova(const void *virtaddr)
 {
 	if (rte_eal_iova_mode() == RTE_IOVA_VA)
 		return (uintptr_t)virtaddr;
+	else if (rte_eal_iova_mode() == RTE_IOVA_TA)
+#ifdef RTE_EAL_VFIO
+		/* DRC - Is VFIO the right place for this? */
+    return rte_vfio_virt2iova(virtaddr);
+#else
+		return RTE_BAD_IOVA;
+#endif 
 	return rte_mem_virt2phy(virtaddr);
 }
 
@@ -759,9 +770,10 @@ remap_segment(struct hugepage_file *hugepages, int seg_start, int seg_end)
 		hfile->orig_va = NULL;
 		hfile->final_va = addr;
 
-		/* rewrite physical addresses in IOVA as VA mode */
-		if (rte_eal_iova_mode() == RTE_IOVA_VA)
-			hfile->physaddr = (uintptr_t)addr;
+		/* rewrite physical addresses in IOVA as VA/TA mode */
+		if ((rte_eal_iova_mode() == RTE_IOVA_VA) ||
+			(rte_eal_iova_mode() == RTE_IOVA_TA))
+			hfile->physaddr = rte_mem_virt2iova(addr);
 
 		/* set up memseg data */
 		ms->addr = addr;
@@ -1423,8 +1435,9 @@ eal_legacy_hugepage_init(void)
 			arr = &msl->memseg_arr;
 
 			ms = rte_fbarray_get(arr, cur_seg);
-			if (rte_eal_iova_mode() == RTE_IOVA_VA)
-				ms->iova = (uintptr_t)addr;
+			if ((rte_eal_iova_mode() == RTE_IOVA_VA) ||
+				  (rte_eal_iova_mode() == RTE_IOVA_TA))
+				ms->iova = rte_mem_virt2iova(&addr);
 			else
 				ms->iova = RTE_BAD_IOVA;
 			ms->addr = addr;
@@ -1441,6 +1454,7 @@ eal_legacy_hugepage_init(void)
 			RTE_LOG(ERR, EAL,
 				"%s(): couldn't allocate memory due to IOVA exceeding limits of current DMA mask.\n",
 				__func__);
+			/* DRC - Is anything necessary here? */
 			if (rte_eal_iova_mode() == RTE_IOVA_VA &&
 			    rte_eal_using_phys_addrs())
 				RTE_LOG(ERR, EAL,
@@ -1513,7 +1527,8 @@ eal_legacy_hugepage_init(void)
 		}
 
 		if (rte_eal_using_phys_addrs() &&
-				rte_eal_iova_mode() != RTE_IOVA_VA) {
+				(rte_eal_iova_mode() != RTE_IOVA_VA) &&
+				(rte_eal_iova_mode() != RTE_IOVA_TA)) {
 			/* find physical addresses for each hugepage */
 			if (find_physaddrs(&tmp_hp[hp_offset], hpi) < 0) {
 				RTE_LOG(DEBUG, EAL, "Failed to find phys addr "

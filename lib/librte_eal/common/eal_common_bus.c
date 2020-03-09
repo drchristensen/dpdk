@@ -203,6 +203,7 @@ rte_bus_get_iommu_class(void)
 	enum rte_iova_mode mode = RTE_IOVA_DC;
 	bool buses_want_va = false;
 	bool buses_want_pa = false;
+	bool buses_want_ta = false;
 	struct rte_bus *bus;
 
 	TAILQ_FOREACH(bus, &rte_bus_list, next) {
@@ -213,24 +214,26 @@ rte_bus_get_iommu_class(void)
 
 		bus_iova_mode = bus->get_iommu_class();
 		RTE_LOG(DEBUG, EAL, "Bus %s wants IOVA as '%s'\n",
-			bus->name,
-			bus_iova_mode == RTE_IOVA_DC ? "DC" :
-			(bus_iova_mode == RTE_IOVA_PA ? "PA" : "VA"));
+			bus->name, IOVA_STR(bus_iova_mode));
+
 		if (bus_iova_mode == RTE_IOVA_PA)
-			buses_want_pa = true;
+		 	buses_want_pa = true;
 		else if (bus_iova_mode == RTE_IOVA_VA)
-			buses_want_va = true;
+		 	buses_want_va = true;
+		else if (bus_iova_mode == RTE_IOVA_TA)
+			buses_want_ta = true;
 	}
-	if (buses_want_va && !buses_want_pa) {
+
+	if (buses_want_va && !buses_want_pa && !buses_want_ta) {
 		mode = RTE_IOVA_VA;
-	} else if (buses_want_pa && !buses_want_va) {
+	} else if (buses_want_pa && !buses_want_va && !buses_want_ta) {
 		mode = RTE_IOVA_PA;
+	} else if (buses_want_ta && !buses_want_va && !buses_want_pa) {
+		mode = RTE_IOVA_TA;
 	} else {
 		mode = RTE_IOVA_DC;
-		if (buses_want_va) {
-			RTE_LOG(WARNING, EAL, "Some buses want 'VA' but forcing 'DC' because other buses want 'PA'.\n");
-			RTE_LOG(WARNING, EAL, "Depending on the final decision by the EAL, not all buses may be able to initialize.\n");
-		}
+		RTE_LOG(WARNING, EAL, "Forcing 'DC' because buses don\'t agree on the IOVA mode.\n");
+		RTE_LOG(WARNING, EAL, "Depending on the final decision by the EAL, not all buses may be able to initialize.\n");
 	}
 
 	return mode;

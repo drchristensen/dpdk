@@ -53,13 +53,14 @@ malloc_elem_find_max_iova_contig(struct malloc_elem *elem, size_t align)
 	if (contig_seg_start > data_end)
 		return 0;
 
-	/* if we're in IOVA as VA mode, or if we're in legacy mode with
+	/* if we're in IOVA as VA/TA mode, or if we're in legacy mode with
 	 * hugepages, all elements are IOVA-contiguous. however, we can only
 	 * make these assumptions about internal memory - externally allocated
 	 * segments have to be checked.
 	 */
 	if (!elem->msl->external &&
 			(rte_eal_iova_mode() == RTE_IOVA_VA ||
+			 rte_eal_iova_mode() == RTE_IOVA_TA ||
 				(internal_config.legacy_mem &&
 					rte_eal_has_hugepages())))
 		return RTE_PTR_DIFF(data_end, contig_seg_start);

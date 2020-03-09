@@ -177,9 +177,9 @@ rte_pci_probe_one_driver(struct rte_pci_driver *dr,
 		iova_mode = rte_eal_iova_mode();
 		if (dev_iova_mode != RTE_IOVA_DC &&
 		    dev_iova_mode != iova_mode) {
-			RTE_LOG(ERR, EAL, "  Expecting '%s' IOVA mode but current mode is '%s', not initializing\n",
-				dev_iova_mode == RTE_IOVA_PA ? "PA" : "VA",
-				iova_mode == RTE_IOVA_PA ? "PA" : "VA");
+			RTE_LOG(ERR, EAL, "  driver expecting '%s' IOVA mode but current "
+					"mode is '%s', not initializing\n",
+					IOVA_STR(dev_iova_mode), IOVA_STR(iova_mode));
 			return -EINVAL;
 		}
 
@@ -617,6 +617,7 @@ rte_pci_get_iommu_class(void)
 	const struct rte_pci_driver *drv;
 	bool devices_want_va = false;
 	bool devices_want_pa = false;
+	bool devices_want_ta = false;
 	int iommu_no_va = -1;
 
 	FOREACH_DEVICE_ON_PCIBUS(dev) {
@@ -644,12 +645,14 @@ rte_pci_get_iommu_class(void)
 				drv->driver.name,
 				dev->addr.domain, dev->addr.bus,
 				dev->addr.devid, dev->addr.function,
-				dev_iova_mode == RTE_IOVA_DC ? "DC" :
-				(dev_iova_mode == RTE_IOVA_PA ? "PA" : "VA"));
+				IOVA_STR(dev_iova_mode));
+
 			if (dev_iova_mode == RTE_IOVA_PA)
 				devices_want_pa = true;
 			else if (dev_iova_mode == RTE_IOVA_VA)
 				devices_want_va = true;
+			else if (dev_iova_mode == RTE_IOVA_TA)
+				devices_want_ta = true;
 		}
 	}
 	if (iommu_no_va == 1) {
@@ -658,14 +661,20 @@ rte_pci_get_iommu_class(void)
 			RTE_LOG(WARNING, EAL, "Some devices want 'VA' but IOMMU does not support 'VA'.\n");
 			RTE_LOG(WARNING, EAL, "The devices that want 'VA' won't initialize.\n");
 		}
-	} else if (devices_want_va && !devices_want_pa) {
+		if (devices_want_ta) {
+			RTE_LOG(WARNING, EAL, "Some devices want 'TA' but IOMMU does not support 'TA'.\n");
+			RTE_LOG(WARNING, EAL, "The devices that want 'TA' won't initialize.\n");
+		}
+	} else if (devices_want_va && !devices_want_pa && !devices_want_ta) {
 		iova_mode = RTE_IOVA_VA;
-	} else if (devices_want_pa && !devices_want_va) {
+	} else if (devices_want_pa && !devices_want_va && !devices_want_ta) {
 		iova_mode = RTE_IOVA_PA;
+	} else if (devices_want_ta && !devices_want_va && !devices_want_pa) {
+		iova_mode = RTE_IOVA_TA;
 	} else {
 		iova_mode = RTE_IOVA_DC;
-		if (devices_want_va) {
-			RTE_LOG(WARNING, EAL, "Some devices want 'VA' but forcing 'DC' because other devices want 'PA'.\n");
+		if (devices_want_va || devices_want_ta) {
+			RTE_LOG(WARNING, EAL, "Forcing 'DC' because of conflicting device IOVA requirements.\n");
 			RTE_LOG(WARNING, EAL, "Depending on the final decision by the EAL, not all devices may be able to initialize.\n");
 		}
 	}

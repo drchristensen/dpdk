@@ -27,6 +27,10 @@
 #include "eal_memalloc.h"
 #include "eal_memcfg.h"
 #include "eal_private.h"
+#ifdef RTE_EAL_VFIO
+/* DRC - This is a common file, VFIO is Linux only */
+/* #include "eal_vfio.h" */
+#endif
 
 
 /* Free the memory space back to heap */
@@ -323,8 +327,18 @@ rte_malloc_virt2iova(const void *addr)
 	if (elem == NULL)
 		return RTE_BAD_IOVA;
 
-	if (!elem->msl->external && rte_eal_iova_mode() == RTE_IOVA_VA)
-		return (uintptr_t) addr;
+	if (!elem->msl->external) {
+		if (rte_eal_iova_mode() == RTE_IOVA_VA)
+			return (uintptr_t) addr;
+		/* DRC - Best way to do this? */
+		else if (rte_eal_iova_mode() == RTE_IOVA_TA)
+#ifdef RTE_EAL_VFIO
+			return RTE_BAD_IOVA;
+			// DRC return rte_vfio_virt2iova(virtaddr);
+#else
+			return RTE_BAD_IOVA;
+#endif
+	}
 
 	ms = rte_mem_virt2memseg(addr, elem->msl);
 	if (ms == NULL)

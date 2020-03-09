@@ -549,7 +549,42 @@ pci_device_iommu_support_va(const struct rte_pci_device *dev)
 bool
 pci_device_iommu_support_va(__rte_unused const struct rte_pci_device *dev)
 {
-	return false;
+	/*
+	 * IOMMU is always present on a PowerNV host (IOMMUv2).
+	 * IOMMU is also present in a KVM/PowerVM VM (IOMMUv1).
+	 */
+
+	char *line = 0;
+	size_t len = 0;
+	char filename[PATH_MAX] = "/proc/cpuinfo";
+	FILE *fp = fopen(filename, "r");
+
+	if (fp == NULL) {
+		RTE_LOG(ERR, EAL, "%s(): can't open %s: %s\n",
+			__func__, filename, strerror(errno));
+		return false;
+	}
+
+	while (getline(&line, &len, fp) != -1) {
+		if (strstr(line, "platform") != NULL) {
+			/* Check for a PowerNV (non-virtualized) platform */
+			if (strstr(line, "PowerNV") != NULL) {
+				RTE_LOG(DEBUG, EAL, "Running on a PowerNV system\n");
+				fclose(fp);
+				return true;
+			}
+			/* Check for a pSeries (QEMU/PowerVM virtualized) platform */
+			if (strstr(line, "pSeries") != NULL) {
+				RTE_LOG(DEBUG, EAL, "Running on a QEMU/PowerVM virtualized system\n");
+				fclose(fp);
+				return true;
+			}
+		}
+	}
+	fclose(fp);
+
+	RTE_LOG(DEBUG, EAL, "Unknown IBM Power system! Assuming IOVA=VA not supported.\n");
+ 	return false;
 }
 #else
 bool
@@ -579,7 +614,11 @@ pci_device_iova_mode(const struct rte_pci_driver *pdrv,
 		if (is_vfio_noiommu_enabled != 0)
 			iova_mode = RTE_IOVA_PA;
 		else if ((pdrv->drv_flags & RTE_PCI_DRV_NEED_IOVA_AS_VA) != 0)
+#ifdef RTE_ARCH_PPC_64
+			iova_mode = RTE_IOVA_TA;
+#else
 			iova_mode = RTE_IOVA_VA;
+#endif
 #endif
 		break;
 	}
@@ -591,7 +630,11 @@ pci_device_iova_mode(const struct rte_pci_driver *pdrv,
 
 	default:
 		if ((pdrv->drv_flags & RTE_PCI_DRV_NEED_IOVA_AS_VA) != 0)
+#ifdef RTE_ARCH_PPC_64
+			iova_mode = RTE_IOVA_TA;
+#else
 			iova_mode = RTE_IOVA_VA;
+#endif
 		break;
 	}
 	return iova_mode;

@@ -6,13 +6,17 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdbool.h>
 #include <sys/ioctl.h>
+#include <sys/param.h>
+#include <sys/queue.h>
 
 #include <rte_errno.h>
 #include <rte_log.h>
 #include <rte_memory.h>
 #include <rte_eal_memconfig.h>
 #include <rte_vfio.h>
+#include <rte_malloc.h>
 
 #include "eal_filesystem.h"
 #include "eal_memcfg.h"
@@ -56,10 +60,23 @@ static struct vfio_config *default_vfio_cfg = &vfio_cfgs[0];
 
 static int vfio_type1_dma_map(int);
 static int vfio_type1_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
-static int vfio_spapr_dma_map(int);
-static int vfio_spapr_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+rte_iova_t vfio_type1_virt2iova(const void *);
+#if defined(RTE_ARCH_PPC_64)
+bool vfio_spapr1_window_overlap(uint64_t, uint64_t);
+uint64_t vfio_spapr1_add_mem_alloc(uint64_t, uint64_t);
+void vfio_spapr1_sort_list(void);
+void vfio_spapr1_compress_list(void);
+int vfio_spapr1_free_mem_alloc(uint64_t, uint64_t);
+static int vfio_spapr1_dma_map(int);
+static int vfio_spapr1_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+rte_iova_t vfio_spapr1_virt2iova(const void *);
+static int vfio_spapr2_dma_map(int);
+static int vfio_spapr2_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+rte_iova_t vfio_spapr2_virt2iova(const void *);
+#endif /* RTE_ARCH_PPC_64 */
 static int vfio_noiommu_dma_map(int);
 static int vfio_noiommu_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+rte_iova_t vfio_noiommu_virt2iova(const void *);
 static int vfio_dma_mem_map(struct vfio_config *vfio_cfg, uint64_t vaddr,
 		uint64_t iova, uint64_t len, int do_map);
 
@@ -70,21 +87,34 @@ static const struct vfio_iommu_type iommu_types[] = {
 		.type_id = RTE_VFIO_TYPE1,
 		.name = "Type 1",
 		.dma_map_func = &vfio_type1_dma_map,
-		.dma_user_map_func = &vfio_type1_dma_mem_map
+		.dma_user_map_func = &vfio_type1_dma_mem_map,
+		.virt2iova_func = &vfio_type1_virt2iova
 	},
-	/* ppc64 IOMMU, otherwise known as spapr */
+#if defined(RTE_ARCH_PPC_64)
+	/* ppc64 VM IOMMU, otherwise known as spapr v1 */
 	{
-		.type_id = RTE_VFIO_SPAPR,
-		.name = "sPAPR",
-		.dma_map_func = &vfio_spapr_dma_map,
-		.dma_user_map_func = &vfio_spapr_dma_mem_map
+		.type_id = RTE_VFIO_SPAPR1,
+		.name = "sPAPR v1",
+		.dma_map_func = &vfio_spapr1_dma_map,
+		.dma_user_map_func = &vfio_spapr1_dma_mem_map,
+		.virt2iova_func = &vfio_spapr1_virt2iova
 	},
+	/* ppc64 IOMMU, otherwise known as spapr v2 */
+	{
+		.type_id = RTE_VFIO_SPAPR2,
+		.name = "sPAPR v2",
+		.dma_map_func = &vfio_spapr2_dma_map,
+		.dma_user_map_func = &vfio_spapr2_dma_mem_map,
+		.virt2iova_func = &vfio_spapr1_virt2iova
+	},
+#endif /* RTE_ARCH_PPC_64 */
 	/* IOMMU-less mode */
 	{
 		.type_id = RTE_VFIO_NOIOMMU,
 		.name = "No-IOMMU",
 		.dma_map_func = &vfio_noiommu_dma_map,
-		.dma_user_map_func = &vfio_noiommu_dma_mem_map
+		.dma_user_map_func = &vfio_noiommu_dma_mem_map,
+		.virt2iova_func = &vfio_noiommu_virt2iova
 	},
 };
 
@@ -532,7 +562,7 @@ vfio_mem_event_callback(enum rte_mem_event type, const void *addr, size_t len,
 		return;
 	}
 
-#ifdef RTE_ARCH_PPC_64
+#if defined(RTE_ARCH_PPC_64)
 	ms = rte_mem_virt2memseg(addr, msl);
 	while (cur_len < len) {
 		int idx = rte_fbarray_find_idx(&msl->memseg_arr, ms);
@@ -542,7 +572,7 @@ vfio_mem_event_callback(enum rte_mem_event type, const void *addr, size_t len,
 		++ms;
 	}
 	cur_len = 0;
-#endif
+#endif /* RTE_ARCH_PPC_64 */
 	/* memsegs are contiguous in memory */
 	ms = rte_mem_virt2memseg(addr, msl);
 	while (cur_len < len) {
@@ -562,7 +592,7 @@ next:
 		cur_len += ms->len;
 		++ms;
 	}
-#ifdef RTE_ARCH_PPC_64
+#if defined(RTE_ARCH_PPC_64)
 	cur_len = 0;
 	ms = rte_mem_virt2memseg(addr, msl);
 	while (cur_len < len) {
@@ -572,7 +602,7 @@ next:
 		cur_len += ms->len;
 		++ms;
 	}
-#endif
+#endif /* RTE_ARCH_PPC_64 */
 }
 
 static int
@@ -1256,6 +1286,21 @@ rte_vfio_get_group_num(const char *sysfs_base,
 	return 1;
 }
 
+rte_iova_t
+rte_vfio_virt2iova(const void *virtaddr)
+{
+	/* DRC - Is this still valid? */
+	if (default_vfio_cfg->vfio_iommu_type == 0)
+#if defined(RTE_ARCH_PPC_64)
+		/* Assume the worst until an IOMMU is configured. */
+		return RTE_BAD_IOVA;
+#else
+		return (uintptr_t)virtaddr;
+#endif /* RTE_ARCH_PPC_64 */
+	else
+		return default_vfio_cfg->vfio_iommu_type->virt2iova_func(virtaddr);
+}
+
 static int
 type1_map_contig(const struct rte_memseg_list *msl, const struct rte_memseg *ms,
 		size_t len, void *arg)
@@ -1299,6 +1344,8 @@ vfio_type1_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 	struct vfio_iommu_type1_dma_unmap dma_unmap;
 	int ret;
 
+	/* can't adjust the window size for v1, just map or unmap as requested */
+
 	if (do_map != 0) {
 		memset(&dma_map, 0, sizeof(dma_map));
 		dma_map.argsz = sizeof(struct vfio_iommu_type1_dma_map);
@@ -1310,10 +1357,7 @@ vfio_type1_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 
 		ret = ioctl(vfio_container_fd, VFIO_IOMMU_MAP_DMA, &dma_map);
 		if (ret) {
-			/**
-			 * In case the mapping was already done EEXIST will be
-			 * returned from kernel.
-			 */
+			/* Existing mapping will return EEXIST from kernel */
 			if (errno == EEXIST) {
 				RTE_LOG(DEBUG, EAL,
 					" Memory segment is already mapped,"
@@ -1362,8 +1406,416 @@ vfio_type1_dma_map(int vfio_container_fd)
 	return rte_memseg_walk(type1_map, &vfio_container_fd);
 }
 
+rte_iova_t
+vfio_type1_virt2iova(const void *virtaddr)
+{
+	return (uintptr_t)virtaddr;
+}
+
+
+#if defined(RTE_ARCH_PPC_64)
+
+/* DRC - Does this need to be spapr1 specific? */
+struct vfio_spapr1_mem_window {
+	uint64_t vaddr;
+	uint64_t taddr;
+	uint64_t len;
+	TAILQ_ENTRY(vfio_spapr1_mem_window) next;
+};
+
+TAILQ_HEAD(vfio_spapr1_free_list, vfio_spapr1_mem_window) vfio_spapr1_free_head;
+TAILQ_HEAD(vfio_spapr1_alloc_list, vfio_spapr1_mem_window) vfio_spapr1_alloc_head;
+
+bool
+vfio_spapr1_window_overlap(uint64_t vaddr, uint64_t len) {
+	struct vfio_spapr1_mem_window *item;
+	bool ret = false;
+
+	if (!TAILQ_EMPTY(&vfio_spapr1_alloc_head)) {
+		TAILQ_FOREACH(item, &vfio_spapr1_alloc_head, next) {
+			RTE_LOG(DEBUG, EAL, "  DRC: (V:0x%" PRIx64 "/L:0x%" PRIx64 "), (V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+					vaddr, len, item->vaddr, item->len);
+			if (MAX(vaddr, item->vaddr) <=
+					MIN(vaddr + len - 1 , item->vaddr + item->len - 1)) {
+				ret = true;
+				break;
+			}
+		}
+	}
+
+	return ret;
+}
+
+uint64_t
+vfio_spapr1_add_mem_alloc(uint64_t vaddr, uint64_t len) {
+	struct vfio_spapr1_mem_window *f;
+	struct vfio_spapr1_mem_window *a;
+	struct vfio_spapr1_mem_window *t;
+
+	RTE_LOG(DEBUG, EAL, "  DRC: %s: vaddr = 0x%" PRIx64 "; len = 0x%" PRIx64 "\n",
+		 __FUNCTION__, vaddr, len);
+
+	/* verify there's no overlap with an existing mapping */
+	if (vfio_spapr1_window_overlap(vaddr, len)) {
+		RTE_LOG(ERR, EAL, "%s: found window overlap, aborting...\n", __FUNCTION__);
+		return RTE_BAD_IOVA;
+	}
+
+	/* look for an available mapping window in the free list */
+	if (!TAILQ_EMPTY(&vfio_spapr1_free_head)) {
+		TAILQ_FOREACH_SAFE(f, &vfio_spapr1_free_head, next, t) {
+			RTE_LOG(DEBUG, EAL, "  DRC: %s: checking free(T:0x%" PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+				__FUNCTION__, f->taddr, f->vaddr, f->len);
+			/* first fit logic */
+			if ((f->taddr + len) <= (f->taddr + f->len)) {
+				RTE_LOG(DEBUG, EAL, "  DRC: %s: found free space, allocating a new DMA window...\n", __FUNCTION__);
+
+				/* DRC - Create string for rte_malloc instead of NULL? "spapr1_free", "spapr1_alloc" */
+				a = rte_malloc(NULL, sizeof(*a), RTE_CACHE_LINE_SIZE);
+				if (a == NULL) {
+					RTE_LOG(ERR, EAL, "  malloc failed while mapping memory...\n");
+					/* DRC - Is this the best return code? */
+					return RTE_BAD_IOVA;
+				}
+
+				/* create a new mapping, allocate from the front of the free list */
+				a->vaddr = vaddr;
+				a->taddr = f->taddr;
+				a->len   = len;
+				TAILQ_INSERT_TAIL(&vfio_spapr1_alloc_head, a, next);
+				RTE_LOG(DEBUG, EAL, "  DRC: %s: alloc(T:0x%" PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+					__FUNCTION__, a->taddr, a->vaddr, a->len);
+
+				/* adjust the free list entry and remove the allocated range */
+				f->taddr = f->taddr + len;
+				f->len   = f->len - len;
+
+				/* DRC - Need to check for less than 0? */
+				/* remove the free list entry if it's empty */
+				if (f->len == 0) {
+					TAILQ_REMOVE(&vfio_spapr1_free_head, f, next);
+					rte_free(f);
+					RTE_LOG(DEBUG, EAL, "  DRC: %s: removed entry from the free list...\n", __FUNCTION__);
+				} else {
+					RTE_LOG(DEBUG, EAL, "  DRC: %s: modified free mapping (T:0x%" PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+					__FUNCTION__, f->taddr, f->vaddr, f->len);
+				}
+				return a->taddr;
+			}
+		} /* TAILQ_FOREACH_SAFE */
+		RTE_LOG(ERR, EAL, "%s: no entries in the free list large enough to satisfy the request...\n", __FUNCTION__);
+	} else
+		RTE_LOG(ERR, EAL, "%s: free list is empty...\n", __FUNCTION__);
+
+	return RTE_BAD_IOVA;
+}
+
+/* DRC - implements a bubblesort with only a single pass through the data. is this enough? */
+/* DRC - list stays mostly sorted, should be sufficient to handle a single out-of-oreder entry */
+void
+vfio_spapr1_sort_list(void) {
+	struct vfio_spapr1_mem_window *curr = NULL;
+	struct vfio_spapr1_mem_window *prev = NULL;
+	struct vfio_spapr1_mem_window *temp;
+	int i = 0;
+
+	if (!TAILQ_EMPTY(&vfio_spapr1_free_head)) {
+		TAILQ_FOREACH_SAFE(curr, &vfio_spapr1_free_head, next, temp) {
+			RTE_LOG(DEBUG, EAL, " DRC: %s: checking free(T:0x%" PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+				__FUNCTION__, curr->taddr, curr->vaddr, curr->len);
+
+			// Need at least two entries to do anything useful
+			if (prev == NULL) {
+				prev = curr;
+				continue;
+			}
+
+			/* swap the two adjacent entries */
+			if (prev->taddr > curr->taddr) {
+				TAILQ_REMOVE(&vfio_spapr1_free_head, prev, next);
+				TAILQ_INSERT_AFTER(&vfio_spapr1_free_head, curr, prev, next);
+				i += 1;
+			}
+
+			/* Move our pointer to the previous element */
+			prev = curr;
+
+		} /* TAILQ_FOREACH_SAFE() */
+		RTE_LOG(DEBUG, EAL, "  DRC: %s: sort completed, %d free list entries moved...\n", __FUNCTION__, i);
+	} else  /* TAILQ_EMPTY() */
+		RTE_LOG(DEBUG, EAL, "  DRC: %s: free list is empty, no sorting required...\n", __FUNCTION__);
+}
+
+void
+vfio_spapr1_compress_list(void) {
+	struct vfio_spapr1_mem_window *curr = NULL;
+	struct vfio_spapr1_mem_window *prev = NULL;
+	struct vfio_spapr1_mem_window *temp;
+	int i = 0;
+
+	/* Make sure the list is sorted */
+	vfio_spapr1_sort_list();
+
+	if (!TAILQ_EMPTY(&vfio_spapr1_free_head)) {
+		TAILQ_FOREACH_SAFE(curr, &vfio_spapr1_free_head, next, temp) {
+			RTE_LOG(DEBUG, EAL, "  DRC: %s: checking free(T:0x%" PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+				__FUNCTION__, curr->taddr, curr->vaddr, curr->len);
+
+			// Need at least two entries to do anything useful
+			if (prev == NULL) {
+				prev = curr;
+				continue;
+			}
+
+			if ((prev->taddr + prev->len) == curr->taddr) {
+				/* combine adjacent entries */
+				prev->len += curr->len;
+				TAILQ_REMOVE(&vfio_spapr1_free_head, curr, next);
+				rte_free(curr);
+				i += 1;
+				RTE_LOG(DEBUG, EAL, "  DRC: %s: new free(T:0x%" PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+					__FUNCTION__, prev->taddr, prev->vaddr, prev->len);
+			}
+
+		} /* TAILQ_FOREACH_SAFE() */
+		RTE_LOG(DEBUG, EAL, "  DRC: %s: compression completed, %d free list entries combined...\n", __FUNCTION__, i);
+	} else  /* TAILQ_EMPTY() */
+		RTE_LOG(DEBUG, EAL, "  DRC: %s: free list is empty, nothing to do...\n", __FUNCTION__);
+}
+
+/* DRC - Need a better name here, too similiar to others */
+int
+vfio_spapr1_free_mem_alloc(uint64_t vaddr, uint64_t len) {
+	struct vfio_spapr1_mem_window *a;
+	struct vfio_spapr1_mem_window *f;
+	struct vfio_spapr1_mem_window *at;
+	struct vfio_spapr1_mem_window *ft;
+	uint64_t taddr = 0;
+	bool matched = false;
+	int ret = 0;
+
+	RTE_LOG(DEBUG, EAL, "  DRC: %s: vaddr = 0x%" PRIx64 "; len = 0x%" PRIx64 "\n",
+		 __FUNCTION__, vaddr, len);
+
+	if (!TAILQ_EMPTY(&vfio_spapr1_alloc_head)) {
+		TAILQ_FOREACH_SAFE(a, &vfio_spapr1_alloc_head, next, at) {
+			RTE_LOG(DEBUG, EAL, "  DRC: %s: checking alloc(T:0x%" PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+				__FUNCTION__, a->taddr, a->vaddr, a->len);
+			if ((vaddr == a->vaddr) && (len == a->len)) {
+				RTE_LOG(DEBUG, EAL, "  DRC: %s: found a matching alloc entry, scanning the free list...\n", __FUNCTION__);
+
+				/* search through the free list for an existing block */
+				if (!TAILQ_EMPTY(&vfio_spapr1_free_head)) {
+					TAILQ_FOREACH_SAFE(f, &vfio_spapr1_free_head, next, ft) {
+						// DRC: Remember, the free list doesn't use vaddr.  Should it be removed?
+						RTE_LOG(DEBUG, EAL, "  DRC: %s: checking free(T:0x%" PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+							__FUNCTION__, f->taddr, f->vaddr, f->len);
+						taddr = vfio_spapr1_virt2iova(&vaddr);
+						if (taddr != RTE_BAD_IOVA) {
+							if ((taddr + len) == f->taddr) {
+								RTE_LOG(DEBUG, EAL, "  DRC: %s: prepending to an existing free list entry...\n", __FUNCTION__);
+								f->taddr = a->taddr;
+								f->len   += len;
+								matched = true;
+								break;
+							} else if ((f->taddr + f->len) == taddr) {
+								RTE_LOG(DEBUG, EAL, "  DRC: %s: appending to an existing free list entry...\n", __FUNCTION__);
+								f->len += len;
+								matched = true;
+								break;
+							} else {
+								RTE_LOG(DEBUG, EAL, "  DRC: %s: can't use this free list entry, try another...\n", __FUNCTION__);
+								continue;
+							}
+						}
+					} /* TAILQ_FOREACH_SAFE(free_head) */
+				} /* TAILQ_EMPTY(free_head) */
+
+				/* Create a new free list entry if required */
+				if (!matched) {
+					RTE_LOG(DEBUG, EAL, "%s: no suitable entries in the free list, adding a new entry...\n", __FUNCTION__);
+					f = rte_malloc(NULL, sizeof(*f), RTE_CACHE_LINE_SIZE);
+					if (f == NULL) {
+						/* DRC - A better way here? */
+						RTE_LOG(ERR, EAL, "  malloc failed while mapping memory");
+						ret = -1;
+					}
+					f->vaddr = 0;
+					f->taddr = taddr;
+					f->len   = len;
+					TAILQ_INSERT_TAIL(&vfio_spapr1_free_head, f, next);
+					RTE_LOG(DEBUG, EAL, "  DRC: %s: created free(T:0x%" PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+						__FUNCTION__, f->taddr, f->vaddr, f->len);
+				}
+
+				/* Concatenate any adjacent free list entries */
+				vfio_spapr1_compress_list();
+
+				// Remove the allocation
+				TAILQ_REMOVE(&vfio_spapr1_alloc_head, a, next);
+				rte_free(a);
+				return ret;
+			}
+		} // TAILQ_FOREACH_SAFE()
+		/* DRC - Better message here for DPDK */
+		RTE_LOG(ERR, EAL, "  DRC: %s: attempted free does not match any entries in the alloc list...\n", __FUNCTION__);
+		ret = -1;
+	} else {
+		RTE_LOG(ERR, EAL, "  DRC: %s: attempted free from an empty alloc list...\n", __FUNCTION__);
+		ret = -1;
+	}
+
+	return ret;
+}
+
 static int
-vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
+vfio_spapr1_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
+                uint64_t len, int do_map)
+{
+	struct vfio_iommu_type1_dma_map dma_map;
+	struct vfio_iommu_type1_dma_unmap dma_unmap;
+	int ret;
+
+	/*
+	 * Unlike the sPAPR v2 IOMMU, v1 can't create new DMA windows,
+	 * its stuck with the window size set at system boot. All that
+	 * can be done is attempt a mapping and fail if there's no room.
+	 * We don't track user mappings because we never perform remapping.
+	*/
+	if (do_map != 0) {
+		RTE_LOG(DEBUG, EAL, "  [DRC] map request: "
+				"vaddr = 0x%"PRIx64", iova = 0x%"PRIx64", len = 0x%"PRIx64"])\n",
+				vaddr, iova, len);
+
+		memset(&dma_map, 0, sizeof(dma_map));
+		dma_map.argsz = sizeof(struct vfio_iommu_type1_dma_map);
+		dma_map.vaddr = vaddr;
+		dma_map.size = len;
+		dma_map.iova = iova;
+		dma_map.flags = VFIO_DMA_MAP_FLAG_READ |
+			VFIO_DMA_MAP_FLAG_WRITE;
+
+		ret = ioctl(vfio_container_fd, VFIO_IOMMU_MAP_DMA, &dma_map);
+		if (ret) {
+			RTE_LOG(ERR, EAL, "  cannot set up DMA mapping, "
+					"error %i (%s)\n", errno, strerror(errno));
+			return -1;
+		}
+		vfio_spapr1_add_mem_alloc(vaddr, len);
+	} else {
+		RTE_LOG(DEBUG, EAL, "  [DRC] unmap request: "
+				"vaddr = 0x%"PRIx64", iova = 0x%"PRIx64", len = 0x%"PRIx64"])\n",
+				vaddr, iova, len);
+
+		memset(&dma_unmap, 0, sizeof(dma_unmap));
+		dma_unmap.argsz = sizeof(struct vfio_iommu_type1_dma_unmap);
+		dma_unmap.size = len;
+		dma_unmap.iova = iova;
+
+		ret = ioctl(vfio_container_fd, VFIO_IOMMU_UNMAP_DMA, &dma_unmap);
+		if (ret) {
+			RTE_LOG(ERR, EAL, "  cannot clear DMA mapping, error %i (%s)\n",
+					errno, strerror(errno));
+			return -1;
+		}
+		vfio_spapr1_free_mem_alloc(vaddr, len);
+	}
+	return 0;
+}
+
+/* DRC - Is this needed? */
+#if 0
+static int
+vfio_spapr1_map_walk(const struct rte_memseg_list *msl,
+		const struct rte_memseg *ms, void *arg)
+{
+	int *vfio_container_fd = arg;
+
+	/* skip external memory that isn't a heap */
+	if (msl->external && !msl->heap)
+		return 0;
+
+	/* skip any segments with invalid IOVA addresses */
+	if (ms->iova == RTE_BAD_IOVA)
+		return 0;
+
+	return vfio_spapr1_dma_do_map(*vfio_container_fd, ms->addr_64, ms->iova,
+			ms->len, 1);
+}
+#endif
+
+static int
+vfio_spapr1_dma_map(int vfio_container_fd)
+{
+	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+	struct vfio_spapr1_mem_window *f;
+	struct vfio_iommu_spapr_tce_info info = {
+		.argsz = sizeof(info)
+	};
+	int ret = ioctl(vfio_container_fd, VFIO_IOMMU_ENABLE);
+	if (ret) {
+		RTE_LOG(ERR, EAL, "  cannot enable iommu, "
+				"error %i (%s)\n", errno, strerror(errno));
+		return -1;
+	}
+
+	ret = ioctl(vfio_container_fd,
+			VFIO_IOMMU_SPAPR_TCE_GET_INFO, &info);
+	if (ret) {
+		RTE_LOG(ERR, EAL, "  cannot get iommu info, "
+				"error %i (%s)\n", errno, strerror(errno));
+		return -1;
+	}
+
+	RTE_LOG(DEBUG, EAL, "  spaprv1 iommu info: "
+			"start = 0x%08x, size = 0x%08x\n",
+			info.dma32_window_start, info.dma32_window_size);
+
+	/* restrictive DMA window requires we set the DMA mask */
+	mcfg->dma_maskbits = info.dma32_window_size - 1;
+
+	/* setup the alloc/free lists, create the free list starting entry */
+	TAILQ_INIT(&vfio_spapr1_free_head);
+	TAILQ_INIT(&vfio_spapr1_alloc_head);
+
+	f = rte_malloc(NULL, sizeof(*f), RTE_CACHE_LINE_SIZE);
+	if (f == NULL) {
+		RTE_LOG(ERR, EAL, "  rte_malloc failure");
+		/* DRC - Is the return value correct? */
+		return -1;
+	}
+
+	f->taddr = info.dma32_window_start;
+	f->vaddr = 0ULL;
+	f->len = info.dma32_window_size;
+	TAILQ_INSERT_TAIL(&vfio_spapr1_free_head, f, next);
+
+	/* DRC - Do we need to walk the list? */
+	// return rte_memseg_walk(vfio_spapr1_map_walk, &vfio_container_fd);
+	return ret;
+}
+
+rte_iova_t
+vfio_spapr1_virt2iova(const void *vaddr)
+{
+	struct vfio_spapr1_mem_window *item;
+	uint64_t ret = RTE_BAD_IOVA;
+
+	if (!TAILQ_EMPTY(&vfio_spapr1_alloc_head)) {
+		TAILQ_FOREACH(item, &vfio_spapr1_alloc_head, next) {
+			if (((const uint64_t)vaddr >= item->vaddr) &&
+				((const uint64_t)vaddr < item->vaddr + item->len))
+				/* DRC - Should we break on the first match? */
+				ret = item->taddr + ((const uint64_t)vaddr - item->vaddr);
+		}
+	}
+
+	return ret;
+}
+
+
+static int
+vfio_spapr2_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		uint64_t len, int do_map)
 {
 	struct vfio_iommu_type1_dma_map dma_map;
@@ -1411,7 +1863,6 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 				return -1;
 			}
 		}
-
 	} else {
 		memset(&dma_unmap, 0, sizeof(dma_unmap));
 		dma_unmap.argsz = sizeof(struct vfio_iommu_type1_dma_unmap);
@@ -1439,7 +1890,7 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 }
 
 static int
-vfio_spapr_map_walk(const struct rte_memseg_list *msl,
+vfio_spapr2_map_walk(const struct rte_memseg_list *msl,
 		const struct rte_memseg *ms, void *arg)
 {
 	int *vfio_container_fd = arg;
@@ -1452,12 +1903,12 @@ vfio_spapr_map_walk(const struct rte_memseg_list *msl,
 	if (ms->iova == RTE_BAD_IOVA)
 		return 0;
 
-	return vfio_spapr_dma_do_map(*vfio_container_fd, ms->addr_64, ms->iova,
+	return vfio_spapr2_dma_do_map(*vfio_container_fd, ms->addr_64, ms->iova,
 			ms->len, 1);
 }
 
 static int
-vfio_spapr_unmap_walk(const struct rte_memseg_list *msl,
+vfio_spapr2_unmap_walk(const struct rte_memseg_list *msl,
 		const struct rte_memseg *ms, void *arg)
 {
 	int *vfio_container_fd = arg;
@@ -1470,7 +1921,7 @@ vfio_spapr_unmap_walk(const struct rte_memseg_list *msl,
 	if (ms->iova == RTE_BAD_IOVA)
 		return 0;
 
-	return vfio_spapr_dma_do_map(*vfio_container_fd, ms->addr_64, ms->iova,
+	return vfio_spapr2_dma_do_map(*vfio_container_fd, ms->addr_64, ms->iova,
 			ms->len, 0);
 }
 
@@ -1480,7 +1931,7 @@ struct spapr_walk_param {
 };
 
 static int
-vfio_spapr_window_size_walk(const struct rte_memseg_list *msl,
+vfio_spapr2_window_size_walk(const struct rte_memseg_list *msl,
 		const struct rte_memseg *ms, void *arg)
 {
 	struct spapr_walk_param *param = arg;
@@ -1503,7 +1954,7 @@ vfio_spapr_window_size_walk(const struct rte_memseg_list *msl,
 }
 
 static int
-vfio_spapr_create_new_dma_window(int vfio_container_fd,
+vfio_spapr2_create_new_dma_window(int vfio_container_fd,
 		struct vfio_iommu_spapr_tce_create *create) {
 	struct vfio_iommu_spapr_tce_remove remove = {
 		.argsz = sizeof(remove),
@@ -1560,7 +2011,7 @@ vfio_spapr_create_new_dma_window(int vfio_container_fd,
 }
 
 static int
-vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
+vfio_spapr2_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		uint64_t len, int do_map)
 {
 	struct spapr_walk_param param;
@@ -1584,7 +2035,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 	memset(&param, 0, sizeof(param));
 
 	/* we're inside a callback so use thread-unsafe version */
-	if (rte_memseg_walk_thread_unsafe(vfio_spapr_window_size_walk,
+	if (rte_memseg_walk_thread_unsafe(vfio_spapr2_window_size_walk,
 				&param) < 0) {
 		RTE_LOG(ERR, EAL, "Could not get window size\n");
 		ret = -1;
@@ -1607,7 +2058,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		/* re-create window and remap the entire memory */
 		if (iova + len > create.window_size) {
 			/* release all maps before recreating the window */
-			if (rte_memseg_walk_thread_unsafe(vfio_spapr_unmap_walk,
+			if (rte_memseg_walk_thread_unsafe(vfio_spapr2_unmap_walk,
 					&vfio_container_fd) < 0) {
 				RTE_LOG(ERR, EAL, "Could not release DMA maps\n");
 				ret = -1;
@@ -1617,7 +2068,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			for (i = 0; i < user_mem_maps->n_maps; i++) {
 				struct user_mem_map *map =
 						&user_mem_maps->maps[i];
-				if (vfio_spapr_dma_do_map(vfio_container_fd,
+				if (vfio_spapr2_dma_do_map(vfio_container_fd,
 						map->addr, map->iova, map->len,
 						0)) {
 					RTE_LOG(ERR, EAL, "Could not release user DMA maps\n");
@@ -1626,7 +2077,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 				}
 			}
 			create.window_size = rte_align64pow2(iova + len);
-			if (vfio_spapr_create_new_dma_window(vfio_container_fd,
+			if (vfio_spapr2_create_new_dma_window(vfio_container_fd,
 					&create) < 0) {
 				RTE_LOG(ERR, EAL, "Could not create new DMA window\n");
 				ret = -1;
@@ -1634,7 +2085,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			}
 			/* we're inside a callback, so use thread-unsafe version
 			 */
-			if (rte_memseg_walk_thread_unsafe(vfio_spapr_map_walk,
+			if (rte_memseg_walk_thread_unsafe(vfio_spapr2_map_walk,
 					&vfio_container_fd) < 0) {
 				RTE_LOG(ERR, EAL, "Could not recreate DMA maps\n");
 				ret = -1;
@@ -1644,7 +2095,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			for (i = 0; i < user_mem_maps->n_maps; i++) {
 				struct user_mem_map *map =
 						&user_mem_maps->maps[i];
-				if (vfio_spapr_dma_do_map(vfio_container_fd,
+				if (vfio_spapr2_dma_do_map(vfio_container_fd,
 						map->addr, map->iova, map->len,
 						1)) {
 					RTE_LOG(ERR, EAL, "Could not recreate user DMA maps\n");
@@ -1653,7 +2104,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 				}
 			}
 		}
-		if (vfio_spapr_dma_do_map(vfio_container_fd, vaddr, iova, len, 1)) {
+		if (vfio_spapr2_dma_do_map(vfio_container_fd, vaddr, iova, len, 1)) {
 			RTE_LOG(ERR, EAL, "Failed to map DMA\n");
 			ret = -1;
 			goto out;
@@ -1666,7 +2117,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			goto out;
 		}
 
-		vfio_spapr_dma_do_map(vfio_container_fd, vaddr, iova, len, 0);
+		vfio_spapr2_dma_do_map(vfio_container_fd, vaddr, iova, len, 0);
 	}
 out:
 	rte_spinlock_recursive_unlock(&user_mem_maps->lock);
@@ -1674,7 +2125,7 @@ out:
 }
 
 static int
-vfio_spapr_dma_map(int vfio_container_fd)
+vfio_spapr2_dma_map(int vfio_container_fd)
 {
 	struct vfio_iommu_spapr_tce_create create = {
 		.argsz = sizeof(create),
@@ -1684,24 +2135,31 @@ vfio_spapr_dma_map(int vfio_container_fd)
 	memset(&param, 0, sizeof(param));
 
 	/* create DMA window from 0 to max(phys_addr + len) */
-	rte_memseg_walk(vfio_spapr_window_size_walk, &param);
+	rte_memseg_walk(vfio_spapr2_window_size_walk, &param);
 
 	/* sPAPR requires window size to be a power of 2 */
 	create.window_size = rte_align64pow2(param.window_size);
 	create.page_shift = __builtin_ctzll(param.hugepage_sz);
 	create.levels = 1;
 
-	if (vfio_spapr_create_new_dma_window(vfio_container_fd, &create) < 0) {
+	if (vfio_spapr2_create_new_dma_window(vfio_container_fd, &create) < 0) {
 		RTE_LOG(ERR, EAL, "Could not create new DMA window\n");
 		return -1;
 	}
 
 	/* map all DPDK segments for DMA. use 1:1 PA to IOVA mapping */
-	if (rte_memseg_walk(vfio_spapr_map_walk, &vfio_container_fd) < 0)
+	if (rte_memseg_walk(vfio_spapr2_map_walk, &vfio_container_fd) < 0)
 		return -1;
 
 	return 0;
 }
+
+rte_iova_t
+vfio_spapr2_virt2iova(const void *virtaddr)
+{
+	return (uintptr_t)virtaddr;
+}
+#endif /* RTE_ARCH_PPC_64 */
 
 static int
 vfio_noiommu_dma_map(int __rte_unused vfio_container_fd)
@@ -1720,6 +2178,12 @@ vfio_noiommu_dma_mem_map(int __rte_unused vfio_container_fd,
 	return 0;
 }
 
+rte_iova_t
+vfio_noiommu_virt2iova(const void *virtaddr)
+{
+	return (uintptr_t)virtaddr;
+}
+
 static int
 vfio_dma_mem_map(struct vfio_config *vfio_cfg, uint64_t vaddr, uint64_t iova,
 		uint64_t len, int do_map)
@@ -1734,7 +2198,7 @@ vfio_dma_mem_map(struct vfio_config *vfio_cfg, uint64_t vaddr, uint64_t iova,
 
 	if (!t->dma_user_map_func) {
 		RTE_LOG(ERR, EAL,
-			"  VFIO custom DMA region maping not supported by IOMMU %s\n",
+			"  VFIO custom DMA region mapping not supported by IOMMU %s\n",
 			t->name);
 		rte_errno = ENOTSUP;
 		return -1;
@@ -2032,7 +2496,7 @@ rte_vfio_container_dma_unmap(int container_fd, uint64_t vaddr, uint64_t iova,
 	return container_dma_unmap(vfio_cfg, vaddr, iova, len);
 }
 
-#else
+#else /* VFIO_PRESENT */
 
 int
 rte_vfio_setup_device(__rte_unused const char *sysfs_base,
