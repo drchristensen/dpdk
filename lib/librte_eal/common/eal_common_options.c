@@ -86,6 +86,8 @@ eal_long_options[] = {
 	{OPT_LEGACY_MEM,        0, NULL, OPT_LEGACY_MEM_NUM       },
 	{OPT_SINGLE_FILE_SEGMENTS, 0, NULL, OPT_SINGLE_FILE_SEGMENTS_NUM},
 	{OPT_MATCH_ALLOCATIONS, 0, NULL, OPT_MATCH_ALLOCATIONS_NUM},
+	{OPT_IOVA_BASE,	        1, NULL, OPT_IOVA_BASE_NUM        },
+	{OPT_IOVA_LEN,	        1, NULL, OPT_IOVA_LEN_NUM         },
 	{0,                     0, NULL, 0                        }
 };
 
@@ -227,6 +229,9 @@ eal_reset_internal_config(struct internal_config *internal_cfg)
 	internal_cfg->user_mbuf_pool_ops_name = NULL;
 	CPU_ZERO(&internal_cfg->ctrl_cpuset);
 	internal_cfg->init_complete = 0;
+	internal_cfg->iova_base = 0;
+	/* DRC - Fair default? */
+	internal_cfg->iova_len = 1024 * 1024 * 1024;  /* 1GB */
 }
 
 static int
@@ -1133,6 +1138,50 @@ eal_parse_base_virtaddr(const char *arg)
 	return 0;
 }
 
+static int
+eal_parse_iova_base(const char *arg)
+{
+	char *end;
+	uint64_t addr;
+
+	errno = 0;
+	addr = strtoull(arg, &end, 16);
+
+	/* check for errors */
+	if ((errno != 0) || (arg[0] == '\0') || end == NULL || (*end != '\0'))
+		return -1;
+
+	/* DRC - Use this? */
+	if (addr >= UINTPTR_MAX)
+		return -1;
+
+	internal_config.iova_base = (uintptr_t)addr;
+
+	return 0;
+}
+
+static int
+eal_parse_iova_len(const char *arg)
+{
+	char *end;
+	size_t len;
+
+	errno = 0;
+	len = strtoull(arg, &end, 16);
+
+	/* check for errors */
+	if ((errno != 0) || (arg[0] == '\0') || end == NULL || (*end != '\0'))
+		return -1;
+
+	/* DRC - Use this? */
+	if (len >= UINTPTR_MAX)
+		return -1;
+
+	internal_config.iova_len = len;
+
+	return 0;
+}
+
 /* caller is responsible for freeing the returned string */
 static char *
 available_cores(void)
@@ -1452,6 +1501,20 @@ eal_parse_common_option(int opt, const char *optarg,
 		if (eal_parse_base_virtaddr(optarg) < 0) {
 			RTE_LOG(ERR, EAL, "invalid parameter for --"
 					OPT_BASE_VIRTADDR "\n");
+			return -1;
+		}
+		break;
+	case OPT_IOVA_BASE_NUM:
+		if (eal_parse_iova_base(optarg) < 0) {
+			RTE_LOG(ERR, EAL, "invalid parameters for --"
+				OPT_IOVA_BASE "\n");
+			return -1;
+		}
+		break;
+	case OPT_IOVA_LEN_NUM:
+		if (eal_parse_iova_len(optarg) < 0) {
+			RTE_LOG(ERR, EAL, "invalid parameters for --"
+				OPT_IOVA_LEN "\n");
 			return -1;
 		}
 		break;
