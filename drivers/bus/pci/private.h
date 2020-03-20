@@ -179,6 +179,9 @@ rte_pci_match(const struct rte_pci_driver *pci_drv,
 bool
 pci_device_iommu_support_va(const struct rte_pci_device *dev);
 
+bool
+pci_device_iommu_support_ta(const struct rte_pci_device *dev);
+
 enum rte_iova_mode
 pci_device_iova_mode(const struct rte_pci_driver *pci_drv,
 		     const struct rte_pci_device *pci_dev);

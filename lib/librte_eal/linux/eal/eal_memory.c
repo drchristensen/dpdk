@@ -149,12 +149,25 @@ rte_mem_virt2phy(const void *virtaddr)
 	return physaddr;
 }
 
+phys_addr_t
+rte_mem_virt2trans(const void *virtaddr)
+{
+	uint64_t transaddr = (uint64_t) virtaddr;
+	return transaddr;
+}
+
+/*
+ * Get physical address of any mapped virtual address in the current process.
+ */
 rte_iova_t
 rte_mem_virt2iova(const void *virtaddr)
 {
 	if (rte_eal_iova_mode() == RTE_IOVA_VA)
 		return (uintptr_t)virtaddr;
-	return rte_mem_virt2phy(virtaddr);
+	else if (rte_eal_iova_mode() == RTE_IOVA_TA)
+		return rte_mem_virt2trans(virtaddr);
+	else
+		return rte_mem_virt2phy(virtaddr);
 }
 
 /*

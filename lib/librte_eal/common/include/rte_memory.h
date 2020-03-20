@@ -108,6 +108,20 @@ int rte_mem_lock_page(const void *virt);
 phys_addr_t rte_mem_virt2phy(const void *virt);
 
 /**
+ * Get translated address of any mapped virtual address in the current process.
+ * It is found by consulting a linked list maintained by the framework.
+ * This address is only availabe when IOVA=TA, and must be in the range of
+ * iova-base to iova-base + iova-len.
+ *
+ * @param virt
+ *   The virtual address.
+ * @return
+ *   The translated address or RTE_BAD_IOVA on error.
+ */
+__rte_experimental
+rte_iova_t rte_mem_virt2trans(const void *virt);
+
+/**
  * Get IO virtual address of any mapped virtual address in the current process.
  *
  * @note This function will not check internal page table. Instead, in IOVA as

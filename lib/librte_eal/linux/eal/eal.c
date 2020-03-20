@@ -1080,6 +1080,7 @@ rte_eal_init(int argc, char **argv)
 				RTE_LOG(DEBUG, EAL, "KNI is loaded, selecting IOVA as PA mode for better KNI perfomance.\n");
 #endif
 			} else if (is_iommu_enabled()) {
+				/* DRC - Need something here for IOVA_TA */
 				/* we have an IOMMU, pick IOVA as VA mode */
 				iova_mode = RTE_IOVA_VA;
 				RTE_LOG(DEBUG, EAL, "IOMMU is available, selecting IOVA as VA mode.\n");
@@ -1117,8 +1118,14 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
-	RTE_LOG(INFO, EAL, "Selected IOVA mode '%s'\n",
-		rte_eal_iova_mode() == RTE_IOVA_PA ? "PA" : "VA");
+	if (rte_eal_iova_mode() == RTE_IOVA_TA) {
+		/* DRC - Need to check power of 2 */
+		RTE_LOG(DEBUG, EAL, "DRC: %s: dma_mask = %d\n", __func__,
+			(__builtin_ctzll(internal_config.iova_len)));
+		rte_mem_set_dma_mask(__builtin_ctzll(internal_config.iova_len));
+	}
+
+	RTE_LOG(INFO, EAL, "Selected IOVA mode '%s'\n", IOVA_STR(rte_eal_iova_mode()));
 
 	if (internal_config.no_hugetlbfs == 0) {
 		/* rte_config isn't initialized yet */

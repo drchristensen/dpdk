@@ -297,6 +297,7 @@ alloc_pages_on_heap(struct malloc_heap *heap, uint64_t pg_sz, size_t elt_size,
 	size_t alloc_sz;
 	int allocd_pages;
 	void *ret, *map_addr;
+	enum rte_iova_mode iova_mode = rte_eal_iova_mode();
 
 	alloc_sz = (size_t)pg_sz * n_segs;
 
@@ -343,7 +344,7 @@ alloc_pages_on_heap(struct malloc_heap *heap, uint64_t pg_sz, size_t elt_size,
 		 * and the address width supported by the IOMMU hw is
 		 * not enough for using the memory mapped IOVAs.
 		 *
-		 * If IOVA is VA, advice to try with '--iova-mode pa'
+		 * If IOVA is VA/TA, advice to try with '--iova-mode pa'
 		 * which could solve some situations when IOVA VA is not
 		 * really needed.
 		 */
@@ -352,11 +353,11 @@ alloc_pages_on_heap(struct malloc_heap *heap, uint64_t pg_sz, size_t elt_size,
 			__func__);
 
 		/*
-		 * If IOVA is VA and it is possible to run with IOVA PA,
-		 * because user is root, give and advice for solving the
+		 * If IOVA is VA/TA and it is possible to run with IOVA PA,
+		 * because user is root, give advice for solving the
 		 * problem.
 		 */
-		if ((rte_eal_iova_mode() == RTE_IOVA_VA) &&
+		if ((iova_mode == RTE_IOVA_VA || iova_mode == RTE_IOVA_TA) &&
 		     rte_eal_using_phys_addrs())
 			RTE_LOG(ERR, EAL,
 				"%s(): Please try initializing EAL with --iova-mode=pa parameter\n",

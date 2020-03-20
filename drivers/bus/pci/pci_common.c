@@ -178,8 +178,7 @@ rte_pci_probe_one_driver(struct rte_pci_driver *dr,
 		if (dev_iova_mode != RTE_IOVA_DC &&
 		    dev_iova_mode != iova_mode) {
 			RTE_LOG(ERR, EAL, "  Expecting '%s' IOVA mode but current mode is '%s', not initializing\n",
-				dev_iova_mode == RTE_IOVA_PA ? "PA" : "VA",
-				iova_mode == RTE_IOVA_PA ? "PA" : "VA");
+				IOVA_STR(dev_iova_mode), IOVA_STR(iova_mode));
 			return -EINVAL;
 		}
 
@@ -617,7 +616,9 @@ rte_pci_get_iommu_class(void)
 	const struct rte_pci_driver *drv;
 	bool devices_want_va = false;
 	bool devices_want_pa = false;
+	bool devices_want_ta = false;
 	int iommu_no_va = -1;
+	int iommu_no_ta = -1;
 
 	FOREACH_DEVICE_ON_PCIBUS(dev) {
 		/*
@@ -626,6 +627,9 @@ rte_pci_get_iommu_class(void)
 		 */
 		if (iommu_no_va == -1)
 			iommu_no_va = pci_device_iommu_support_va(dev)
+					? 0 : 1;
+		if (iommu_no_ta == -1)
+			iommu_no_ta = pci_device_iommu_support_ta(dev)
 					? 0 : 1;
 		if (pci_ignore_device(dev))
 			continue;
@@ -644,12 +648,13 @@ rte_pci_get_iommu_class(void)
 				drv->driver.name,
 				dev->addr.domain, dev->addr.bus,
 				dev->addr.devid, dev->addr.function,
-				dev_iova_mode == RTE_IOVA_DC ? "DC" :
-				(dev_iova_mode == RTE_IOVA_PA ? "PA" : "VA"));
+				IOVA_STR(dev_iova_mode));
 			if (dev_iova_mode == RTE_IOVA_PA)
 				devices_want_pa = true;
 			else if (dev_iova_mode == RTE_IOVA_VA)
 				devices_want_va = true;
+			else if (dev_iova_mode == RTE_IOVA_TA)
+				devices_want_ta = true;
 		}
 	}
 	if (iommu_no_va == 1) {
@@ -658,10 +663,12 @@ rte_pci_get_iommu_class(void)
 			RTE_LOG(WARNING, EAL, "Some devices want 'VA' but IOMMU does not support 'VA'.\n");
 			RTE_LOG(WARNING, EAL, "The devices that want 'VA' won't initialize.\n");
 		}
-	} else if (devices_want_va && !devices_want_pa) {
+	} else if (devices_want_va && !devices_want_pa && !devices_want_ta) {
 		iova_mode = RTE_IOVA_VA;
-	} else if (devices_want_pa && !devices_want_va) {
+	} else if (devices_want_pa && !devices_want_va && !devices_want_ta) {
 		iova_mode = RTE_IOVA_PA;
+	} else if (devices_want_ta && !devices_want_pa && !devices_want_va) {
+		iova_mode = RTE_IOVA_TA;
 	} else {
 		iova_mode = RTE_IOVA_DC;
 		if (devices_want_va) {
