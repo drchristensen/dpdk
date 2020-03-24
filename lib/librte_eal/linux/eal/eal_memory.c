@@ -50,6 +50,7 @@
 #include "eal_filesystem.h"
 #include "eal_hugepages.h"
 #include "eal_options.h"
+#include "eal_common_tiova.h"
 
 #define PFN_MASK_SIZE	8
 
@@ -152,8 +153,7 @@ rte_mem_virt2phy(const void *virtaddr)
 phys_addr_t
 rte_mem_virt2trans(const void *virtaddr)
 {
-	uint64_t transaddr = (uint64_t) virtaddr;
-	return transaddr;
+	return iova_search(virtaddr);
 }
 
 /*
@@ -162,6 +162,8 @@ rte_mem_virt2trans(const void *virtaddr)
 rte_iova_t
 rte_mem_virt2iova(const void *virtaddr)
 {
+	RTE_LOG(DEBUG, EAL, "DRC: %s(enter): (V:0x%" PRIx64 ")\n", __func__,
+		(const uintptr_t) virtaddr);
 	if (rte_eal_iova_mode() == RTE_IOVA_VA)
 		return (uintptr_t)virtaddr;
 	else if (rte_eal_iova_mode() == RTE_IOVA_TA)
@@ -1525,6 +1527,7 @@ eal_legacy_hugepage_init(void)
 				continue;
 		}
 
+		/* DRC - Need something here. */
 		if (rte_eal_using_phys_addrs() &&
 				rte_eal_iova_mode() != RTE_IOVA_VA) {
 			/* find physical addresses for each hugepage */

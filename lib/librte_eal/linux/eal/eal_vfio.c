@@ -1661,7 +1661,7 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 	} else {
 		/* for unmap, check if iova within DMA window */
 		if (iova > create.window_size) {
-			RTE_LOG(ERR, EAL, "iova beyond DMA window for unmap");
+			RTE_LOG(ERR, EAL, "iova beyond DMA window for unmap\n");
 			ret = -1;
 			goto out;
 		}

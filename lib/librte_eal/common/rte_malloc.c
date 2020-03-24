@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include <string.h>
 #include <sys/queue.h>
 
@@ -333,6 +334,8 @@ rte_malloc_virt2iova(const void *addr)
 	if (ms->iova == RTE_BAD_IOVA)
 		return RTE_BAD_IOVA;
 
+	RTE_LOG(DEBUG, EAL, "DRC: %s: returning 0x%" PRIx64 "\n",
+		__func__, (ms->iova + RTE_PTR_DIFF(addr, ms->addr)));
 	return ms->iova + RTE_PTR_DIFF(addr, ms->addr);
 }
 

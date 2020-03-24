@@ -45,6 +45,7 @@
 #include "eal_memalloc.h"
 #include "eal_memcfg.h"
 #include "eal_private.h"
+#include "eal_common_tiova.h"
 
 const int anonymous_hugepages_supported =
 #ifdef MAP_HUGE_SHIFT
@@ -485,6 +486,8 @@ alloc_seg(struct rte_memseg *ms, void *addr, int socket_id,
 	int flags;
 	void *new_addr;
 
+	RTE_LOG(DEBUG, EAL, "DRC: %s(enter): (V:0x%" PRIx64 "), socket=%d\n",
+			__func__, (uintptr_t)addr, socket_id);
 	alloc_sz = hi->hugepage_sz;
 
 	/* these are checked at init, but code analyzers don't know that */
@@ -591,6 +594,15 @@ alloc_seg(struct rte_memseg *ms, void *addr, int socket_id,
 	 */
 	*(volatile int *)addr = *(volatile int *)addr;
 
+	/* setup a mapping if using translated addresses */
+	if (rte_eal_iova_mode() == RTE_IOVA_TA) {
+		RTE_LOG(DEBUG, EAL, "DRC: %s: adding iova_alloc entry...\n", __func__);
+		if (iova_alloc(addr, alloc_sz) == RTE_BAD_IOVA) {
+			RTE_LOG(DEBUG, EAL, "DRC: %s: failed to add iova_alloc entry...\n", __func__);
+			goto mapped;
+		}
+	}
+
 	iova = rte_mem_virt2iova(addr);
 	if (iova == RTE_BAD_PHYS_ADDR) {
 		RTE_LOG(DEBUG, EAL, "%s(): can't get IOVA addr\n",
@@ -688,6 +700,12 @@ free_seg(struct rte_memseg *ms, struct hugepage_info *hi,
 	}
 
 	exit_early = false;
+
+	/* clear the mapping if using translated addresses */
+	if (rte_eal_iova_mode() == RTE_IOVA_TA) {
+		RTE_LOG(DEBUG, EAL, "DRC: %s: removing iova_alloc entry...\n", __func__);
+		iova_free(ms->addr, ms->len);
+	}
 
 	/* if we're using anonymous hugepages, nothing to be done */
 	if (internal_config.in_memory && !memfd_create_supported)

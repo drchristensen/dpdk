@@ -26,6 +26,7 @@
 #include "eal_internal_cfg.h"
 #include "eal_memcfg.h"
 #include "malloc_heap.h"
+#include "eal_common_tiova.h"
 
 /*
  * Try to mmap *size bytes in /dev/zero. If it is successful, return the
@@ -182,6 +183,10 @@ eal_get_virtual_area(void *requested_addr, size_t *size,
 	return aligned_addr;
 }
 
+/* DRC - Start */
+
+/* DRC - End */
+
 static struct rte_memseg *
 virt2memseg(const void *addr, const struct rte_memseg_list *msl)
 {
@@ -237,6 +242,7 @@ struct virtiova {
 	rte_iova_t iova;
 	void *virt;
 };
+
 static int
 find_virt(const struct rte_memseg_list *msl __rte_unused,
 		const struct rte_memseg *ms, void *arg)
@@ -898,6 +904,12 @@ rte_eal_memory_init(void)
 
 	if (!mcfg)
 		return -1;
+
+	/* DRC - Setup IOVA=TA mapping list here */
+	if (rte_eal_iova_mode() == RTE_IOVA_TA) {
+		if (iova_init() < 0)
+			goto fail;
+	}
 
 	/* lock mem hotplug here, to prevent races while we init */
 	rte_mcfg_mem_read_lock();

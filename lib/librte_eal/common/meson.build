@@ -28,6 +28,7 @@ common_sources = files(
 	'eal_common_tailqs.c',
 	'eal_common_thread.c',
 	'eal_common_timer.c',
+	'eal_common_tiova.c',
 	'eal_common_uuid.c',
 	'hotplug_mp.c',
 	'malloc_elem.c',
