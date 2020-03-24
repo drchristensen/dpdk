@@ -48,20 +48,20 @@ void iova_compress(void);
 // #define RTE_PTR_ADD(ptr, x) ((void*)((uintptr_t)(ptr) + (x)))
 
 bool
-iova_overlap(iova_mem_desc_t *id, const void *start,
-		const size_t len)
-{
-	void *end = RTE_PTR_ADD(start, len - 1);
+iova_overlap(iova_mem_desc_t *id, const void *vaddr, const size_t len) {
+
+	uintptr_t start = (uintptr_t)vaddr;
+	uintptr_t end = start + len - 1;
 	uintptr_t dsc_start = id->vaddr;
 	uintptr_t dsc_end = id->vaddr + id->len - 1;
 
 	// RTE_LOG(DEBUG, EAL, "DRC: %s(enter)...\n", __func__);
 
 	/* if the two ranges share a single value, they overlap */
-	if (MAX(start, dsc_start) <= MIN(end, dsc_end)) {
+	if (RTE_MAX(start, dsc_start) <= RTE_MIN(end, dsc_end)) {
 		RTE_LOG(DEBUG, EAL, "DRC: %s: comparing (V:0x%" PRIx64 "/L:0x%" PRIx64
-			") to (V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
-			__func__, (uintptr_t) start, len, id->vaddr, id->len);
+			") to (V:0x%" PRIx64 "/L:0x%zx)\n",
+			__func__, start, len, id->vaddr, id->len);
 		RTE_LOG(DEBUG, EAL, "DRC: %s: found overlap!\n", __func__);
 		return true;
 	}
@@ -82,8 +82,8 @@ uint64_t
 iova_alloc(const void *vaddr, const size_t len) {
 	struct iova_mem_desc *f, *a, *t;
 
-	RTE_LOG(DEBUG, EAL, "DRC: %s(enter): vaddr = 0x%" PRIx64 ", "
-		"len = 0x%" PRIx64 "\n", __func__, (uintptr_t) vaddr, len);
+	RTE_LOG(DEBUG, EAL, "DRC: %s(enter): (V:0x%" PRIx64 "/"
+		"L:0x%zx)\n", __func__, (uintptr_t) vaddr, len);
 
 	/* nothing to allocate if the free list is empty */
 	if (TAILQ_EMPTY(&iova_free_list)) {
@@ -103,7 +103,7 @@ iova_alloc(const void *vaddr, const size_t len) {
 	/* look for the first available mapping window in the free list */
 	TAILQ_FOREACH_SAFE(f, &iova_free_list, next, t) {
 		// RTE_LOG(DEBUG, EAL, "DRC: %s: checking free entry (T:0x%" PRIx64
-		//	"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+		//	"/V:0x%" PRIx64 "/L:0x%zx)\n",
 		//	__func__, f->taddr, f->vaddr, f->len);
 
 		/* requested window too big? keep trying */
@@ -126,7 +126,7 @@ iova_alloc(const void *vaddr, const size_t len) {
 		a->len   = len;
 		TAILQ_INSERT_TAIL(&iova_alloc_list, a, next);
 		RTE_LOG(DEBUG, EAL, "DRC: %s: new alloc entry (T:0x%" PRIx64
-			"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+			"/V:0x%" PRIx64 "/L:0x%zx)\n",
 			__func__, a->taddr, a->vaddr, a->len);
 
 		/* adjust free list entry and remove allocated range */
@@ -141,7 +141,7 @@ iova_alloc(const void *vaddr, const size_t len) {
 		} else {
 			RTE_LOG(DEBUG, EAL, "DRC: %s: modified existing free "
 				"entry (T:0x%" PRIx64 "/V:0x%" PRIx64
-				"/L:0x%" PRIx64 ")\n", __func__, f->taddr,
+				"/L:0x%zx)\n", __func__, f->taddr,
 				f->vaddr, f->len);
 		}
 
@@ -173,7 +173,7 @@ iova_sort(void)
 
 	TAILQ_FOREACH_SAFE(c, &iova_free_list, next, t) {
 		// RTE_LOG(DEBUG, EAL, "DRC: %s: checking free (T:0x%" PRIx64
-		//	"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+		//	"/V:0x%" PRIx64 "/L:0x%zx)\n",
 		//	__func__, c->taddr, c->vaddr, c->len);
 
 		/* need two entries to do anything useful */
@@ -185,10 +185,10 @@ iova_sort(void)
 		/* swap the two adjacent entries */
 		if (p->taddr > c->taddr) {
 			RTE_LOG(DEBUG, EAL, "DRC: %s: swapping (T:0x%" PRIx64
-				"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+				"/V:0x%" PRIx64 "/L:0x%zx)\n",
 				__func__, p->taddr, p->vaddr, p->len);
 			RTE_LOG(DEBUG, EAL, "DRC: %s:    and   (T:0x%" PRIx64
-				"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+				"/V:0x%" PRIx64 "/L:0x%zx)\n",
 				__func__, c->taddr, c->vaddr, c->len);
 			TAILQ_REMOVE(&iova_free_list, p, next);
 			TAILQ_INSERT_AFTER(&iova_free_list, c, p, next);
@@ -232,10 +232,10 @@ iova_compress(void) {
 			continue;
 
 		RTE_LOG(DEBUG, EAL, "DRC: %s: compressing (T:0x%" PRIx64
-			"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n", __func__,
+			"/V:0x%" PRIx64 "/L:0x%zx)\n", __func__,
 			p->taddr, p->vaddr, p->len);
 		RTE_LOG(DEBUG, EAL, "DRC: %s:     and     (T:0x%" PRIx64
-			"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n", __func__,
+			"/V:0x%" PRIx64 "/L:0x%zx)\n", __func__,
 			c->taddr, c->vaddr, c->len);
 
 		/* combine adjacent entries */
@@ -243,7 +243,7 @@ iova_compress(void) {
 		TAILQ_REMOVE(&iova_free_list, c, next);
 		free(c);
 		RTE_LOG(DEBUG, EAL, "DRC: %s:   result    (T:0x%" PRIx64
-			"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n", __func__,
+			"/V:0x%" PRIx64 "/L:0x%zx)\n", __func__,
 			p->taddr, p->vaddr, p->len);
 
 	}
@@ -256,8 +256,8 @@ iova_free(const void *vaddr, const size_t len) {
 	bool free_match = false;
 	bool alloc_match = false;
 
-	RTE_LOG(DEBUG, EAL, "DRC: %s(enter): vaddr = 0x%" PRIx64 ", len = 0x%"
-		PRIx64 "\n", __func__, (uintptr_t) vaddr, len);
+	RTE_LOG(DEBUG, EAL, "DRC: %s(enter): (V:0x%" PRIx64 "/L:0x%zx\n",
+		__func__, (uintptr_t) vaddr, len);
 
 	/* can't free an entry if the list is empty */
 	if (TAILQ_EMPTY(&iova_alloc_list)) {
@@ -269,7 +269,7 @@ iova_free(const void *vaddr, const size_t len) {
 	/* search the allocated list for a matching IOVA entry */
 	TAILQ_FOREACH_SAFE(a, &iova_alloc_list, next, at) {
 		// RTE_LOG(DEBUG, EAL, "DRC: %s: checking alloc (T:0x%" PRIx64
-		//	"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+		//	"/V:0x%" PRIx64 "/L:0x%zx)\n",
 		//	__func__, a->taddr, a->vaddr, a->len);
 
 		/* check for a match, otherwise keep looking */
@@ -288,7 +288,7 @@ iova_free(const void *vaddr, const size_t len) {
 		/* search for an existing free entry that can be expanded */
 		TAILQ_FOREACH_SAFE(f, &iova_free_list, next, ft) {
 			RTE_LOG(DEBUG, EAL, "DRC: %s: checking free (T:0x%"
-				PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+				PRIx64 "/V:0x%" PRIx64 "/L:0x%zx)\n",
 				__func__, f->taddr, f->vaddr, f->len);
 
 			if ((a->taddr + a->len) == f->taddr) {
@@ -324,7 +324,7 @@ iova_free(const void *vaddr, const size_t len) {
 			f->len   = a->len;
 			TAILQ_INSERT_TAIL(&iova_free_list, f, next);
 			RTE_LOG(DEBUG, EAL, "DRC: %s: created free (T:0x%"
-				PRIx64 "/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n",
+				PRIx64 "/V:0x%" PRIx64 "/L:0x%zx)\n",
 				__func__, f->taddr, f->vaddr, f->len);
 		}
 
@@ -362,7 +362,7 @@ iova_search(const void *virtaddr)
 
 	TAILQ_FOREACH(a, &iova_alloc_list, next) {
 		// RTE_LOG(DEBUG, EAL, "DRC: %s: checking alloc entry (T:0x%" PRIx64
-		//	"/V:0x%" PRIx64 "/L:0x%" PRIx64 ")\n", __func__,
+		//	"/V:0x%" PRIx64 "/L:0x%zx)\n", __func__,
 		//	a->taddr, a->vaddr, a->len);
 		if (((const uint64_t) virtaddr >= a->vaddr) &&
 			((const uint64_t) virtaddr < a->vaddr + a->len)) {
@@ -401,7 +401,7 @@ iova_init(void) {
 	f->vaddr = 0ULL;
 	f->len   = internal_config.iova_len;
 	RTE_LOG(DEBUG, EAL, "DRC: %s: initial free entry (T:0x%" PRIx64 "/V:0x%"
-		PRIx64 "/L:0x%" PRIx64 ")\n", __func__, f->taddr, f->vaddr, f->len);
+		PRIx64 "/L:0x%zx)\n", __func__, f->taddr, f->vaddr, f->len);
 	TAILQ_INSERT_TAIL(&iova_free_list, f, next);
 
 	return 0;
