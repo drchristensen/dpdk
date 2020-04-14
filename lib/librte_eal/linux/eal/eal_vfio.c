@@ -701,7 +701,10 @@ rte_vfio_setup_device(const char *sysfs_base, const char *dev_addr,
 	 */
 
 	/* check if the group is viable */
+	RTE_LOG(DEBUG, EAL, "VFIO: Attempting GROUP_GET_STATUS: \n");
 	ret = ioctl(vfio_group_fd, VFIO_GROUP_GET_STATUS, &group_status);
+	RTE_LOG(DEBUG, EAL, "VFIO: GROUP_GET_STATUS returned: %d (Flags:0x%08x)\n",
+		ret, group_status.flags);
 	if (ret) {
 		RTE_LOG(ERR, EAL, "  %s cannot get group status, "
 				"error %i (%s)\n", dev_addr, errno, strerror(errno));
@@ -727,8 +730,10 @@ rte_vfio_setup_device(const char *sysfs_base, const char *dev_addr,
 	if (!(group_status.flags & VFIO_GROUP_FLAGS_CONTAINER_SET)) {
 
 		/* add group to a container */
+		RTE_LOG(DEBUG, EAL, "VFIO: Attempting GROUP_SET_CONTAINER: \n");
 		ret = ioctl(vfio_group_fd, VFIO_GROUP_SET_CONTAINER,
 				&vfio_container_fd);
+		RTE_LOG(DEBUG, EAL, "VFIO: GROUP_SET_CONTAINER returned: %d\n", ret);
 		if (ret) {
 			RTE_LOG(ERR, EAL, "  %s cannot add VFIO group to container, "
 					"error %i (%s)\n", dev_addr, errno, strerror(errno));
@@ -853,7 +858,9 @@ rte_vfio_setup_device(const char *sysfs_base, const char *dev_addr,
 	}
 
 	/* get a file descriptor for the device */
+	RTE_LOG(DEBUG, EAL, "VFIO: Attempting GROUP_GET_DEVICE_FD: \n");
 	*vfio_dev_fd = ioctl(vfio_group_fd, VFIO_GROUP_GET_DEVICE_FD, dev_addr);
+	RTE_LOG(DEBUG, EAL, "VFIO: GROUP_GET_DEVICE_FD returned: %d\n", ret);
 	if (*vfio_dev_fd < 0) {
 		/* if we cannot get a device fd, this implies a problem with
 		 * the VFIO group or the container not having IOMMU configured.
@@ -867,7 +874,9 @@ rte_vfio_setup_device(const char *sysfs_base, const char *dev_addr,
 	}
 
 	/* test and setup the device */
+	RTE_LOG(DEBUG, EAL, "VFIO: Attempting DEVICE_GET_INFO: \n");
 	ret = ioctl(*vfio_dev_fd, VFIO_DEVICE_GET_INFO, device_info);
+	RTE_LOG(DEBUG, EAL, "VFIO: DEVICE_GET_INFO returned: %d\n", ret);
 	if (ret) {
 		RTE_LOG(ERR, EAL, "  %s cannot get device info, "
 				"error %i (%s)\n", dev_addr, errno,
@@ -1097,8 +1106,10 @@ vfio_set_iommu_type(int vfio_container_fd)
 	for (idx = 0; idx < RTE_DIM(iommu_types); idx++) {
 		const struct vfio_iommu_type *t = &iommu_types[idx];
 
+		RTE_LOG(DEBUG, EAL, "VFIO: Attempting SET_IOMMU (ID:%d)\n", t->type_id);
 		int ret = ioctl(vfio_container_fd, VFIO_SET_IOMMU,
 				t->type_id);
+		RTE_LOG(DEBUG, EAL, "VFIO: SET_IOMMU returned: %d \n", ret);
 		if (!ret) {
 			RTE_LOG(NOTICE, EAL, "  using IOMMU type %d (%s)\n",
 					t->type_id, t->name);
@@ -1121,8 +1132,10 @@ vfio_has_supported_extensions(int vfio_container_fd)
 	for (idx = 0; idx < RTE_DIM(iommu_types); idx++) {
 		const struct vfio_iommu_type *t = &iommu_types[idx];
 
+		RTE_LOG(DEBUG, EAL, "VFIO: Attempting CHECK_EXTENSION (ID:%d)\n", t->type_id);
 		ret = ioctl(vfio_container_fd, VFIO_CHECK_EXTENSION,
 				t->type_id);
+		RTE_LOG(DEBUG, EAL, "VFIO: CHECK_EXTENSION returned: %d\n", ret);
 		if (ret < 0) {
 			RTE_LOG(ERR, EAL, "  could not get IOMMU type, "
 				"error %i (%s)\n", errno,
@@ -1167,7 +1180,9 @@ rte_vfio_get_container_fd(void)
 		}
 
 		/* check VFIO API version */
+		RTE_LOG(DEBUG, EAL, "VFIO: Attempting GET_API_VERSION\n");
 		ret = ioctl(vfio_container_fd, VFIO_GET_API_VERSION);
+		RTE_LOG(DEBUG, EAL, "VFIO: GET_API_VERSION returned: %d\n", ret);
 		if (ret != VFIO_API_VERSION) {
 			if (ret < 0)
 				RTE_LOG(ERR, EAL, "  could not get VFIO API version, "
@@ -1376,9 +1391,16 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 	reg.vaddr = (uintptr_t) vaddr;
 	reg.size = len;
 
+	RTE_LOG(DEBUG, EAL, "DRC: %s(): %s (V:0x%" PRIx64 "/T:0x%" PRIx64 "/"
+		"L:0x%" PRIu64 ")\n", __func__,  (do_map != 0 ? "map": "unmap"),
+		vaddr, iova, len);
+
 	if (do_map != 0) {
-		ret = ioctl(vfio_container_fd,
-				VFIO_IOMMU_SPAPR_REGISTER_MEMORY, &reg);
+		RTE_LOG(DEBUG, EAL, "VFIO: Attempting SPAPR_REGISTER_MEMORY: "
+			"(Vaddr:0x%" PRIx64 "/Size:0x%" PRIx64 "/Flags: 0x%08x)\n",
+			reg.vaddr, reg.size, reg.flags);
+		ret = ioctl(vfio_container_fd, VFIO_IOMMU_SPAPR_REGISTER_MEMORY, &reg);
+		RTE_LOG(DEBUG, EAL, "VFIO: SPAPR_REGISTER_MEMORY returned: %d\n", ret);
 		if (ret) {
 			RTE_LOG(ERR, EAL, "  cannot register vaddr for IOMMU, "
 				"error %i (%s)\n", errno, strerror(errno));
@@ -1393,7 +1415,11 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		dma_map.flags = VFIO_DMA_MAP_FLAG_READ |
 				VFIO_DMA_MAP_FLAG_WRITE;
 
+		RTE_LOG(DEBUG, EAL, "VFIO: Attempting MAP_DMA: (Vaddr:0x%" PRIx64 "/"
+			"IOBA:0x%" PRIx64 "/Size:0x%" PRIx64 "/Flags:0x%08x)\n",
+			dma_map.vaddr, dma_map.iova, dma_map.size, dma_map.flags);
 		ret = ioctl(vfio_container_fd, VFIO_IOMMU_MAP_DMA, &dma_map);
+		RTE_LOG(DEBUG, EAL, "VFIO: MAP_DMA returned: %d\n", ret);
 		if (ret) {
 			/**
 			 * In case the mapping was already done EBUSY will be
@@ -1411,28 +1437,35 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 				return -1;
 			}
 		}
-
 	} else {
 		memset(&dma_unmap, 0, sizeof(dma_unmap));
 		dma_unmap.argsz = sizeof(struct vfio_iommu_type1_dma_unmap);
 		dma_unmap.size = len;
 		dma_unmap.iova = iova;
 
-		ret = ioctl(vfio_container_fd, VFIO_IOMMU_UNMAP_DMA,
-				&dma_unmap);
+		RTE_LOG(DEBUG, EAL, "VFIO: Attempting UNMAP_DMA: (IOBA:0x%"
+			PRIx64 "/Size:0x%" PRIx64 ")\n",
+			dma_unmap.iova, dma_unmap.size);
+		ret = ioctl(vfio_container_fd, VFIO_IOMMU_UNMAP_DMA, &dma_unmap);
+		RTE_LOG(DEBUG, EAL, "VFIO: UNMAP_DMA returned: %d\n", ret);
 		if (ret) {
 			RTE_LOG(ERR, EAL, "  cannot clear DMA remapping, error %i (%s)\n",
 					errno, strerror(errno));
 			return -1;
 		}
 
+		RTE_LOG(DEBUG, EAL, "VFIO: Attempting SPAPR_UNREGISTER_MEMORY: "
+			"(Vaddr:0x%" PRIx64 "/Size:0x%" PRIx64 "/Flags:0x%08x)\n",
+			reg.vaddr, reg.size, reg.flags);
 		ret = ioctl(vfio_container_fd,
 				VFIO_IOMMU_SPAPR_UNREGISTER_MEMORY, &reg);
+		RTE_LOG(DEBUG, EAL, "VFIO: SPAPR_UNREGISTER_MEMORY returned: %d\n", ret);
 		if (ret) {
 			RTE_LOG(ERR, EAL, "  cannot unregister vaddr for IOMMU, error %i (%s)\n",
 					errno, strerror(errno));
 			return -1;
 		}
+
 	}
 
 	return 0;
@@ -1514,7 +1547,15 @@ vfio_spapr_create_new_dma_window(int vfio_container_fd,
 	int ret;
 
 	/* query spapr iommu info */
+	RTE_LOG(DEBUG, EAL, "VFIO: Attempting SPAPR_TCE_GET_INFO\n");
 	ret = ioctl(vfio_container_fd, VFIO_IOMMU_SPAPR_TCE_GET_INFO, &info);
+	RTE_LOG(DEBUG, EAL, "VFIO: SPAPR_TCE_GET_INFO returned: %d\n", ret);
+	RTE_LOG(DEBUG, EAL, "VFIO: SPAPR_TCE_GET_INFO returned: "
+		"(Flags:0x%08x/Start:0x%08x/Size:0x%08x/"
+		"DDW(Pgsz:0x%" PRIx64 "/DynWin:0x%08x/Levels:0x%08x))\n",
+		info.flags, info.dma32_window_start, info.dma32_window_size,
+		info.ddw.pgsizes, info.ddw.max_dynamic_windows_supported,
+		info.ddw.levels);
 	if (ret) {
 		RTE_LOG(ERR, EAL, "  cannot get iommu info, "
 				"error %i (%s)\n", errno, strerror(errno));
@@ -1523,7 +1564,10 @@ vfio_spapr_create_new_dma_window(int vfio_container_fd,
 
 	/* remove default DMA of 32 bit window */
 	remove.start_addr = info.dma32_window_start;
+	RTE_LOG(DEBUG, EAL, "VFIO: Attempting SPAPR_TCE_REMOVE: "
+		"(StartAddr:0x%" PRIx64 ")\n", remove.start_addr);
 	ret = ioctl(vfio_container_fd, VFIO_IOMMU_SPAPR_TCE_REMOVE, &remove);
+	RTE_LOG(DEBUG, EAL, "VFIO: SPAPR_TCE_REMOVE returned: %d\n", ret);
 	if (ret) {
 		RTE_LOG(ERR, EAL, "  cannot remove default DMA window, "
 				"error %i (%s)\n", errno, strerror(errno));
@@ -1531,7 +1575,12 @@ vfio_spapr_create_new_dma_window(int vfio_container_fd,
 	}
 
 	/* create new DMA window */
+	RTE_LOG(DEBUG, EAL, "VFIO: Attempting SPAPR_TCE_CREATE: "
+		"(Flags:0x%08x/PgShft:0x%08x/Win:0x%" PRIx64 "/Lvl:0x%08x)\n",
+		create->flags, create->page_shift, create->window_size,
+		create->levels);
 	ret = ioctl(vfio_container_fd, VFIO_IOMMU_SPAPR_TCE_CREATE, create);
+	RTE_LOG(DEBUG, EAL, "VFIO: SPAPR_TCE_CREATE returned: %d (Addr:0x%" PRIx64 ")\n", ret, create->start_addr);
 	if (ret) {
 #ifdef VFIO_IOMMU_SPAPR_INFO_DDW
 		/* try possible page_shift and levels for workaround */
@@ -1540,8 +1589,14 @@ vfio_spapr_create_new_dma_window(int vfio_container_fd,
 		for (levels = create->levels + 1;
 			ret && levels <= info.ddw.levels; levels++) {
 			create->levels = levels;
+			RTE_LOG(DEBUG, EAL, "VFIO: Attempting SPAPR_TCE_CREATE: "
+				"(Flags:0x%08x/PgShft:0x%08x/WinSize:0x%" PRIx64 "/Lvl:0x%08x)\n",
+				create->flags, create->page_shift, create->window_size,
+				create->levels);
 			ret = ioctl(vfio_container_fd,
 				VFIO_IOMMU_SPAPR_TCE_CREATE, create);
+			RTE_LOG(DEBUG, EAL, "VFIO: SPAPR_TCE_CREATE returned: %d (Addr:0x%"
+				PRIx64 "\n", ret, create->start_addr);
 		}
 #endif
 		if (ret) {
@@ -1696,7 +1751,7 @@ vfio_spapr_dma_map(int vfio_container_fd)
 		return -1;
 	}
 
-	/* map all DPDK segments for DMA. use 1:1 PA to IOVA mapping */
+	/* map all DPDK segments for DMA. use 1:1 mapping */
 	if (rte_memseg_walk(vfio_spapr_map_walk, &vfio_container_fd) < 0)
 		return -1;
 
