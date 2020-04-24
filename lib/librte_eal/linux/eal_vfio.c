@@ -56,8 +56,10 @@ static struct vfio_config *default_vfio_cfg = &vfio_cfgs[0];
 
 static int vfio_type1_dma_map(int);
 static int vfio_type1_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+#ifdef RTE_ARCH_PPC_64
 static int vfio_spapr_dma_map(int);
 static int vfio_spapr_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
+#endif
 static int vfio_noiommu_dma_map(int);
 static int vfio_noiommu_dma_mem_map(int, uint64_t, uint64_t, uint64_t, int);
 static int vfio_dma_mem_map(struct vfio_config *vfio_cfg, uint64_t vaddr,
@@ -72,6 +74,7 @@ static const struct vfio_iommu_type iommu_types[] = {
 		.dma_map_func = &vfio_type1_dma_map,
 		.dma_user_map_func = &vfio_type1_dma_mem_map
 	},
+#ifdef RTE_ARCH_PPC_64
 	/* ppc64 IOMMU, otherwise known as spapr */
 	{
 		.type_id = RTE_VFIO_SPAPR,
@@ -79,6 +82,7 @@ static const struct vfio_iommu_type iommu_types[] = {
 		.dma_map_func = &vfio_spapr_dma_map,
 		.dma_user_map_func = &vfio_spapr_dma_mem_map
 	},
+#endif
 	/* IOMMU-less mode */
 	{
 		.type_id = RTE_VFIO_NOIOMMU,
@@ -1407,6 +1411,7 @@ vfio_type1_dma_map(int vfio_container_fd)
 	return rte_memseg_walk(type1_map, &vfio_container_fd);
 }
 
+#ifdef RTE_ARCH_PPC_64
 static int
 vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		uint64_t len, int do_map)
@@ -1578,7 +1583,6 @@ vfio_spapr_create_new_dma_window(int vfio_container_fd,
 	/* create new DMA window */
 	ret = ioctl(vfio_container_fd, VFIO_IOMMU_SPAPR_TCE_CREATE, create);
 	if (ret) {
-#ifdef VFIO_IOMMU_SPAPR_INFO_DDW
 		/* try possible page_shift and levels for workaround */
 		uint32_t levels;
 
@@ -1588,7 +1592,6 @@ vfio_spapr_create_new_dma_window(int vfio_container_fd,
 			ret = ioctl(vfio_container_fd,
 				VFIO_IOMMU_SPAPR_TCE_CREATE, create);
 		}
-#endif
 		if (ret) {
 			RTE_LOG(ERR, EAL, "  cannot create new DMA window, "
 					"error %i (%s)\n", errno, strerror(errno));
@@ -1747,6 +1750,7 @@ vfio_spapr_dma_map(int vfio_container_fd)
 
 	return 0;
 }
+#endif /* RTE_ARCH_PPC_64 */
 
 static int
 vfio_noiommu_dma_map(int __rte_unused vfio_container_fd)
