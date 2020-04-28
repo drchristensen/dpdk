@@ -539,17 +539,6 @@ vfio_mem_event_callback(enum rte_mem_event type, const void *addr, size_t len,
 		return;
 	}
 
-#ifdef RTE_ARCH_PPC_64
-	ms = rte_mem_virt2memseg(addr, msl);
-	while (cur_len < len) {
-		int idx = rte_fbarray_find_idx(&msl->memseg_arr, ms);
-
-		rte_fbarray_set_free(&msl->memseg_arr, idx);
-		cur_len += ms->len;
-		++ms;
-	}
-	cur_len = 0;
-#endif
 	/* memsegs are contiguous in memory */
 	ms = rte_mem_virt2memseg(addr, msl);
 
@@ -610,17 +599,6 @@ vfio_mem_event_callback(enum rte_mem_event type, const void *addr, size_t len,
 						iova_expected - iova_start, 0);
 		}
 	}
-#ifdef RTE_ARCH_PPC_64
-	cur_len = 0;
-	ms = rte_mem_virt2memseg(addr, msl);
-	while (cur_len < len) {
-		int idx = rte_fbarray_find_idx(&msl->memseg_arr, ms);
-
-		rte_fbarray_set_used(&msl->memseg_arr, idx);
-		cur_len += ms->len;
-		++ms;
-	}
-#endif
 }
 
 static int
