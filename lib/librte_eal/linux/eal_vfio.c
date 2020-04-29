@@ -1395,17 +1395,16 @@ static int
 vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		uint64_t len, int do_map)
 {
-	struct vfio_iommu_type1_dma_map dma_map;
-	struct vfio_iommu_type1_dma_unmap dma_unmap;
-	int ret;
 	struct vfio_iommu_spapr_register_memory reg = {
 		.argsz = sizeof(reg),
+		.vaddr = (uintptr_t) vaddr,
+		.size = len,
 		.flags = 0
 	};
-	reg.vaddr = (uintptr_t) vaddr;
-	reg.size = len;
+	int ret;
 
-	if (do_map != 0) {
+	if (do_map == 1) {
+		struct vfio_iommu_type1_dma_map dma_map;
 		ret = ioctl(vfio_container_fd,
 				VFIO_IOMMU_SPAPR_REGISTER_MEMORY, &reg);
 		if (ret) {
@@ -1419,29 +1418,17 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		dma_map.vaddr = vaddr;
 		dma_map.size = len;
 		dma_map.iova = iova;
-		dma_map.flags = VFIO_DMA_MAP_FLAG_READ |
-				VFIO_DMA_MAP_FLAG_WRITE;
+		dma_map.flags = VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE;
 
 		ret = ioctl(vfio_container_fd, VFIO_IOMMU_MAP_DMA, &dma_map);
 		if (ret) {
-			/**
-			 * In case the mapping was already done EBUSY will be
-			 * returned from kernel.
-			 */
-			if (errno == EBUSY) {
-				RTE_LOG(DEBUG, EAL,
-					" Memory segment is already mapped,"
-					" skipping");
-			} else {
-				RTE_LOG(ERR, EAL,
-					"  cannot set up DMA remapping,"
-					" error %i (%s)\n", errno,
-					strerror(errno));
+			RTE_LOG(ERR, EAL, "  cannot map vaddr for IOMMU, "
+				"error %i (%s)\n", errno, strerror(errno));
 				return -1;
-			}
 		}
 
 	} else {
+		struct vfio_iommu_type1_dma_unmap dma_unmap;
 		memset(&dma_unmap, 0, sizeof(dma_unmap));
 		dma_unmap.argsz = sizeof(struct vfio_iommu_type1_dma_unmap);
 		dma_unmap.size = len;
@@ -1450,16 +1437,16 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		ret = ioctl(vfio_container_fd, VFIO_IOMMU_UNMAP_DMA,
 				&dma_unmap);
 		if (ret) {
-			RTE_LOG(ERR, EAL, "  cannot clear DMA remapping, error %i (%s)\n",
-					errno, strerror(errno));
+			RTE_LOG(ERR, EAL, "  cannot unmap vaddr for IOMMU, "
+				"error %i (%s)\n", errno, strerror(errno));
 			return -1;
 		}
 
 		ret = ioctl(vfio_container_fd,
 				VFIO_IOMMU_SPAPR_UNREGISTER_MEMORY, &reg);
 		if (ret) {
-			RTE_LOG(ERR, EAL, "  cannot unregister vaddr for IOMMU, error %i (%s)\n",
-					errno, strerror(errno));
+			RTE_LOG(ERR, EAL, "  cannot unregister vaddr for IOMMU, "
+				"error %i (%s)\n", errno, strerror(errno));
 			return -1;
 		}
 	}
@@ -1481,30 +1468,9 @@ vfio_spapr_map_walk(const struct rte_memseg_list *msl,
 	if (ms->iova == RTE_BAD_IOVA)
 		return 0;
 
-	return vfio_spapr_dma_do_map(*vfio_container_fd, ms->addr_64, ms->iova,
-			ms->len, 1);
+	return vfio_spapr_dma_do_map(*vfio_container_fd,
+		ms->addr_64, ms->iova, ms->len, 1);
 }
-
-#if 0
-// DRC - Likely need to delete
-static int
-vfio_spapr_unmap_walk(const struct rte_memseg_list *msl,
-		const struct rte_memseg *ms, void *arg)
-{
-	int *vfio_container_fd = arg;
-
-	/* skip external memory that isn't a heap */
-	if (msl->external && !msl->heap)
-		return 0;
-
-	/* skip any segments with invalid IOVA addresses */
-	if (ms->iova == RTE_BAD_IOVA)
-		return 0;
-
-	return vfio_spapr_dma_do_map(*vfio_container_fd, ms->addr_64, ms->iova,
-			ms->len, 0);
-}
-#endif
 
 struct spapr_walk_param {
 	uint64_t window_size;
@@ -1543,9 +1509,6 @@ vfio_spapr_window_size_walk(const struct rte_memseg_list *msl,
 uint64_t spapr_dma_win_start = 0;
 uint64_t spapr_dma_win_len = 0;
 
-/*
- * Determines the DMA window size
- */
 static int
 spapr_dma_win_size(void)
 {
@@ -1554,6 +1517,7 @@ spapr_dma_win_size(void)
 		return 0;
 
 	if (rte_eal_iova_mode() == RTE_IOVA_PA) {
+		/* Set the DMA window to cover the max physical address */
 		const char proc_iomem[] = "/proc/iomem";
 		const char str_sysram[] = "System RAM";
 		uint64_t start, end, max = 0;
@@ -1569,7 +1533,6 @@ spapr_dma_win_size(void)
 		FILE *fd = fopen(proc_iomem, "r");
 		if (fd == NULL)
 			rte_panic("Cannot open %s\n", proc_iomem);
-
 		/* Scan /proc/iomem for the highest PA in the system */
 		while(getline(&line, &line_len, fd) != -1) {
 			if (strstr(line, str_sysram) == NULL)
@@ -1585,24 +1548,26 @@ spapr_dma_win_size(void)
 				continue;
 			}
 
-			// DRC - Any error checking on values?
 			start = strtoull(line, NULL, 16);
 			end   = strtoull(dash + 1, NULL, 16);
-			RTE_LOG(DEBUG, EAL, "%s: Found system RAM from 0x%"
-				PRIx64 " to 0x%" PRIx64 "\n",
-				__func__, start, end);
+			RTE_LOG(DEBUG, EAL, "Found system RAM from 0x%"
+				PRIx64 " to 0x%" PRIx64 "\n", start, end);
 			if (end > max)
 			       max = end;
 		}
+		free(line);
+		fclose(fd);
+
 		if (max == 0)
-			rte_panic("Failed to find system RAM in file %s\n", proc_iomem);
+			rte_panic("Failed to find valid \"System RAM\" entry "
+				"in file %s\n", proc_iomem);
 
 		spapr_dma_win_len = rte_align64pow2(max + 1);
-		fclose(fd);
+		rte_mem_set_dma_mask(__builtin_ctzll(spapr_dma_win_len));
 		return 0;
 
 	} else if (rte_eal_iova_mode() == RTE_IOVA_VA) {
-		/* Set the DMA window to base_virtaddr + system memory */
+		/* Set the DMA window to base_virtaddr + system memory size */
 		const char proc_meminfo[] = "/proc/meminfo";
 		const char str_memtotal[] = "MemTotal:";
 		unsigned memtotal_len = sizeof(str_memtotal) - 1;
@@ -1619,16 +1584,17 @@ spapr_dma_win_size(void)
 			}
 		}
 		fclose(fd);
-		if (size == 0)
-			rte_panic("Failed to find MemTotal in file %s\n", proc_meminfo);
 
-		RTE_LOG(DEBUG, EAL, "%s: MemTotal is 0x%" PRIx64 "\n", __func__, size);
-		/* if no base virtual address is configured use 4GB
-		 * (should match eal_get_baseaddr()).
-		 */
+		if (size == 0)
+			rte_panic("Failed to find valid \"MemTotal\" entry "
+				"in file %s\n", proc_meminfo);
+
+		RTE_LOG(DEBUG, EAL, "MemTotal is 0x%" PRIx64 "\n", size);
+		/* if no base virtual address is configured use 4GB */
 		spapr_dma_win_len = rte_align64pow2(size +
 			(internal_config.base_virtaddr > 0 ?
 			(uint64_t)internal_config.base_virtaddr : 1ULL << 32));
+		rte_mem_set_dma_mask(__builtin_ctzll(spapr_dma_win_len));
 		return 0;
 	}
 
@@ -1650,7 +1616,6 @@ vfio_spapr_create_dma_window(int vfio_container_fd) {
 	if (ret < 0)
 		return ret;
 
-	// DRC - Lock needed?
 	/* walk the memseg list to find the hugepage size */
 	memset(&param, 0, sizeof(param));
 	if (rte_memseg_walk(vfio_spapr_window_size_walk, &param) < 0) {
@@ -1661,8 +1626,8 @@ vfio_spapr_create_dma_window(int vfio_container_fd) {
 	/* query spapr iommu info */
 	ret = ioctl(vfio_container_fd, VFIO_IOMMU_SPAPR_TCE_GET_INFO, &info);
 	if (ret) {
-		RTE_LOG(ERR, EAL, "  cannot get iommu info, "
-				"error %i (%s)\n", errno, strerror(errno));
+		RTE_LOG(ERR, EAL, "  can't get iommu info, "
+			"error %i (%s)\n", errno, strerror(errno));
 		return -1;
 	}
 
@@ -1682,7 +1647,7 @@ vfio_spapr_create_dma_window(int vfio_container_fd) {
 	create.levels = 1;
 	ret = ioctl(vfio_container_fd, VFIO_IOMMU_SPAPR_TCE_CREATE, &create);
 	if (ret) {
-		/* try increasing levels for workaround */
+		/* if at first we don't succeed, try more levels */
 		uint32_t levels;
 
 		for (levels = create.levels + 1;
@@ -1694,14 +1659,14 @@ vfio_spapr_create_dma_window(int vfio_container_fd) {
 	}
 	if (ret) {
 		RTE_LOG(ERR, EAL, "  cannot create new DMA window, "
-				"error %i (%s)\n", errno, strerror(errno));
+			"error %i (%s)\n", errno, strerror(errno));
 		return -1;
 	}
 
 	/* verify the start address is what we requested */
 	if (create.start_addr != spapr_dma_win_start) {
-		RTE_LOG(ERR, EAL, "  requested start address 0x%"
-			PRIx64 ", received start address 0x%" PRIx64 "\n",
+		RTE_LOG(ERR, EAL, "  requested start address 0x%" PRIx64
+			", received start address 0x%" PRIx64 "\n",
 			spapr_dma_win_start, create.start_addr);
 		return -1;
 	}
@@ -1721,8 +1686,12 @@ vfio_spapr_dma_mem_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 			ret = -1;
 		}
 	} else {
-		vfio_spapr_dma_do_map(vfio_container_fd, vaddr, iova, len, 0);
+		if (vfio_spapr_dma_do_map(vfio_container_fd, vaddr, iova, len, 0)) {
+			RTE_LOG(ERR, EAL, "Failed to unmap DMA\n");
+			ret = -1;
+		}
 	}
+
 	return ret;
 }
 
@@ -1734,7 +1703,7 @@ vfio_spapr_dma_map(int vfio_container_fd)
 		return -1;
 	}
 
-	/* map all DPDK segments for DMA */
+	/* map all existing DPDK segments for DMA */
 	if (rte_memseg_walk(vfio_spapr_map_walk, &vfio_container_fd) < 0)
 		return -1;
 
