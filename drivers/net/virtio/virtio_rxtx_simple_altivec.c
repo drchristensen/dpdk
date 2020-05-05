@@ -9,7 +9,7 @@
 #include <string.h>
 #include <errno.h>
 
-#include <altivec.h>
+#include "rte_altivec.h"
 
 #include <rte_byteorder.h>
 #include <rte_branch_prediction.h>
