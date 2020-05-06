@@ -116,6 +116,10 @@ Memory-related options
 
     Force IOVA mode to a specific value.
 
+*   ``--iova-len <length in bytes>``
+
+    Sets the length for the DMA window. Used when configuring the IOMMU on PowerNV systems in conjunction with VFIO. When set to 0 (Default) then the size of the DMA window is calculated by walking the memseg list during initialization. Useful when external heap memory is used.
+
 Debugging options
 ~~~~~~~~~~~~~~~~~
 

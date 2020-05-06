@@ -486,6 +486,13 @@ the desired addressing mode when virtual devices that are not directly attached 
 To facilitate forcing the IOVA mode to a specific value the EAL command line option ``--iova-mode`` can
 be used to select either physical addressing('pa') or virtual addressing('va').
 
+When using VFIO on PowerNV systems, the IOMMU must be configured with a DMA
+window before memory can be mapped for hardware use.
+(See https://www.kernel.org/doc/html/latest/driver-api/vfio.html#ppc64-spapr-implementation-note for details.)
+By default, the EAL estimates the size of the DMA window and sets it up accordingly.
+However, when using external memory, it may be necessary to manually setup the
+DMA window by using the and ``--iova-len`` EAL command line options.
+
 Memory Segments and Memory Zones (memzone)
 ------------------------------------------
 

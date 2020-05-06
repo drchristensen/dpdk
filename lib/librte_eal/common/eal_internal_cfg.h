@@ -82,6 +82,7 @@ struct internal_config {
 	rte_cpuset_t ctrl_cpuset;         /**< cpuset for ctrl threads */
 	volatile unsigned int init_complete;
 	/**< indicates whether EAL has completed initialization */
+	size_t iova_len;                  /**< IOVA window length */
 };
 extern struct internal_config internal_config; /**< Global EAL configuration. */
 

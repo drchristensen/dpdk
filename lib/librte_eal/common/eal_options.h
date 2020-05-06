@@ -77,6 +77,8 @@ enum {
 	OPT_IOVA_MODE_NUM,
 #define OPT_MATCH_ALLOCATIONS  "match-allocations"
 	OPT_MATCH_ALLOCATIONS_NUM,
+#define OPT_IOVA_LEN           "iova-len"
+	OPT_IOVA_LEN_NUM,
 	OPT_LONG_MAX_NUM
 };
 
