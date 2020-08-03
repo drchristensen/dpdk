@@ -190,6 +190,11 @@ Deprecation Notices
   break the ABI checks, that is why change is planned for 20.11.
   The list of internal APIs are mainly ones listed in ``rte_ethdev_driver.h``.
 
+* ethdev: The ``struct rte_flow_item_ipv6`` struct will be modified to include
+  additional values, indicating existence or absence of IPv6 extension headers
+  following the IPv6 header, as proposed in RFC
+  https://mails.dpdk.org/archives/dev/2020-August/177257.html.
+
 * traffic manager: All traffic manager API's in ``rte_tm.h`` were mistakenly made
   ABI stable in the v19.11 release. The TM maintainer and other contributors have
   agreed to keep the TM APIs as experimental in expectation of additional spec
