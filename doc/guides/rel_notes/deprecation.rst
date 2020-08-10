@@ -215,6 +215,11 @@ Deprecation Notices
   specified lengths into the buffers allocated from the specified
   memory pools. The backward compatibility to existing API is preserved.
 
+* ethdev: The ``struct rte_eth_rxq_info`` will be modified to include
+  a new optional field, indicating the buffer size used in receiving packets
+  for HW. This change is planned for 20.11. For more details:
+  https://mails.dpdk.org/archives/dev/2020-July/176135.html.
+
 * ethdev: ``rx_descriptor_done`` dev_ops and ``rte_eth_rx_descriptor_done``
   will be deprecated in 20.11 and will be removed in 21.11.
   Existing ``rte_eth_rx_descriptor_status`` and ``rte_eth_tx_descriptor_status``
@@ -230,6 +235,11 @@ Deprecation Notices
   structs will be modified, to include an additional value, indicating existence
   or absence of a VLAN header following the current header, as proposed in RFC
   https://mails.dpdk.org/archives/dev/2020-August/177536.html.
+
+* ethdev: The ``struct rte_flow_item_ipv6`` struct will be modified to include
+  additional values, indicating existence or absence of IPv6 extension headers
+  following the IPv6 header, as proposed in RFC
+  https://mails.dpdk.org/archives/dev/2020-August/177257.html.
 
 * ethdev: Some internal APIs for driver usage are exported in the .map file.
   Now DPDK has ``__rte_internal`` marker so we can mark internal APIs and move
@@ -251,6 +261,12 @@ Deprecation Notices
 
 * pmd_dpaa: The API ``rte_pmd_dpaa_set_tx_loopback`` will have extended
   ``port_id`` definition from ``uint8_t`` to ``uint16_t``.
+
+* vhost: Vhost-user dequeue zero-copy support will be removed in 20.11.
+  The only known user is OVS where the feature is still experimental,
+  and has not received any update for 2.5 years.
+  This feature faces reliability issues and is often conflicting with
+  new features being implemented.
 
 * security: The API ``rte_security_session_create`` takes only single mempool
   for session and session private data. So the application need to create
@@ -299,6 +315,12 @@ Deprecation Notices
   changes will be made to macros, data structures and API functions defined
   in "rte_sched.h". These changes are aligned to improvements suggested in the
   RFC https://mails.dpdk.org/archives/dev/2018-November/120035.html.
+
+* sched: To allow dynamic configuration of the subport bandwidth profile,
+  changes will be made to data structures ``rte_sched_subport_params``,
+  ``rte_sched_port_params`` and new data structure, API functions will be
+  defined in ``rte_sched.h``. These changes are aligned as suggested in the
+  RFC https://mails.dpdk.org/archives/dev/2020-July/175161.html
 
 * metrics: The function ``rte_metrics_init`` will have a non-void return
   in order to notify errors instead of calling ``rte_exit``.
