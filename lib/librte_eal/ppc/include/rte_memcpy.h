@@ -18,25 +18,27 @@ extern "C" {
 
 #include "generic/rte_memcpy.h"
 
+#define ALIGNMENT_MASK 0x0F
+
 #if (GCC_VERSION >= 90000 && GCC_VERSION < 90400)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #endif
 
-static inline void
+static __rte_always_inline void
 rte_mov16(uint8_t *dst, const uint8_t *src)
 {
 	vec_vsx_st(vec_vsx_ld(0, src), 0, dst);
 }
 
-static inline void
+static __rte_always_inline void
 rte_mov32(uint8_t *dst, const uint8_t *src)
 {
 	vec_vsx_st(vec_vsx_ld(0, src), 0, dst);
 	vec_vsx_st(vec_vsx_ld(16, src), 16, dst);
 }
 
-static inline void
+static __rte_always_inline void
 rte_mov48(uint8_t *dst, const uint8_t *src)
 {
 	vec_vsx_st(vec_vsx_ld(0, src), 0, dst);
@@ -44,7 +46,7 @@ rte_mov48(uint8_t *dst, const uint8_t *src)
 	vec_vsx_st(vec_vsx_ld(32, src), 32, dst);
 }
 
-static inline void
+static __rte_always_inline void
 rte_mov64(uint8_t *dst, const uint8_t *src)
 {
 	vec_vsx_st(vec_vsx_ld(0, src), 0, dst);
@@ -53,7 +55,7 @@ rte_mov64(uint8_t *dst, const uint8_t *src)
 	vec_vsx_st(vec_vsx_ld(48, src), 48, dst);
 }
 
-static inline void
+static __rte_always_inline void
 rte_mov128(uint8_t *dst, const uint8_t *src)
 {
 	vec_vsx_st(vec_vsx_ld(0, src), 0, dst);
@@ -66,21 +68,23 @@ rte_mov128(uint8_t *dst, const uint8_t *src)
 	vec_vsx_st(vec_vsx_ld(112, src), 112, dst);
 }
 
-static inline void
+static __rte_always_inline void
 rte_mov256(uint8_t *dst, const uint8_t *src)
 {
 	rte_mov128(dst, src);
 	rte_mov128(dst + 128, src + 128);
 }
 
+#if 0
 #define rte_memcpy(dst, src, n)              \
 	__extension__ ({                     \
 	(__builtin_constant_p(n)) ?          \
 	memcpy((dst), (src), (n)) :          \
 	rte_memcpy_func((dst), (src), (n)); })
+#endif
 
-static inline void *
-rte_memcpy_func(void *dst, const void *src, size_t n)
+static __rte_always_inline void *
+rte_memcpy_generic(void *dst, const void *src, size_t n)
 {
 	void *ret = dst;
 
@@ -196,6 +200,108 @@ rte_memcpy_func(void *dst, const void *src, size_t n)
 		rte_mov16((uint8_t *)dst - 16 + n,
 			(const uint8_t *)src - 16 + n);
 	return ret;
+}
+
+/* DRC - Let the compiler do it's thing */
+static __rte_always_inline void
+rte__mov16(uint8_t *dst, const uint8_t *src)
+{
+	uint64_t *d = (uint64_t *)dst;
+	const uint64_t *s = (const uint64_t *)src;
+	// *(uint64_t *)dst[0] = *(const uint64_t *)src[0];
+	// *(uint64_t *)dst[1] = *(const uint64_t *)src[1];
+	d[0] = s[0];
+	d[1] = s[1];
+}
+
+static __rte_always_inline void
+rte__mov32(uint8_t *dst, const uint8_t *src)
+{
+	rte__mov16(dst + 0 * 16, src + 0 * 16);
+	rte__mov16(dst + 1 * 16, src + 1 * 16);
+}
+
+static __rte_always_inline void
+rte__mov64(uint8_t *dst, const uint8_t *src)
+{
+	rte__mov16(dst + 0 * 16, src + 0 * 16);
+	rte__mov16(dst + 1 * 16, src + 1 * 16);
+	rte__mov16(dst + 2 * 16, src + 2 * 16);
+	rte__mov16(dst + 3 * 16, src + 3 * 16);
+}
+
+static __rte_always_inline void *
+rte_memcpy_aligned(void *dst, const void *src, size_t n)
+{
+	void *ret = dst;
+
+        /* Copy size <= 16 bytes */
+        if (n < 16) {
+                if (n & 0x01) {
+                        *(uint8_t *)dst = *(const uint8_t *)src;
+                        src = (const uint8_t *)src + 1;
+                        dst = (uint8_t *)dst + 1;
+                }
+                if (n & 0x02) {
+                        *(uint16_t *)dst = *(const uint16_t *)src;
+                        src = (const uint16_t *)src + 1;
+                        dst = (uint16_t *)dst + 1;
+                }
+                if (n & 0x04) {
+                        *(uint32_t *)dst = *(const uint32_t *)src;
+                        src = (const uint32_t *)src + 1;
+                        dst = (uint32_t *)dst + 1;
+                }
+                if (n & 0x08)
+                        *(uint64_t *)dst = *(const uint64_t *)src;
+
+                return ret;
+        }
+
+        /* Copy 16 <= size <= 32 bytes */
+        if (n <= 32) {
+                rte__mov16((uint8_t *)dst, (const uint8_t *)src);
+                rte__mov16((uint8_t *)dst - 16 + n,
+				(const uint8_t *)src - 16 + n);
+                return ret;
+        }
+
+        /* Copy 32 < size <= 64 bytes */
+        if (n <= 64) {
+                rte__mov32((uint8_t *)dst, (const uint8_t *)src);
+                rte__mov32((uint8_t *)dst - 32 + n,
+				(const uint8_t *)src - 32 + n);
+                return ret;
+        }
+
+        /* Copy 64 bytes blocks */
+        for (; n >= 64; n -= 64) {
+                rte__mov64((uint8_t *)dst, (const uint8_t *)src);
+                src = (const uint8_t *)src + 64;
+                dst = (uint8_t *)dst + 64;
+        }
+
+        /* Copy whatever left */
+        rte__mov64((uint8_t *)dst - 64 + n,
+			(const uint8_t *)src - 64 + n);
+
+        return ret;
+}
+
+#if 0
+static __rte_always_inline void *
+rte_memcpy(void *dst, const void *src, size_t n)
+{
+	if (!(((uintptr_t)dst | (uintptr_t)src) & ALIGNMENT_MASK))
+		return rte_memcpy_aligned(dst, src, n);
+	else
+		return rte_memcpy_generic(dst, src, n);
+}
+#endif
+static __rte_always_inline void *
+rte_memcpy(void *dst, const void *src, size_t n)
+{
+	return rte_memcpy_aligned(dst, src, n);
 }
 
 #if (GCC_VERSION >= 90000 && GCC_VERSION < 90400)

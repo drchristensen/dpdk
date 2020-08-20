@@ -15,6 +15,10 @@ if not power9_supported
 	machine = 'power8'
 	machine_args = ['-mcpu=power8', '-mtune=power8']
 	dpdk_conf.set('RTE_MACHINE','power8')
+else
+	machine = 'power9'
+	machine_args = ['-mcpu=power9', '-mtune=power9']
+	dpdk_conf.set('RTE_MACHINE','power8')
 endif
 
 # overrides specific to ppc64
