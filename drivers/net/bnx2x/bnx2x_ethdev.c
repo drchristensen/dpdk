@@ -280,12 +280,16 @@ bnx2x_dev_stop(struct rte_eth_dev *dev)
 	return;
 }
 
-static void
+static int
 bnx2x_dev_close(struct rte_eth_dev *dev)
 {
 	struct bnx2x_softc *sc = dev->data->dev_private;
 
 	PMD_INIT_FUNC_TRACE(sc);
+
+	/* only close in case of the primary process */
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	if (IS_VF(sc))
 		bnx2x_vf_close(sc);
@@ -295,6 +299,11 @@ bnx2x_dev_close(struct rte_eth_dev *dev)
 
 	/* free ilt */
 	bnx2x_free_ilt_mem(sc);
+
+	/* mac_addrs must not be freed alone because part of dev_private */
+	dev->data->mac_addrs = NULL;
+
+	return 0;
 }
 
 static int
@@ -753,8 +762,9 @@ eth_bnx2xvf_dev_init(struct rte_eth_dev *eth_dev)
 
 static int eth_bnx2x_dev_uninit(struct rte_eth_dev *eth_dev)
 {
-	/* mac_addrs must not be freed alone because part of dev_private */
-	eth_dev->data->mac_addrs = NULL;
+	struct bnx2x_softc *sc = eth_dev->data->dev_private;
+	PMD_INIT_FUNC_TRACE(sc);
+	bnx2x_dev_close(eth_dev);
 	return 0;
 }
 

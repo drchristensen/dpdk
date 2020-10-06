@@ -351,10 +351,8 @@ int32_t	ulp_flow_db_deinit(struct bnxt_ulp_context *ulp_ctxt)
 	struct bnxt_ulp_flow_db			*flow_db;
 
 	flow_db = bnxt_ulp_cntxt_ptr2_flow_db_get(ulp_ctxt);
-	if (!flow_db) {
-		BNXT_TF_DBG(ERR, "Invalid Arguments\n");
+	if (!flow_db)
 		return -EINVAL;
-	}
 
 	/* Detach the flow database from the ulp context. */
 	bnxt_ulp_cntxt_ptr2_flow_db_set(ulp_ctxt, NULL);
@@ -795,9 +793,16 @@ int32_t	ulp_flow_db_flush_flows(struct bnxt_ulp_context *ulp_ctx,
 		BNXT_TF_DBG(ERR, "Flow database not found\n");
 		return -EINVAL;
 	}
+	if (bnxt_ulp_cntxt_acquire_fdb_lock(ulp_ctx)) {
+		BNXT_TF_DBG(ERR, "Flow db lock acquire failed\n");
+		return -EINVAL;
+	}
+
 	flow_tbl = &flow_db->flow_tbl[idx];
 	while (!ulp_flow_db_next_entry_get(flow_tbl, &fid))
 		ulp_mapper_resources_free(ulp_ctx, fid, idx);
+
+	bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
 
 	return 0;
 }
@@ -828,13 +833,17 @@ ulp_flow_db_function_flow_flush(struct bnxt_ulp_context *ulp_ctx,
 		BNXT_TF_DBG(ERR, "Flow database not found\n");
 		return -EINVAL;
 	}
+	if (bnxt_ulp_cntxt_acquire_fdb_lock(ulp_ctx)) {
+		BNXT_TF_DBG(ERR, "Flow db lock acquire failed\n");
+		return -EINVAL;
+	}
 	flow_tbl = &flow_db->flow_tbl[BNXT_ULP_REGULAR_FLOW_TABLE];
 	while (!ulp_flow_db_next_entry_get(flow_tbl, &flow_id)) {
 		if (flow_db->func_id_tbl[flow_id] == func_id)
 			ulp_mapper_resources_free(ulp_ctx, flow_id,
 						  BNXT_ULP_REGULAR_FLOW_TABLE);
 	}
-
+	bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
 	return 0;
 }
 

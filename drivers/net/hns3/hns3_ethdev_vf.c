@@ -693,7 +693,7 @@ hns3vf_bind_ring_with_vector(struct hns3_hw *hw, uint8_t vector_id,
 static int
 hns3vf_init_ring_with_vector(struct hns3_hw *hw)
 {
-	uint8_t vec;
+	uint16_t vec;
 	int ret;
 	int i;
 
@@ -704,27 +704,23 @@ hns3vf_init_ring_with_vector(struct hns3_hw *hw)
 	 * vector. In the initialization clearing the all hardware mapping
 	 * relationship configurations between queues and interrupt vectors is
 	 * needed, so some error caused by the residual configurations, such as
-	 * the unexpected Tx interrupt, can be avoid. Because of the hardware
-	 * constraints in hns3 hardware engine, we have to implement clearing
-	 * the mapping relationship configurations by binding all queues to the
-	 * last interrupt vector and reserving the last interrupt vector. This
-	 * method results in a decrease of the maximum queues when upper
-	 * applications call the rte_eth_dev_configure API function to enable
-	 * Rx interrupt.
+	 * the unexpected Tx interrupt, can be avoid.
 	 */
 	vec = hw->num_msi - 1; /* vector 0 for misc interrupt, not for queue */
-	/* vec - 1: the last interrupt is reserved */
-	hw->intr_tqps_num = vec > hw->tqps_num ? hw->tqps_num : vec - 1;
+	if (hw->intr.mapping_mode == HNS3_INTR_MAPPING_VEC_RSV_ONE)
+		vec = vec - 1; /* the last interrupt is reserved */
+	hw->intr_tqps_num = RTE_MIN(vec, hw->tqps_num);
 	for (i = 0; i < hw->intr_tqps_num; i++) {
 		/*
-		 * Set gap limiter and rate limiter configuration of queue's
-		 * interrupt.
+		 * Set gap limiter/rate limiter/quanity limiter algorithm
+		 * configuration for interrupt coalesce of queue's interrupt.
 		 */
 		hns3_set_queue_intr_gl(hw, i, HNS3_RING_GL_RX,
 				       HNS3_TQP_INTR_GL_DEFAULT);
 		hns3_set_queue_intr_gl(hw, i, HNS3_RING_GL_TX,
 				       HNS3_TQP_INTR_GL_DEFAULT);
 		hns3_set_queue_intr_rl(hw, i, HNS3_TQP_INTR_RL_DEFAULT);
+		hns3_set_queue_intr_ql(hw, i, HNS3_TQP_INTR_QL_DEFAULT);
 
 		ret = hns3vf_bind_ring_with_vector(hw, vec, false,
 						   HNS3_RING_TYPE_TX, i);
@@ -749,7 +745,8 @@ hns3vf_init_ring_with_vector(struct hns3_hw *hw)
 static int
 hns3vf_dev_configure(struct rte_eth_dev *dev)
 {
-	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct hns3_adapter *hns = dev->data->dev_private;
+	struct hns3_hw *hw = &hns->hw;
 	struct hns3_rss_conf *rss_cfg = &hw->rss_info;
 	struct rte_eth_conf *conf = &dev->data->dev_conf;
 	enum rte_eth_rx_mq_mode mq_mode = conf->rxmode.mq_mode;
@@ -786,6 +783,7 @@ hns3vf_dev_configure(struct rte_eth_dev *dev)
 	/* When RSS is not configured, redirect the packet queue 0 */
 	if ((uint32_t)mq_mode & ETH_MQ_RX_RSS_FLAG) {
 		conf->rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
+		hw->rss_dis_flag = false;
 		rss_conf = conf->rx_adv_conf.rss_conf;
 		if (rss_conf.rss_key == NULL) {
 			rss_conf.rss_key = rss_cfg->key;
@@ -823,6 +821,13 @@ hns3vf_dev_configure(struct rte_eth_dev *dev)
 	ret = hns3_config_gro(hw, gro_en);
 	if (ret)
 		goto cfg_err;
+
+	hns->rx_simple_allowed = true;
+	hns->rx_vec_allowed = true;
+	hns->tx_simple_allowed = true;
+	hns->tx_vec_allowed = true;
+
+	hns3_init_rx_ptype_tble(dev);
 
 	hw->adapter_state = HNS3_NIC_CONFIGURED;
 	return 0;
@@ -865,6 +870,25 @@ hns3vf_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	if (rte_atomic16_read(&hw->reset.resetting)) {
 		hns3_err(hw, "Failed to set mtu during resetting");
 		return -EIO;
+	}
+
+	/*
+	 * when Rx of scattered packets is off, we have some possibility of
+	 * using vector Rx process function or simple Rx functions in hns3 PMD
+	 * driver. If the input MTU is increased and the maximum length of
+	 * received packets is greater than the length of a buffer for Rx
+	 * packet, the hardware network engine needs to use multiple BDs and
+	 * buffers to store these packets. This will cause problems when still
+	 * using vector Rx process function or simple Rx function to receiving
+	 * packets. So, when Rx of scattered packets is off and device is
+	 * started, it is not permitted to increase MTU so that the maximum
+	 * length of Rx packets is greater than Rx buffer length.
+	 */
+	if (dev->data->dev_started && !dev->data->scattered_rx &&
+	    frame_size > hw->rx_buf_len) {
+		hns3_err(hw, "failed to set mtu because current is "
+			"not scattered rx mode");
+		return -EOPNOTSUPP;
 	}
 
 	rte_spinlock_lock(&hw->lock);
@@ -919,7 +943,6 @@ hns3vf_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 				 DEV_RX_OFFLOAD_JUMBO_FRAME |
 				 DEV_RX_OFFLOAD_RSS_HASH |
 				 DEV_RX_OFFLOAD_TCP_LRO);
-	info->tx_queue_offload_capa = DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 	info->tx_offload_capa = (DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM |
 				 DEV_TX_OFFLOAD_IPV4_CKSUM |
 				 DEV_TX_OFFLOAD_TCP_CKSUM |
@@ -930,7 +953,7 @@ hns3vf_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 				 DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
 				 DEV_TX_OFFLOAD_GRE_TNL_TSO |
 				 DEV_TX_OFFLOAD_GENEVE_TNL_TSO |
-				 info->tx_queue_offload_capa |
+				 DEV_TX_OFFLOAD_MBUF_FAST_FREE |
 				 hns3_txvlan_cap_get(hw));
 
 	info->rx_desc_lim = (struct rte_eth_desc_lim) {
@@ -944,7 +967,22 @@ hns3vf_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 		.nb_min = HNS3_MIN_RING_DESC,
 		.nb_align = HNS3_ALIGN_RING_DESC,
 		.nb_seg_max = HNS3_MAX_TSO_BD_PER_PKT,
-		.nb_mtu_seg_max = HNS3_MAX_NON_TSO_BD_PER_PKT,
+		.nb_mtu_seg_max = hw->max_non_tso_bd_num,
+	};
+
+	info->default_rxconf = (struct rte_eth_rxconf) {
+		.rx_free_thresh = HNS3_DEFAULT_RX_FREE_THRESH,
+		/*
+		 * If there are no available Rx buffer descriptors, incoming
+		 * packets are always dropped by hardware based on hns3 network
+		 * engine.
+		 */
+		.rx_drop_en = 1,
+		.offloads = 0,
+	};
+	info->default_txconf = (struct rte_eth_txconf) {
+		.tx_rs_thresh = HNS3_DEFAULT_TX_RS_THRESH,
+		.offloads = 0,
 	};
 
 	info->vmdq_queue_num = 0;
@@ -1059,6 +1097,49 @@ hns3vf_interrupt_handler(void *param)
 	hns3vf_enable_irq0(hw);
 }
 
+static void
+hns3vf_set_default_dev_specifications(struct hns3_hw *hw)
+{
+	hw->max_non_tso_bd_num = HNS3_MAX_NON_TSO_BD_PER_PKT;
+	hw->rss_ind_tbl_size = HNS3_RSS_IND_TBL_SIZE;
+	hw->rss_key_size = HNS3_RSS_KEY_SIZE;
+}
+
+static void
+hns3vf_parse_dev_specifications(struct hns3_hw *hw, struct hns3_cmd_desc *desc)
+{
+	struct hns3_dev_specs_0_cmd *req0;
+
+	req0 = (struct hns3_dev_specs_0_cmd *)desc[0].data;
+
+	hw->max_non_tso_bd_num = req0->max_non_tso_bd_num;
+	hw->rss_ind_tbl_size = rte_le_to_cpu_16(req0->rss_ind_tbl_size);
+	hw->rss_key_size = rte_le_to_cpu_16(req0->rss_key_size);
+}
+
+static int
+hns3vf_query_dev_specifications(struct hns3_hw *hw)
+{
+	struct hns3_cmd_desc desc[HNS3_QUERY_DEV_SPECS_BD_NUM];
+	int ret;
+	int i;
+
+	for (i = 0; i < HNS3_QUERY_DEV_SPECS_BD_NUM - 1; i++) {
+		hns3_cmd_setup_basic_desc(&desc[i], HNS3_OPC_QUERY_DEV_SPECS,
+					  true);
+		desc[i].flag |= rte_cpu_to_le_16(HNS3_CMD_FLAG_NEXT);
+	}
+	hns3_cmd_setup_basic_desc(&desc[i], HNS3_OPC_QUERY_DEV_SPECS, true);
+
+	ret = hns3_cmd_send(hw, desc, HNS3_QUERY_DEV_SPECS_BD_NUM);
+	if (ret)
+		return ret;
+
+	hns3vf_parse_dev_specifications(hw, desc);
+
+	return 0;
+}
+
 static int
 hns3vf_get_capability(struct hns3_hw *hw)
 {
@@ -1074,10 +1155,35 @@ hns3vf_get_capability(struct hns3_hw *hw)
 	ret = rte_pci_read_config(pci_dev, &revision, HNS3_PCI_REVISION_ID_LEN,
 				  HNS3_PCI_REVISION_ID);
 	if (ret != HNS3_PCI_REVISION_ID_LEN) {
-		PMD_INIT_LOG(ERR, "failed to read pci revision id: %d", ret);
+		PMD_INIT_LOG(ERR, "failed to read pci revision id, ret = %d",
+			     ret);
 		return -EIO;
 	}
 	hw->revision = revision;
+
+	if (revision < PCI_REVISION_ID_HIP09_A) {
+		hns3vf_set_default_dev_specifications(hw);
+		hw->intr.mapping_mode = HNS3_INTR_MAPPING_VEC_RSV_ONE;
+		hw->intr.coalesce_mode = HNS3_INTR_COALESCE_NON_QL;
+		hw->intr.gl_unit = HNS3_INTR_COALESCE_GL_UINT_2US;
+		hw->tso_mode = HNS3_TSO_SW_CAL_PSEUDO_H_CSUM;
+		hw->min_tx_pkt_len = HNS3_HIP08_MIN_TX_PKT_LEN;
+		return 0;
+	}
+
+	ret = hns3vf_query_dev_specifications(hw);
+	if (ret) {
+		PMD_INIT_LOG(ERR,
+			     "failed to query dev specifications, ret = %d",
+			     ret);
+		return ret;
+	}
+
+	hw->intr.mapping_mode = HNS3_INTR_MAPPING_VEC_ALL;
+	hw->intr.coalesce_mode = HNS3_INTR_COALESCE_QL;
+	hw->intr.gl_unit = HNS3_INTR_COALESCE_GL_UINT_1US;
+	hw->tso_mode = HNS3_TSO_HW_CAL_PSEUDO_H_CSUM;
+	hw->min_tx_pkt_len = HNS3_HIP09_MIN_TX_PKT_LEN;
 
 	return 0;
 }
@@ -1550,7 +1656,7 @@ hns3_query_vf_resource(struct hns3_hw *hw)
 
 	req = (struct hns3_vf_res_cmd *)desc.data;
 	num_msi = hns3_get_field(rte_le_to_cpu_16(req->vf_intr_vector_number),
-				 HNS3_VEC_NUM_M, HNS3_VEC_NUM_S);
+				 HNS3_VF_VEC_NUM_M, HNS3_VF_VEC_NUM_S);
 	if (num_msi < HNS3_MIN_VECTOR_NUM) {
 		hns3_err(hw, "Just %u msi resources, not enough for vf(min:%d)",
 			 num_msi, HNS3_MIN_VECTOR_NUM);
@@ -1677,21 +1783,6 @@ hns3vf_init_vf(struct rte_eth_dev *eth_dev)
 		goto err_get_config;
 	}
 
-	/*
-	 * The hns3 PF ethdev driver in kernel support setting VF MAC address
-	 * on the host by "ip link set ..." command. To avoid some incorrect
-	 * scenes, for example, hns3 VF PMD driver fails to receive and send
-	 * packets after user configure the MAC address by using the
-	 * "ip link set ..." command, hns3 VF PMD driver keep the same MAC
-	 * address strategy as the hns3 kernel ethdev driver in the
-	 * initialization. If user configure a MAC address by the ip command
-	 * for VF device, then hns3 VF PMD driver will start with it, otherwise
-	 * start with a random MAC address in the initialization.
-	 */
-	ret = rte_is_zero_ether_addr((struct rte_ether_addr *)hw->mac.mac_addr);
-	if (ret)
-		rte_eth_random_addr(hw->mac.mac_addr);
-
 	ret = hns3vf_clear_vport_list(hw);
 	if (ret) {
 		PMD_INIT_LOG(ERR, "Failed to clear tbl list: %d", ret);
@@ -1817,18 +1908,19 @@ hns3vf_dev_stop(struct rte_eth_dev *dev)
 		hns3_dev_release_mbufs(hns);
 		hw->adapter_state = HNS3_NIC_CONFIGURED;
 	}
+	hns3_rx_scattered_reset(dev);
 	rte_eal_alarm_cancel(hns3vf_service_handler, dev);
 	rte_spinlock_unlock(&hw->lock);
 }
 
-static void
+static int
 hns3vf_dev_close(struct rte_eth_dev *eth_dev)
 {
 	struct hns3_adapter *hns = eth_dev->data->dev_private;
 	struct hns3_hw *hw = &hns->hw;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return;
+		return 0;
 
 	if (hw->adapter_state == HNS3_NIC_STARTED)
 		hns3vf_dev_stop(eth_dev);
@@ -1846,6 +1938,8 @@ hns3vf_dev_close(struct rte_eth_dev *eth_dev)
 	eth_dev->process_private = NULL;
 	hns3_mp_uninit_primary();
 	hns3_warn(hw, "Close port %d finished", hw->data->port_id);
+
+	return 0;
 }
 
 static int
@@ -2053,6 +2147,7 @@ hns3vf_dev_start(struct rte_eth_dev *dev)
 	hw->adapter_state = HNS3_NIC_STARTED;
 	rte_spinlock_unlock(&hw->lock);
 
+	hns3_rx_scattered_calc(dev);
 	hns3_set_rxtx_function(dev);
 	hns3_mp_req_start_rxtx(dev);
 	rte_eal_alarm_set(HNS3VF_SERVICE_INTERVAL, hns3vf_service_handler, dev);
@@ -2099,6 +2194,21 @@ hns3vf_is_reset_pending(struct hns3_adapter *hns)
 	struct hns3_hw *hw = &hns->hw;
 	enum hns3_reset_level reset;
 
+	/*
+	 * According to the protocol of PCIe, FLR to a PF device resets the PF
+	 * state as well as the SR-IOV extended capability including VF Enable
+	 * which means that VFs no longer exist.
+	 *
+	 * HNS3_VF_FULL_RESET means PF device is in FLR reset. when PF device
+	 * is in FLR stage, the register state of VF device is not reliable,
+	 * so register states detection can not be carried out. In this case,
+	 * we just ignore the register states and return false to indicate that
+	 * there are no other reset states that need to be processed by driver.
+	 */
+	if (hw->reset.level == HNS3_VF_FULL_RESET)
+		return false;
+
+	/* Check the registers to confirm whether there is reset pending */
 	hns3vf_check_event_cause(hns, NULL);
 	reset = hns3vf_get_reset_level(hw, &hw->reset.pending);
 	if (hw->reset.level != HNS3_NONE_RESET && hw->reset.level < reset) {
@@ -2425,8 +2535,8 @@ hns3vf_reinit_dev(struct hns3_adapter *hns)
 		 * UIO enables msix by writing the pcie configuration space
 		 * vfio_pci enables msix in rte_intr_enable.
 		 */
-		if (pci_dev->kdrv == RTE_KDRV_IGB_UIO ||
-		    pci_dev->kdrv == RTE_KDRV_UIO_GENERIC) {
+		if (pci_dev->kdrv == RTE_PCI_KDRV_IGB_UIO ||
+		    pci_dev->kdrv == RTE_PCI_KDRV_UIO_GENERIC) {
 			if (hns3vf_enable_msix(pci_dev, true))
 				hns3_err(hw, "Failed to enable msix");
 		}
@@ -2450,6 +2560,7 @@ hns3vf_reinit_dev(struct hns3_adapter *hns)
 }
 
 static const struct eth_dev_ops hns3vf_eth_dev_ops = {
+	.dev_configure      = hns3vf_dev_configure,
 	.dev_start          = hns3vf_dev_start,
 	.dev_stop           = hns3vf_dev_stop,
 	.dev_close          = hns3vf_dev_close,
@@ -2473,7 +2584,10 @@ static const struct eth_dev_ops hns3vf_eth_dev_ops = {
 	.tx_queue_release   = hns3_dev_tx_queue_release,
 	.rx_queue_intr_enable   = hns3_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable  = hns3_dev_rx_queue_intr_disable,
-	.dev_configure      = hns3vf_dev_configure,
+	.rxq_info_get       = hns3_rxq_info_get,
+	.txq_info_get       = hns3_txq_info_get,
+	.rx_burst_mode_get  = hns3_rx_burst_mode_get,
+	.tx_burst_mode_get  = hns3_tx_burst_mode_get,
 	.mac_addr_add       = hns3vf_add_mac_addr,
 	.mac_addr_remove    = hns3vf_remove_mac_addr,
 	.mac_addr_set       = hns3vf_set_default_mac_addr,
@@ -2571,14 +2685,23 @@ hns3vf_dev_init(struct rte_eth_dev *eth_dev)
 		goto err_rte_zmalloc;
 	}
 
+	/*
+	 * The hns3 PF ethdev driver in kernel support setting VF MAC address
+	 * on the host by "ip link set ..." command. To avoid some incorrect
+	 * scenes, for example, hns3 VF PMD driver fails to receive and send
+	 * packets after user configure the MAC address by using the
+	 * "ip link set ..." command, hns3 VF PMD driver keep the same MAC
+	 * address strategy as the hns3 kernel ethdev driver in the
+	 * initialization. If user configure a MAC address by the ip command
+	 * for VF device, then hns3 VF PMD driver will start with it, otherwise
+	 * start with a random MAC address in the initialization.
+	 */
+	if (rte_is_zero_ether_addr((struct rte_ether_addr *)hw->mac.mac_addr))
+		rte_eth_random_addr(hw->mac.mac_addr);
 	rte_ether_addr_copy((struct rte_ether_addr *)hw->mac.mac_addr,
 			    &eth_dev->data->mac_addrs[0]);
+
 	hw->adapter_state = HNS3_NIC_INITIALIZED;
-	/*
-	 * Pass the information to the rte_eth_dev_close() that it should also
-	 * release the private port resources.
-	 */
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	if (rte_atomic16_read(&hns->hw.reset.schedule) == SCHEDULE_PENDING) {
 		hns3_err(hw, "Reschedule reset service after dev_init");

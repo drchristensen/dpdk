@@ -83,9 +83,9 @@ nicvf_interrupt(void *arg)
 			nicvf_link_status_update(nic, &link);
 			rte_eth_linkstatus_set(dev, &link);
 
-			_rte_eth_dev_callback_process(dev,
-						      RTE_ETH_EVENT_INTR_LSC,
-						      NULL);
+			rte_eth_dev_callback_process(dev,
+						     RTE_ETH_EVENT_INTR_LSC,
+						     NULL);
 		}
 	}
 
@@ -1852,13 +1852,15 @@ nicvf_vf_stop(struct rte_eth_dev *dev, struct nicvf *nic, bool cleanup)
 	}
 }
 
-static void
+static int
 nicvf_dev_close(struct rte_eth_dev *dev)
 {
 	size_t i;
 	struct nicvf *nic = nicvf_pmd_priv(dev);
 
 	PMD_INIT_FUNC_TRACE();
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	nicvf_dev_stop_cleanup(dev, true);
 	nicvf_periodic_alarm_stop(nicvf_interrupt, dev);
@@ -1869,6 +1871,8 @@ nicvf_dev_close(struct rte_eth_dev *dev)
 
 		nicvf_periodic_alarm_stop(nicvf_vf_interrupt, nic->snicvf[i]);
 	}
+
+	return 0;
 }
 
 static int
@@ -2029,7 +2033,6 @@ static const struct eth_dev_ops nicvf_eth_dev_ops = {
 	.tx_queue_stop            = nicvf_dev_tx_queue_stop,
 	.rx_queue_setup           = nicvf_dev_rx_queue_setup,
 	.rx_queue_release         = nicvf_dev_rx_queue_release,
-	.rx_queue_count           = nicvf_dev_rx_queue_count,
 	.tx_queue_setup           = nicvf_dev_tx_queue_setup,
 	.tx_queue_release         = nicvf_dev_tx_queue_release,
 	.dev_set_link_up          = nicvf_dev_set_link_up,
@@ -2118,10 +2121,7 @@ static int
 nicvf_eth_dev_uninit(struct rte_eth_dev *dev)
 {
 	PMD_INIT_FUNC_TRACE();
-
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		nicvf_dev_close(dev);
-
+	nicvf_dev_close(dev);
 	return 0;
 }
 static int
@@ -2134,6 +2134,7 @@ nicvf_eth_dev_init(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	eth_dev->dev_ops = &nicvf_eth_dev_ops;
+	eth_dev->rx_queue_count = nicvf_dev_rx_queue_count;
 
 	/* For secondary processes, the primary has done all the work */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {

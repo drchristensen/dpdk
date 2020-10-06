@@ -16,6 +16,7 @@
 #include "efx.h"
 
 #include "sfc.h"
+#include "sfc_debug.h"
 #include "sfc_log.h"
 #include "sfc_ev.h"
 #include "sfc_rx.h"
@@ -435,7 +436,20 @@ sfc_start(struct sfc_adapter *sa)
 
 	sa->state = SFC_ADAPTER_STARTING;
 
+	rc = 0;
 	do {
+		/*
+		 * FIXME Try to recreate vSwitch on start retry.
+		 * vSwitch is absent after MC reboot like events and
+		 * we should recreate it. May be we need proper
+		 * indication instead of guessing.
+		 */
+		if (rc != 0) {
+			sfc_sriov_vswitch_destroy(sa);
+			rc = sfc_sriov_vswitch_create(sa);
+			if (rc != 0)
+				goto fail_sriov_vswitch_create;
+		}
 		rc = sfc_try_start(sa);
 	} while ((--start_tries > 0) &&
 		 (rc == EIO || rc == EAGAIN || rc == ENOENT || rc == EINVAL));
@@ -448,6 +462,7 @@ sfc_start(struct sfc_adapter *sa)
 	return 0;
 
 fail_try_start:
+fail_sriov_vswitch_create:
 	sa->state = SFC_ADAPTER_CONFIGURED;
 fail_bad_state:
 	sfc_log_init(sa, "failed %d", rc);
@@ -684,6 +699,7 @@ sfc_rss_attach(struct sfc_adapter *sa)
 	efx_intr_fini(sa->nic);
 
 	rte_memcpy(rss->key, default_rss_key, sizeof(rss->key));
+	rss->dummy_rss_context = EFX_RSS_CONTEXT_DEFAULT;
 
 	return 0;
 
@@ -725,6 +741,10 @@ sfc_attach(struct sfc_adapter *sa)
 	rc = efx_nic_reset(enp);
 	if (rc != 0)
 		goto fail_nic_reset;
+
+	rc = sfc_sriov_attach(sa);
+	if (rc != 0)
+		goto fail_sriov_attach;
 
 	/*
 	 * Probed NIC is sufficient for tunnel init.
@@ -808,10 +828,23 @@ sfc_attach(struct sfc_adapter *sa)
 
 	sfc_flow_init(sa);
 
+	/*
+	 * Create vSwitch to be able to use VFs when PF is not started yet
+	 * as DPDK port. VFs should be able to talk to each other even
+	 * if PF is down.
+	 */
+	rc = sfc_sriov_vswitch_create(sa);
+	if (rc != 0)
+		goto fail_sriov_vswitch_create;
+
 	sa->state = SFC_ADAPTER_INITIALIZED;
 
 	sfc_log_init(sa, "done");
 	return 0;
+
+fail_sriov_vswitch_create:
+	sfc_flow_fini(sa);
+	sfc_filter_detach(sa);
 
 fail_filter_attach:
 	sfc_rss_detach(sa);
@@ -831,7 +864,9 @@ fail_intr_attach:
 fail_estimate_rsrc_limits:
 fail_tunnel_init:
 	efx_tunnel_fini(sa->nic);
+	sfc_sriov_detach(sa);
 
+fail_sriov_attach:
 fail_nic_reset:
 
 	sfc_log_init(sa, "failed %d", rc);
@@ -845,6 +880,8 @@ sfc_detach(struct sfc_adapter *sa)
 
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
 
+	sfc_sriov_vswitch_destroy(sa);
+
 	sfc_flow_fini(sa);
 
 	sfc_filter_detach(sa);
@@ -853,6 +890,7 @@ sfc_detach(struct sfc_adapter *sa)
 	sfc_ev_detach(sa);
 	sfc_intr_detach(sa);
 	efx_tunnel_fini(sa->nic);
+	sfc_sriov_detach(sa);
 
 	sa->state = SFC_ADAPTER_UNINITIALIZED;
 }
@@ -1045,7 +1083,8 @@ sfc_probe(struct sfc_adapter *sa)
 	sfc_log_init(sa, "create nic");
 	rte_spinlock_init(&sa->nic_lock);
 	rc = efx_nic_create(sa->family, (efsys_identifier_t *)sa,
-			    &sa->mem_bar, &sa->nic_lock, &enp);
+			    &sa->mem_bar, 0,
+			    &sa->nic_lock, &enp);
 	if (rc != 0)
 		goto fail_nic_create;
 	sa->nic = enp;

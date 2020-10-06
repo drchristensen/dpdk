@@ -873,7 +873,7 @@ mlx5_rxq_initialize(struct mlx5_rxq_data *rxq)
 	};
 	/* Update doorbell counter. */
 	rxq->rq_ci = wqe_n >> rxq->sges_n;
-	rte_cio_wmb();
+	rte_io_wmb();
 	*rxq->rq_db = rte_cpu_to_be_32(rxq->rq_ci);
 }
 
@@ -1113,15 +1113,15 @@ mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec)
 	case MLX5_RXQ_ERR_STATE_NEED_READY:
 		ret = check_cqe(u.cqe, cqe_n, rxq->cq_ci);
 		if (ret == MLX5_CQE_STATUS_HW_OWN) {
-			rte_cio_wmb();
+			rte_io_wmb();
 			*rxq->cq_db = rte_cpu_to_be_32(rxq->cq_ci);
-			rte_cio_wmb();
+			rte_io_wmb();
 			/*
 			 * The RQ consumer index must be zeroed while moving
 			 * from RESET state to RDY state.
 			 */
 			*rxq->rq_db = rte_cpu_to_be_32(0);
-			rte_cio_wmb();
+			rte_io_wmb();
 			sm.is_wq = 1;
 			sm.queue_id = rxq->idx;
 			sm.state = IBV_WQS_RDY;
@@ -1515,9 +1515,9 @@ mlx5_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		return 0;
 	/* Update the consumer index. */
 	rxq->rq_ci = rq_ci >> sges_n;
-	rte_cio_wmb();
+	rte_io_wmb();
 	*rxq->cq_db = rte_cpu_to_be_32(rxq->cq_ci);
-	rte_cio_wmb();
+	rte_io_wmb();
 	*rxq->rq_db = rte_cpu_to_be_32(rxq->rq_ci);
 #ifdef MLX5_PMD_SOFT_COUNTERS
 	/* Increment packets counter. */
@@ -1626,10 +1626,11 @@ mlx5_mprq_buf_free_cb(void *addr __rte_unused, void *opaque)
 {
 	struct mlx5_mprq_buf *buf = opaque;
 
-	if (rte_atomic16_read(&buf->refcnt) == 1) {
+	if (__atomic_load_n(&buf->refcnt, __ATOMIC_RELAXED) == 1) {
 		rte_mempool_put(buf->mp, buf);
-	} else if (rte_atomic16_add_return(&buf->refcnt, -1) == 0) {
-		rte_atomic16_set(&buf->refcnt, 1);
+	} else if (unlikely(__atomic_sub_fetch(&buf->refcnt, 1,
+					       __ATOMIC_RELAXED) == 0)) {
+		__atomic_store_n(&buf->refcnt, 1, __ATOMIC_RELAXED);
 		rte_mempool_put(buf->mp, buf);
 	}
 }
@@ -1709,7 +1710,8 @@ mlx5_rx_burst_mprq(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 
 		if (consumed_strd == strd_n) {
 			/* Replace WQE only if the buffer is still in use. */
-			if (rte_atomic16_read(&buf->refcnt) > 1) {
+			if (__atomic_load_n(&buf->refcnt,
+					    __ATOMIC_RELAXED) > 1) {
 				mprq_buf_replace(rxq, rq_ci & wq_mask, strd_n);
 				/* Release the old buffer. */
 				mlx5_mprq_buf_free(buf);
@@ -1821,9 +1823,9 @@ mlx5_rx_burst_mprq(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			void *buf_addr;
 
 			/* Increment the refcnt of the whole chunk. */
-			rte_atomic16_add_return(&buf->refcnt, 1);
-			MLX5_ASSERT((uint16_t)rte_atomic16_read(&buf->refcnt) <=
-				    strd_n + 1);
+			__atomic_add_fetch(&buf->refcnt, 1, __ATOMIC_RELAXED);
+			MLX5_ASSERT(__atomic_load_n(&buf->refcnt,
+				    __ATOMIC_RELAXED) <= strd_n + 1);
 			buf_addr = RTE_PTR_SUB(addr, RTE_PKTMBUF_HEADROOM);
 			/*
 			 * MLX5 device doesn't use iova but it is necessary in a
@@ -1893,11 +1895,11 @@ mlx5_rx_burst_mprq(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 out:
 	/* Update the consumer indexes. */
 	rxq->consumed_strd = consumed_strd;
-	rte_cio_wmb();
+	rte_io_wmb();
 	*rxq->cq_db = rte_cpu_to_be_32(rxq->cq_ci);
 	if (rq_ci != rxq->rq_ci) {
 		rxq->rq_ci = rq_ci;
-		rte_cio_wmb();
+		rte_io_wmb();
 		*rxq->rq_db = rte_cpu_to_be_32(rxq->rq_ci);
 	}
 #ifdef MLX5_PMD_SOFT_COUNTERS

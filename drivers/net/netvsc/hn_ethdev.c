@@ -123,9 +123,6 @@ eth_dev_vmbus_allocate(struct rte_vmbus_device *dev, size_t private_data_size)
 	eth_dev->data->dev_flags |= RTE_ETH_DEV_INTR_LSC;
 	eth_dev->intr_handle = &dev->intr_handle;
 
-	/* allow ethdev to remove on close */
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
-
 	return eth_dev;
 }
 
@@ -841,13 +838,17 @@ hn_dev_stop(struct rte_eth_dev *dev)
 	hn_vf_stop(dev);
 }
 
-static void
+static int
 hn_dev_close(struct rte_eth_dev *dev)
 {
 	PMD_INIT_FUNC_TRACE();
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	hn_vf_close(dev);
 	hn_dev_free_queues(dev);
+
+	return 0;
 }
 
 static const struct eth_dev_ops hn_eth_dev_ops = {
@@ -871,11 +872,8 @@ static const struct eth_dev_ops hn_eth_dev_ops = {
 	.tx_queue_setup		= hn_dev_tx_queue_setup,
 	.tx_queue_release	= hn_dev_tx_queue_release,
 	.tx_done_cleanup        = hn_dev_tx_done_cleanup,
-	.tx_descriptor_status	= hn_dev_tx_descriptor_status,
 	.rx_queue_setup		= hn_dev_rx_queue_setup,
 	.rx_queue_release	= hn_dev_rx_queue_release,
-	.rx_queue_count		= hn_dev_rx_queue_count,
-	.rx_descriptor_status   = hn_dev_rx_queue_status,
 	.link_update		= hn_dev_link_update,
 	.stats_get		= hn_dev_stats_get,
 	.stats_reset            = hn_dev_stats_reset,
@@ -936,6 +934,9 @@ eth_hn_dev_init(struct rte_eth_dev *eth_dev)
 
 	vmbus = container_of(device, struct rte_vmbus_device, device);
 	eth_dev->dev_ops = &hn_eth_dev_ops;
+	eth_dev->rx_queue_count = hn_dev_rx_queue_count;
+	eth_dev->rx_descriptor_status = hn_dev_rx_queue_status;
+	eth_dev->tx_descriptor_status = hn_dev_tx_descriptor_status;
 	eth_dev->tx_pkt_burst = &hn_xmit_pkts;
 	eth_dev->rx_pkt_burst = &hn_recv_pkts;
 
@@ -1093,7 +1094,7 @@ static int eth_hn_remove(struct rte_vmbus_device *dev)
 
 	eth_dev = rte_eth_dev_allocated(dev->device.name);
 	if (!eth_dev)
-		return -ENODEV;
+		return 0; /* port already released */
 
 	ret = eth_hn_dev_uninit(eth_dev);
 	if (ret)

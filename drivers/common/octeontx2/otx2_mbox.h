@@ -90,7 +90,7 @@ struct mbox_msghdr {
 #define OTX2_MBOX_RSP_SIG (0xbeef)
 	/* Signature, for validating corrupted msgs */
 	uint16_t __otx2_io sig;
-#define OTX2_MBOX_VERSION (0x0007)
+#define OTX2_MBOX_VERSION (0x0009)
 	/* Version of msg's structure for this ID */
 	uint16_t __otx2_io ver;
 	/* Offset of next msg within mailbox region */
@@ -245,6 +245,8 @@ M(NPC_MCAM_READ_ENTRY,	  0x600f, npc_mcam_read_entry,			\
 M(NPC_SET_PKIND,          0x6010, npc_set_pkind,                        \
 				  npc_set_pkind,                        \
 				  msg_rsp)                              \
+M(NPC_MCAM_READ_BASE_RULE, 0x6011, npc_read_base_steer_rule, msg_req,   \
+				   npc_mcam_read_base_rule_rsp)         \
 /* NIX mbox IDs (range 0x8000 - 0xFFFF) */				\
 M(NIX_LF_ALLOC,		0x8000, nix_lf_alloc, nix_lf_alloc_req,		\
 				nix_lf_alloc_rsp)			\
@@ -767,6 +769,7 @@ struct nix_lf_alloc_rsp {
 	uint8_t __otx2_io cgx_links;  /* No. of CGX links present in HW */
 	uint8_t __otx2_io lbk_links;  /* No. of LBK links present in HW */
 	uint8_t __otx2_io sdp_links;  /* No. of SDP links present in HW */
+	uint8_t __otx2_io tx_link;    /* Transmit channel link number */
 };
 
 struct nix_lf_free_req {
@@ -966,6 +969,8 @@ struct nix_rss_flowkey_cfg {
 #define FLOW_KEY_TYPE_INNR_SCTP     BIT(16)
 #define FLOW_KEY_TYPE_INNR_ETH_DMAC BIT(17)
 #define FLOW_KEY_TYPE_CH_LEN_90B	BIT(18)
+#define FLOW_KEY_TYPE_CUSTOM0		BIT(19)
+#define FLOW_KEY_TYPE_VLAN		BIT(20)
 #define FLOW_KEY_TYPE_L4_DST BIT(28)
 #define FLOW_KEY_TYPE_L4_SRC BIT(29)
 #define FLOW_KEY_TYPE_L3_DST BIT(30)
@@ -1542,6 +1547,11 @@ struct npc_mcam_read_entry_rsp {
 	struct mcam_entry entry_data;
 	uint8_t __otx2_io intf;
 	uint8_t __otx2_io enable;
+};
+
+struct npc_mcam_read_base_rule_rsp {
+	struct mbox_msghdr hdr;
+	struct mcam_entry entry_data;
 };
 
 /* TIM mailbox error codes

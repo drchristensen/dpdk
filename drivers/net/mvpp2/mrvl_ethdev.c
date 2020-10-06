@@ -855,11 +855,14 @@ mrvl_dev_stop(struct rte_eth_dev *dev)
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-static void
+static int
 mrvl_dev_close(struct rte_eth_dev *dev)
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
 	size_t i;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	mrvl_flush_rx_queues(dev);
 	mrvl_flush_tx_shadow_queues(dev);
@@ -915,6 +918,8 @@ mrvl_dev_close(struct rte_eth_dev *dev)
 		mrvl_deinit_pp2();
 		rte_mvep_deinit(MVEP_MOD_T_PP2);
 	}
+
+	return 0;
 }
 
 /**
@@ -2856,14 +2861,10 @@ mrvl_eth_dev_create(struct rte_vdev_device *vdev, const char *name)
 	memcpy(eth_dev->data->mac_addrs[0].addr_bytes,
 	       req.ifr_addr.sa_data, RTE_ETHER_ADDR_LEN);
 
-	eth_dev->data->kdrv = RTE_KDRV_NONE;
 	eth_dev->device = &vdev->device;
 	eth_dev->rx_pkt_burst = mrvl_rx_pkt_burst;
 	mrvl_set_tx_function(eth_dev);
 	eth_dev->dev_ops = &mrvl_ops;
-
-	/* Flag to call rte_eth_dev_release_port() in rte_eth_dev_close(). */
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	rte_eth_dev_probing_finish(eth_dev);
 	return 0;

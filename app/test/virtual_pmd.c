@@ -62,9 +62,11 @@ static void  virtual_ethdev_stop(struct rte_eth_dev *eth_dev __rte_unused)
 		rte_pktmbuf_free(pkt);
 }
 
-static void
+static int
 virtual_ethdev_close(struct rte_eth_dev *dev __rte_unused)
-{}
+{
+	return 0;
+}
 
 static int
 virtual_ethdev_configure_success(struct rte_eth_dev *dev __rte_unused)
@@ -474,8 +476,8 @@ virtual_ethdev_simulate_link_status_interrupt(uint16_t port_id,
 
 	vrtl_eth_dev->data->dev_link.link_status = link_status;
 
-	_rte_eth_dev_callback_process(vrtl_eth_dev, RTE_ETH_EVENT_INTR_LSC,
-				      NULL);
+	rte_eth_dev_callback_process(vrtl_eth_dev, RTE_ETH_EVENT_INTR_LSC,
+				     NULL);
 }
 
 int

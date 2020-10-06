@@ -1841,9 +1841,10 @@ fm10k_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_id,
 	q->tail_ptr = (volatile uint32_t *)
 		&((uint32_t *)hw->hw_addr)[FM10K_RDT(queue_id)];
 	q->offloads = offloads;
-	if (handle_rxconf(q, conf))
+	if (handle_rxconf(q, conf)) {
+		rte_free(q);
 		return -EINVAL;
-
+	}
 	/* allocate memory for the software ring */
 	q->sw_ring = rte_zmalloc_socket("fm10k sw ring",
 			(nb_desc + q->nb_fake_desc) * sizeof(struct rte_mbuf *),
@@ -2621,7 +2622,7 @@ fm10k_dev_interrupt_handler_pf(void *param)
 					true);
 
 			dev_info->sm_down = 0;
-			_rte_eth_dev_callback_process(dev,
+			rte_eth_dev_callback_process(dev,
 					RTE_ETH_EVENT_INTR_LSC,
 					NULL);
 		}
@@ -2635,8 +2636,7 @@ fm10k_dev_interrupt_handler_pf(void *param)
 	if (err == FM10K_ERR_RESET_REQUESTED) {
 		PMD_INIT_LOG(INFO, "INT: Switch is down");
 		dev_info->sm_down = 1;
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
-				NULL);
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 	}
 
 	/* Handle SRAM error */
@@ -2703,8 +2703,7 @@ fm10k_dev_interrupt_handler_vf(void *param)
 
 		/* Setting reset flag */
 		dev_info->sm_down = 1;
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
-				NULL);
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 	}
 
 	if (dev_info->sm_down == 1 &&
@@ -2732,8 +2731,7 @@ fm10k_dev_interrupt_handler_vf(void *param)
 		fm10k_vlan_filter_set(dev, hw->mac.default_vid, true);
 
 		dev_info->sm_down = 0;
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
-				NULL);
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 	}
 
 	/* Re-enable interrupt from device side */
@@ -2779,7 +2777,7 @@ fm10k_close_mbx_service(struct fm10k_hw *hw)
 	hw->mbx.ops.disconnect(hw, &hw->mbx);
 }
 
-static void
+static int
 fm10k_dev_close(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -2787,6 +2785,8 @@ fm10k_dev_close(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = &pdev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	fm10k_mbx_lock(hw);
 	hw->mac.ops.update_lport_state(hw, hw->mac.dglort_map,
@@ -2824,6 +2824,8 @@ fm10k_dev_close(struct rte_eth_dev *dev)
 		rte_intr_callback_unregister(intr_handle,
 			fm10k_dev_interrupt_handler_vf, (void *)dev);
 	}
+
+	return 0;
 }
 
 static const struct eth_dev_ops fm10k_eth_dev_ops = {
@@ -2855,10 +2857,6 @@ static const struct eth_dev_ops fm10k_eth_dev_ops = {
 	.rx_queue_release	= fm10k_rx_queue_release,
 	.tx_queue_setup		= fm10k_tx_queue_setup,
 	.tx_queue_release	= fm10k_tx_queue_release,
-	.rx_queue_count		= fm10k_dev_rx_queue_count,
-	.rx_descriptor_done	= fm10k_dev_rx_descriptor_done,
-	.rx_descriptor_status = fm10k_dev_rx_descriptor_status,
-	.tx_descriptor_status = fm10k_dev_tx_descriptor_status,
 	.rx_queue_intr_enable	= fm10k_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable	= fm10k_dev_rx_queue_intr_disable,
 	.reta_update		= fm10k_reta_update,
@@ -3055,6 +3053,10 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 	PMD_INIT_FUNC_TRACE();
 
 	dev->dev_ops = &fm10k_eth_dev_ops;
+	dev->rx_queue_count = fm10k_dev_rx_queue_count;
+	dev->rx_descriptor_done	= fm10k_dev_rx_descriptor_done;
+	dev->rx_descriptor_status = fm10k_dev_rx_descriptor_status;
+	dev->tx_descriptor_status = fm10k_dev_tx_descriptor_status;
 	dev->rx_pkt_burst = &fm10k_recv_pkts;
 	dev->tx_pkt_burst = &fm10k_xmit_pkts;
 	dev->tx_pkt_prepare = &fm10k_prep_pkts;
@@ -3083,7 +3085,7 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 	hw->hw_addr = (void *)pdev->mem_resource[0].addr;
 	if (hw->hw_addr == NULL) {
 		PMD_INIT_LOG(ERR, "Bad mem resource."
-			" Try to blacklist unused devices.");
+			" Try to refuse unused devices.");
 		return -EIO;
 	}
 
@@ -3129,11 +3131,6 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 		rte_ether_addr_copy((const struct rte_ether_addr *)hw->mac.addr,
 		&dev->data->mac_addrs[0]);
 	}
-
-	/* Pass the information to the rte_eth_dev_close() that it should also
-	 * release the private port resources.
-	 */
-	dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	/* Reset the hw statistics */
 	diag = fm10k_stats_reset(dev);
@@ -3242,14 +3239,7 @@ static int
 eth_fm10k_dev_uninit(struct rte_eth_dev *dev)
 {
 	PMD_INIT_FUNC_TRACE();
-
-	/* only uninitialize in the primary process */
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
-
-	/* safe to close dev here */
 	fm10k_dev_close(dev);
-
 	return 0;
 }
 

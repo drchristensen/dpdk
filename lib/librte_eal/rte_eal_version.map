@@ -109,12 +109,12 @@ DPDK_21 {
 	rte_log_dump;
 	rte_log_get_global_level;
 	rte_log_get_level;
+	rte_log_get_stream;
 	rte_log_register;
 	rte_log_set_global_level;
 	rte_log_set_level;
 	rte_log_set_level_pattern;
 	rte_log_set_level_regexp;
-	rte_logs;
 	rte_malloc;
 	rte_malloc_dump_stats;
 	rte_malloc_get_socket_stats;
@@ -330,7 +330,6 @@ EXPERIMENTAL {
 	rte_rand_max;
 
 	# added in 19.11
-	rte_log_get_stream;
 	rte_mcfg_get_single_file_segments;
 
 	# added in 20.02
@@ -395,6 +394,7 @@ EXPERIMENTAL {
 	rte_lcore_dump;
 	rte_lcore_iterate;
 	rte_mp_disable;
+	rte_service_lcore_may_be_active;
 	rte_thread_register;
 	rte_thread_unregister;
 };

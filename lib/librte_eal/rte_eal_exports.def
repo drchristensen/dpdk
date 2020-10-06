@@ -1,19 +1,17 @@
 EXPORTS
 	__rte_panic
-	__rte_trace_mem_per_thread_alloc
-	__rte_trace_point_emit_field
-	__rte_trace_point_register
 	per_lcore__lcore_id
 	per_lcore__rte_errno
-	per_lcore_trace_mem
-	per_lcore_trace_point_sz
+	per_lcore__thread_id
+	rte_bus_register
 	rte_calloc
 	rte_calloc_socket
-	rte_bus_register
+	rte_cpu_get_flag_enabled
 	rte_dev_is_probed
+	rte_devargs_insert
 	rte_devargs_next
+	rte_devargs_parse
 	rte_devargs_remove
-	rte_eal_get_configuration
 	rte_eal_has_hugepages
 	rte_eal_has_pci
 	rte_eal_init
@@ -28,7 +26,11 @@ EXPORTS
 	rte_eal_tailq_register
 	rte_eal_using_phys_addrs
 	rte_free
+	rte_get_tsc_hz
 	rte_hexdump
+	rte_intr_rx_ctl
+	rte_log_register
+	rte_log_set_level
 	rte_malloc
 	rte_malloc_dump_stats
 	rte_malloc_get_socket_stats
@@ -60,12 +62,15 @@ EXPORTS
 	rte_memzone_reserve_aligned
 	rte_memzone_reserve_bounded
 	rte_memzone_walk
+	rte_socket_id
 	rte_strerror
 	rte_strsplit
+	rte_sys_gettid
 	rte_vfio_container_dma_map
 	rte_vfio_container_dma_unmap
 	rte_vlog
 	rte_realloc
+	rte_rtm_supported
 	rte_strscpy
 	rte_zmalloc
 	rte_zmalloc_socket
@@ -91,6 +96,7 @@ EXPORTS
 	rte_fbarray_is_used
 	rte_fbarray_set_free
 	rte_fbarray_set_used
+	rte_log_register_type_and_pick_level
 	rte_malloc_dump_heaps
 	rte_mem_alloc_validator_register
 	rte_mem_alloc_validator_unregister
@@ -106,6 +112,8 @@ EXPORTS
 	rte_mp_request_async
 	rte_mp_request_sync
 
+	rte_class_find_by_name
+	rte_class_register;
 	rte_fbarray_find_prev_free
 	rte_fbarray_find_prev_n_free
 	rte_fbarray_find_prev_n_used
@@ -140,6 +148,11 @@ EXPORTS
 	rte_fbarray_find_biggest_used
 	rte_fbarray_find_rev_biggest_free
 	rte_fbarray_find_rev_biggest_used
+	__rte_trace_mem_per_thread_alloc
+	__rte_trace_point_emit_field
+	__rte_trace_point_register
+	per_lcore_trace_mem
+	per_lcore_trace_point_sz
 
 	rte_mem_lock
 	rte_mem_map

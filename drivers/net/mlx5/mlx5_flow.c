@@ -353,7 +353,7 @@ mlx5_flow_get_reg_id(struct rte_eth_dev *dev,
 	case MLX5_METADATA_FDB:
 		switch (config->dv_xmeta_en) {
 		case MLX5_XMETA_MODE_LEGACY:
-			return REG_NONE;
+			return REG_NON;
 		case MLX5_XMETA_MODE_META16:
 			return REG_C_0;
 		case MLX5_XMETA_MODE_META32:
@@ -363,7 +363,7 @@ mlx5_flow_get_reg_id(struct rte_eth_dev *dev,
 	case MLX5_FLOW_MARK:
 		switch (config->dv_xmeta_en) {
 		case MLX5_XMETA_MODE_LEGACY:
-			return REG_NONE;
+			return REG_NON;
 		case MLX5_XMETA_MODE_META16:
 			return REG_C_1;
 		case MLX5_XMETA_MODE_META32:
@@ -381,7 +381,7 @@ mlx5_flow_get_reg_id(struct rte_eth_dev *dev,
 			return priv->mtr_color_reg != REG_C_2 ? REG_C_2 :
 			       REG_C_3;
 	case MLX5_MTR_COLOR:
-		MLX5_ASSERT(priv->mtr_color_reg != REG_NONE);
+		MLX5_ASSERT(priv->mtr_color_reg != REG_NON);
 		return priv->mtr_color_reg;
 	case MLX5_COPY_MARK:
 		/*
@@ -404,7 +404,7 @@ mlx5_flow_get_reg_id(struct rte_eth_dev *dev,
 			return rte_flow_error_set(error, EINVAL,
 						  RTE_FLOW_ERROR_TYPE_ITEM,
 						  NULL, "invalid tag id");
-		if (config->flow_mreg_c[id + start_reg - REG_C_0] == REG_NONE)
+		if (config->flow_mreg_c[id + start_reg - REG_C_0] == REG_NON)
 			return rte_flow_error_set(error, ENOTSUP,
 						  RTE_FLOW_ERROR_TYPE_ITEM,
 						  NULL, "unsupported tag id");
@@ -421,7 +421,7 @@ mlx5_flow_get_reg_id(struct rte_eth_dev *dev,
 						       RTE_FLOW_ERROR_TYPE_ITEM,
 							NULL, "invalid tag id");
 			if (config->flow_mreg_c
-			    [id + 1 + start_reg - REG_C_0] != REG_NONE)
+			    [id + 1 + start_reg - REG_C_0] != REG_NON)
 				return config->flow_mreg_c
 					       [id + 1 + start_reg - REG_C_0];
 			return rte_flow_error_set(error, ENOTSUP,
@@ -459,7 +459,7 @@ mlx5_flow_ext_mreg_supported(struct rte_eth_dev *dev)
 	 * - reg_c's are preserved across different domain (FDB and NIC) on
 	 *   packet loopback by flow lookup miss.
 	 */
-	return config->flow_mreg_c[2] != REG_NONE;
+	return config->flow_mreg_c[2] != REG_NON;
 }
 
 /**
@@ -3011,7 +3011,7 @@ flow_mreg_add_copy_action(struct rte_eth_dev *dev, uint32_t mark_id,
 	};
 	struct mlx5_flow_action_copy_mreg cp_mreg = {
 		.dst = REG_B,
-		.src = REG_NONE,
+		.src = REG_NON,
 	};
 	struct rte_flow_action_jump jump = {
 		.group = MLX5_FLOW_MREG_ACT_TABLE_GROUP,
@@ -3499,7 +3499,7 @@ flow_hairpin_split(struct rte_eth_dev *dev,
 	actions_rx++;
 	set_tag = (void *)actions_rx;
 	set_tag->id = mlx5_flow_get_reg_id(dev, MLX5_HAIRPIN_RX, 0, NULL);
-	MLX5_ASSERT(set_tag->id > REG_NONE);
+	MLX5_ASSERT(set_tag->id > REG_NON);
 	set_tag->data = *flow_id;
 	tag_action->conf = set_tag;
 	/* Create Tx item list. */
@@ -3511,7 +3511,7 @@ flow_hairpin_split(struct rte_eth_dev *dev,
 	tag_item = (void *)addr;
 	tag_item->data = *flow_id;
 	tag_item->id = mlx5_flow_get_reg_id(dev, MLX5_HAIRPIN_TX, 0, NULL);
-	MLX5_ASSERT(set_tag->id > REG_NONE);
+	MLX5_ASSERT(set_tag->id > REG_NON);
 	item->spec = tag_item;
 	addr += sizeof(struct mlx5_rte_flow_item_tag);
 	tag_item = (void *)addr;
@@ -4066,7 +4066,7 @@ flow_create_split_metadata(struct rte_eth_dev *dev,
 		/* Internal PMD action to set register. */
 		struct mlx5_rte_flow_item_tag q_tag_spec = {
 			.data = qrss_id,
-			.id = REG_NONE,
+			.id = REG_NON,
 		};
 		struct rte_flow_item q_items[] = {
 			{
@@ -5131,6 +5131,10 @@ mlx5_flow_isolate(struct rte_eth_dev *dev,
 		dev->dev_ops = &mlx5_os_dev_ops_isolate;
 	else
 		dev->dev_ops = &mlx5_os_dev_ops;
+
+	dev->rx_descriptor_status = mlx5_rx_descriptor_status;
+	dev->tx_descriptor_status = mlx5_tx_descriptor_status;
+
 	return 0;
 }
 
@@ -6074,7 +6078,7 @@ mlx5_flow_aging_check(struct mlx5_dev_ctx_shared *sh,
 		if (!MLX5_AGE_GET(age_info, MLX5_AGE_EVENT_NEW))
 			continue;
 		if (MLX5_AGE_GET(age_info, MLX5_AGE_TRIGGER))
-			_rte_eth_dev_callback_process
+			rte_eth_dev_callback_process
 				(&rte_eth_devices[sh->port[i].devx_ih_port_id],
 				RTE_ETH_EVENT_FLOW_AGED, NULL);
 		age_info->flags = 0;
@@ -6114,7 +6118,7 @@ mlx5_flow_async_pool_query_handle(struct mlx5_dev_ctx_shared *sh,
 		pool->raw = pool->raw_hw;
 		rte_spinlock_unlock(&pool->sl);
 		/* Be sure the new raw counters data is updated in memory. */
-		rte_cio_wmb();
+		rte_io_wmb();
 		if (!TAILQ_EMPTY(&pool->counters[query_gen])) {
 			rte_spinlock_lock(&cont->csl);
 			TAILQ_CONCAT(&cont->counters,
@@ -6236,7 +6240,7 @@ mlx5_flow_discover_mreg_c(struct rte_eth_dev *dev)
 		flow_list_destroy(dev, NULL, flow_idx);
 	}
 	for (; n < MLX5_MREG_C_NUM; ++n)
-		config->flow_mreg_c[n] = REG_NONE;
+		config->flow_mreg_c[n] = REG_NON;
 	return 0;
 }
 

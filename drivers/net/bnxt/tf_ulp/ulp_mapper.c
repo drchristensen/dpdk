@@ -782,7 +782,8 @@ ulp_mapper_result_field_process(struct bnxt_ulp_mapper_parms *parms,
 	uint64_t regval;
 	uint32_t val_size = 0, field_size = 0;
 	uint64_t act_bit;
-	uint8_t act_val;
+	uint8_t act_val[16];
+	uint64_t hdr_bit;
 
 	switch (fld->result_opcode) {
 	case BNXT_ULP_MAPPER_OPC_SET_TO_CONSTANT:
@@ -823,19 +824,18 @@ ulp_mapper_result_field_process(struct bnxt_ulp_mapper_parms *parms,
 			return -EINVAL;
 		}
 		act_bit = tfp_be_to_cpu_64(act_bit);
+		memset(act_val, 0, sizeof(act_val));
 		if (ULP_BITMAP_ISSET(parms->act_bitmap->bits, act_bit))
-			act_val = 1;
-		else
-			act_val = 0;
+			act_val[0] = 1;
 		if (fld->field_bit_size > ULP_BYTE_2_BITS(sizeof(act_val))) {
 			BNXT_TF_DBG(ERR, "%s field size is incorrect\n", name);
 			return -EINVAL;
 		}
-		if (!ulp_blob_push(blob, &act_val, fld->field_bit_size)) {
+		if (!ulp_blob_push(blob, act_val, fld->field_bit_size)) {
 			BNXT_TF_DBG(ERR, "%s push field failed\n", name);
 			return -EINVAL;
 		}
-		val = &act_val;
+		val = act_val;
 		break;
 	case BNXT_ULP_MAPPER_OPC_SET_TO_ENCAP_ACT_PROP_SZ:
 		if (!ulp_operand_read(fld->result_operand,
@@ -1030,6 +1030,26 @@ ulp_mapper_result_field_process(struct bnxt_ulp_mapper_parms *parms,
 				       fld->field_bit_size);
 		if (!val) {
 			BNXT_TF_DBG(ERR, "%s push to key blob failed\n", name);
+			return -EINVAL;
+		}
+		break;
+	case BNXT_ULP_MAPPER_OPC_IF_HDR_BIT_THEN_CONST_ELSE_CONST:
+		if (!ulp_operand_read(fld->result_operand,
+				      (uint8_t *)&hdr_bit, sizeof(uint64_t))) {
+			BNXT_TF_DBG(ERR, "%s operand read failed\n", name);
+			return -EINVAL;
+		}
+		hdr_bit = tfp_be_to_cpu_64(hdr_bit);
+		if (ULP_BITMAP_ISSET(parms->hdr_bitmap->bits, hdr_bit)) {
+			/* Header bit is set so consider operand_true */
+			val = fld->result_operand_true;
+		} else {
+			/* Header bit is not set, use the operand false */
+			val = fld->result_operand_false;
+		}
+		if (!ulp_blob_push(blob, val, fld->field_bit_size)) {
+			BNXT_TF_DBG(ERR, "%s failed to add field\n",
+				    name);
 			return -EINVAL;
 		}
 		break;
@@ -2648,12 +2668,21 @@ int32_t
 ulp_mapper_flow_destroy(struct bnxt_ulp_context	*ulp_ctx, uint32_t fid,
 			enum bnxt_ulp_flow_db_tables flow_tbl_type)
 {
+	int32_t rc;
+
 	if (!ulp_ctx) {
 		BNXT_TF_DBG(ERR, "Invalid parms, unable to free flow\n");
 		return -EINVAL;
 	}
+	if (bnxt_ulp_cntxt_acquire_fdb_lock(ulp_ctx)) {
+		BNXT_TF_DBG(ERR, "Flow db lock acquire failed\n");
+		return -EINVAL;
+	}
 
-	return ulp_mapper_resources_free(ulp_ctx, fid, flow_tbl_type);
+	rc = ulp_mapper_resources_free(ulp_ctx, fid, flow_tbl_type);
+	bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
+	return rc;
+
 }
 
 /* Function to handle the default global templates that are allocated during
@@ -2818,6 +2847,12 @@ ulp_mapper_flow_create(struct bnxt_ulp_context *ulp_ctx,
 		return -EINVAL;
 	}
 
+	/* Protect flow creation */
+	if (bnxt_ulp_cntxt_acquire_fdb_lock(ulp_ctx)) {
+		BNXT_TF_DBG(ERR, "Flow db lock acquire failed\n");
+		return -EINVAL;
+	}
+
 	/* Allocate a Flow ID for attaching all resources for the flow to.
 	 * Once allocated, all errors have to walk the list of resources and
 	 * free each of them.
@@ -2828,6 +2863,7 @@ ulp_mapper_flow_create(struct bnxt_ulp_context *ulp_ctx,
 				   &parms.fid);
 	if (rc) {
 		BNXT_TF_DBG(ERR, "Unable to allocate flow table entry\n");
+		bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
 		return rc;
 	}
 
@@ -2851,10 +2887,12 @@ ulp_mapper_flow_create(struct bnxt_ulp_context *ulp_ctx,
 	}
 
 	*flowid = parms.fid;
+	bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
 
 	return rc;
 
 flow_error:
+	bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
 	/* Free all resources that were allocated during flow creation */
 	trc = ulp_mapper_flow_destroy(ulp_ctx, parms.fid,
 				      BNXT_ULP_REGULAR_FLOW_TABLE);

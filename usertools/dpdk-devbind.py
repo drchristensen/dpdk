@@ -1,18 +1,15 @@
-#! /usr/bin/env python
+#!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2010-2014 Intel Corporation
 #
 
-from __future__ import print_function
 import sys
 import os
 import getopt
 import subprocess
+from glob import glob
 from os.path import exists, abspath, dirname, basename
-
-if sys.version_info.major < 3:
-    print("WARNING: Python 2 is deprecated for use in DPDK, and will not work in future releases.", file=sys.stderr)
-    print("Please use Python 3 instead", file=sys.stderr)
+from os.path import join as path_join
 
 # The PCI base class for all devices
 network_class = {'Class': '02', 'Vendor': None, 'Device': None,
@@ -53,6 +50,8 @@ intel_ioat_icx = {'Class': '08', 'Vendor': '8086', 'Device': '0b00',
               'SVendor': None, 'SDevice': None}
 intel_ntb_skx = {'Class': '06', 'Vendor': '8086', 'Device': '201c',
               'SVendor': None, 'SDevice': None}
+intel_ntb_icx = {'Class': '06', 'Vendor': '8086', 'Device': '347e',
+              'SVendor': None, 'SDevice': None}
 
 network_devices = [network_class, cavium_pkx, avp_vnic, ifpga_class]
 baseband_devices = [acceleration_class]
@@ -60,7 +59,7 @@ crypto_devices = [encryption_class, intel_processor_class]
 eventdev_devices = [cavium_sso, cavium_tim, octeontx2_sso]
 mempool_devices = [cavium_fpa, octeontx2_npa]
 compress_devices = [cavium_zip]
-misc_devices = [intel_ioat_bdw, intel_ioat_skx, intel_ioat_icx, intel_ntb_skx, octeontx2_dma]
+misc_devices = [intel_ioat_bdw, intel_ioat_skx, intel_ioat_icx, intel_ntb_skx, intel_ntb_icx, octeontx2_dma]
 
 # global dict ethernet devices present. Dictionary indexed by PCI address.
 # Each device within this is itself a dictionary of device properties
@@ -89,6 +88,8 @@ Usage:
 where DEVICE1, DEVICE2 etc, are specified via PCI "domain:bus:slot.func" syntax
 or "bus:slot.func" syntax. For devices bound to Linux kernel drivers, they may
 also be referred to by Linux interface name e.g. eth0, eth1, em0, em1, etc.
+If devices are specified using PCI <domain:>bus:device:func format, then
+shell wildcards and ranges may be used, e.g. 80:04.*, 80:04.[0-3]
 
 Options:
     --help, --usage:
@@ -145,15 +146,10 @@ To unbind 0000:01:00.0 from using any driver
 To bind 0000:02:00.0 and 0000:02:00.1 to the ixgbe kernel driver
         %(argv0)s -b ixgbe 02:00.0 02:00.1
 
+To bind all functions on device 0000:02:00 to ixgbe kernel driver
+        %(argv0)s -b ixgbe 02:00.*
+
     """ % locals())  # replace items from local variables
-
-
-# This is roughly compatible with check_output function in subprocess module
-# which is only available in python 2.7.
-def check_output(args, stderr=None):
-    '''Run a command and capture its output'''
-    return subprocess.Popen(args, stdout=subprocess.PIPE,
-                            stderr=stderr).communicate()[0]
 
 # check if a specific kernel module is loaded
 def module_is_loaded(module):
@@ -211,8 +207,7 @@ def get_pci_device_details(dev_id, probe_lspci):
     device = {}
 
     if probe_lspci:
-        extra_info = check_output(["lspci", "-vmmks", dev_id]).splitlines()
-
+        extra_info = subprocess.check_output(["lspci", "-vmmks", dev_id]).splitlines()
         # parse lspci details
         for line in extra_info:
             if len(line) == 0:
@@ -248,7 +243,7 @@ def get_device_details(devices_type):
     # first loop through and read details for all devices
     # request machine readable format, with numeric IDs and String
     dev = {}
-    dev_lines = check_output(["lspci", "-Dvmmnnk"]).splitlines()
+    dev_lines = subprocess.check_output(["lspci", "-Dvmmnnk"]).splitlines()
     for dev_line in dev_lines:
         if len(dev_line) == 0:
             if device_type_match(dev, devices_type):
@@ -276,7 +271,7 @@ def get_device_details(devices_type):
         # check what is the interface if any for an ssh connection if
         # any to this host, so we can mark it later.
         ssh_if = []
-        route = check_output(["ip", "-o", "route"])
+        route = subprocess.check_output(["ip", "-o", "route"])
         # filter out all lines for 169.254 routes
         route = "\n".join(filter(lambda ln: not ln.startswith("169.254"),
                              route.decode().splitlines()))
@@ -583,7 +578,7 @@ def display_devices(title, dev_list, extra_params=None):
     strings.sort()
     print("\n".join(strings))  # print one per line
 
-def show_device_status(devices_type, device_name):
+def show_device_status(devices_type, device_name, if_field=False):
     global dpdk_drivers
     kernel_drv = []
     dpdk_drv = []
@@ -615,8 +610,11 @@ def show_device_status(devices_type, device_name):
         display_devices("%s devices using DPDK-compatible driver" % device_name,
                         dpdk_drv, "drv=%(Driver_str)s unused=%(Module_str)s")
     if len(kernel_drv) != 0:
+        if_text = ""
+        if if_field:
+            if_text = "if=%(Interface)s "
         display_devices("%s devices using kernel driver" % device_name, kernel_drv,
-                        "if=%(Interface)s drv=%(Driver_str)s "
+                        if_text + "drv=%(Driver_str)s "
                         "unused=%(Module_str)s %(Active)s")
     if len(no_drv) != 0:
         display_devices("Other %s devices" % device_name, no_drv,
@@ -628,7 +626,7 @@ def show_status():
     kernel driver or to no driver'''
 
     if status_dev == "net" or status_dev == "all":
-        show_device_status(network_devices, "Network")
+        show_device_status(network_devices, "Network", if_field=True)
 
     if status_dev == "baseband" or status_dev == "all":
         show_device_status(baseband_devices, "Baseband")
@@ -647,6 +645,19 @@ def show_status():
 
     if status_dev == "misc" or status_dev == "all":
         show_device_status(misc_devices, "Misc (rawdev)")
+
+
+def pci_glob(arg):
+    '''Returns a list containing either:
+    * List of PCI B:D:F matching arg, using shell wildcards e.g. 80:04.*
+    * Only the passed arg if matching list is empty'''
+    sysfs_path = "/sys/bus/pci/devices"
+    for _glob in [arg, '0000:' + arg]:
+        paths = [basename(path) for path in glob(path_join(sysfs_path, _glob))]
+        if paths:
+            return paths
+    return [arg]
+
 
 def parse_args():
     '''Parses the command-line arguments given by the user and takes the
@@ -689,6 +700,11 @@ def parse_args():
             else:
                 b_flag = arg
 
+    # resolve any PCI globs in the args
+    new_args = []
+    for arg in args:
+        new_args.extend(pci_glob(arg))
+    args = new_args
 
 def do_arg_actions():
     '''do the actual action requested by the user'''

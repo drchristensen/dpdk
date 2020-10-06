@@ -133,6 +133,12 @@ err:
 	return ret;
 }
 
+struct rte_dev_event {
+	enum rte_dev_event_type type;	/**< device event type */
+	int subsystem;			/**< subsystem id */
+	char *devname;			/**< device name */
+};
+
 static int
 dev_uev_parse(const char *buf, struct rte_dev_event *event, int length)
 {
@@ -234,8 +240,7 @@ dev_uev_handler(__rte_unused void *param)
 
 	ret = dev_uev_parse(buf, &uevent, EAL_UEV_MSG_LEN);
 	if (ret < 0) {
-		RTE_LOG(DEBUG, EAL, "It is not an valid event "
-			"that need to be handle.\n");
+		RTE_LOG(DEBUG, EAL, "Ignoring uevent '%s'\n", buf);
 		return;
 	}
 

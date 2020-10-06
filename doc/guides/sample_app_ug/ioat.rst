@@ -265,7 +265,7 @@ functions:
                 do {
                     if (rdev_id == rte_rawdev_count())
                         goto end;
-                    rte_rawdev_info_get(rdev_id++, &rdev_info);
+                    rte_rawdev_info_get(rdev_id++, &rdev_info, 0);
                 } while (strcmp(rdev_info.driver_name,
                     IOAT_PMD_RAWDEV_NAME_STR) != 0);
 
@@ -296,7 +296,7 @@ is done in ``configure_rawdev_queue()``.
         struct rte_ioat_rawdev_config dev_config = { .ring_size = ring_size };
         struct rte_rawdev_info info = { .dev_private = &dev_config };
 
-        if (rte_rawdev_configure(dev_id, &info) != 0) {
+        if (rte_rawdev_configure(dev_id, &info, sizeof(dev_config)) != 0) {
             rte_exit(EXIT_FAILURE,
                 "Error with rte_rawdev_configure()\n");
         }

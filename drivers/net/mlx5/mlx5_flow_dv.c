@@ -945,7 +945,7 @@ flow_dv_convert_action_modify_tcp_ack
 }
 
 static enum mlx5_modification_field reg_to_field[] = {
-	[REG_NONE] = MLX5_MODI_OUT_NONE,
+	[REG_NON] = MLX5_MODI_OUT_NONE,
 	[REG_A] = MLX5_MODI_META_DATA_REG_A,
 	[REG_B] = MLX5_MODI_META_DATA_REG_B,
 	[REG_C_0] = MLX5_MODI_META_REG_C_0,
@@ -985,7 +985,7 @@ flow_dv_convert_action_set_reg
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 					  "too many items to modify");
-	MLX5_ASSERT(conf->id != REG_NONE);
+	MLX5_ASSERT(conf->id != REG_NON);
 	MLX5_ASSERT(conf->id < RTE_DIM(reg_to_field));
 	actions[i] = (struct mlx5_modification_cmd) {
 		.action_type = MLX5_MODIFICATION_TYPE_SET,
@@ -1035,7 +1035,7 @@ flow_dv_convert_action_set_tag
 	ret = mlx5_flow_get_reg_id(dev, MLX5_APP_TAG, conf->index, error);
 	if (ret < 0)
 		return ret;
-	MLX5_ASSERT(ret != REG_NONE);
+	MLX5_ASSERT(ret != REG_NON);
 	MLX5_ASSERT((unsigned int)ret < RTE_DIM(reg_to_field));
 	reg_type = reg_to_field[ret];
 	MLX5_ASSERT(reg_type > 0);
@@ -1558,7 +1558,7 @@ flow_dv_validate_item_tag(struct rte_eth_dev *dev,
 	ret = mlx5_flow_get_reg_id(dev, MLX5_APP_TAG, spec->index, error);
 	if (ret < 0)
 		return ret;
-	MLX5_ASSERT(ret != REG_NONE);
+	MLX5_ASSERT(ret != REG_NON);
 	return 0;
 }
 
@@ -2546,6 +2546,39 @@ flow_dv_validate_action_raw_encap_decap
 }
 
 /**
+ * Match encap_decap resource.
+ *
+ * @param entry
+ *   Pointer to exist resource entry object.
+ * @param ctx
+ *   Pointer to new encap_decap resource.
+ *
+ * @return
+ *   0 on matching, -1 otherwise.
+ */
+static int
+flow_dv_encap_decap_resource_match(struct mlx5_hlist_entry *entry, void *ctx)
+{
+	struct mlx5_flow_dv_encap_decap_resource *resource;
+	struct mlx5_flow_dv_encap_decap_resource *cache_resource;
+
+	resource = (struct mlx5_flow_dv_encap_decap_resource *)ctx;
+	cache_resource = container_of(entry,
+				      struct mlx5_flow_dv_encap_decap_resource,
+				      entry);
+	if (resource->entry.key == cache_resource->entry.key &&
+	    resource->reformat_type == cache_resource->reformat_type &&
+	    resource->ft_type == cache_resource->ft_type &&
+	    resource->flags == cache_resource->flags &&
+	    resource->size == cache_resource->size &&
+	    !memcmp((const void *)resource->buf,
+		    (const void *)cache_resource->buf,
+		    resource->size))
+		return 0;
+	return -1;
+}
+
+/**
  * Find existing encap/decap resource or create and register a new one.
  *
  * @param[in, out] dev
@@ -2571,7 +2604,16 @@ flow_dv_encap_decap_resource_register
 	struct mlx5_dev_ctx_shared *sh = priv->sh;
 	struct mlx5_flow_dv_encap_decap_resource *cache_resource;
 	struct mlx5dv_dr_domain *domain;
-	uint32_t idx = 0;
+	struct mlx5_hlist_entry *entry;
+	union mlx5_flow_encap_decap_key encap_decap_key = {
+		{
+			.ft_type = resource->ft_type,
+			.refmt_type = resource->reformat_type,
+			.buf_size = resource->size,
+			.table_level = !!dev_flow->dv.group,
+			.cksum = 0,
+		}
+	};
 	int ret;
 
 	resource->flags = dev_flow->dv.group ? 0 : 1;
@@ -2581,24 +2623,23 @@ flow_dv_encap_decap_resource_register
 		domain = sh->rx_domain;
 	else
 		domain = sh->tx_domain;
+	encap_decap_key.cksum = __rte_raw_cksum(resource->buf,
+						resource->size, 0);
+	resource->entry.key = encap_decap_key.v64;
 	/* Lookup a matching resource from cache. */
-	ILIST_FOREACH(sh->ipool[MLX5_IPOOL_DECAP_ENCAP], sh->encaps_decaps, idx,
-		      cache_resource, next) {
-		if (resource->reformat_type == cache_resource->reformat_type &&
-		    resource->ft_type == cache_resource->ft_type &&
-		    resource->flags == cache_resource->flags &&
-		    resource->size == cache_resource->size &&
-		    !memcmp((const void *)resource->buf,
-			    (const void *)cache_resource->buf,
-			    resource->size)) {
-			DRV_LOG(DEBUG, "encap/decap resource %p: refcnt %d++",
-				(void *)cache_resource,
-				rte_atomic32_read(&cache_resource->refcnt));
-			rte_atomic32_inc(&cache_resource->refcnt);
-			dev_flow->handle->dvh.rix_encap_decap = idx;
-			dev_flow->dv.encap_decap = cache_resource;
-			return 0;
-		}
+	entry = mlx5_hlist_lookup_ex(sh->encaps_decaps, resource->entry.key,
+				     flow_dv_encap_decap_resource_match,
+				     (void *)resource);
+	if (entry) {
+		cache_resource = container_of(entry,
+			struct mlx5_flow_dv_encap_decap_resource, entry);
+		DRV_LOG(DEBUG, "encap/decap resource %p: refcnt %d++",
+			(void *)cache_resource,
+			rte_atomic32_read(&cache_resource->refcnt));
+		rte_atomic32_inc(&cache_resource->refcnt);
+		dev_flow->handle->dvh.rix_encap_decap = cache_resource->idx;
+		dev_flow->dv.encap_decap = cache_resource;
+		return 0;
 	}
 	/* Register new encap/decap resource. */
 	cache_resource = mlx5_ipool_zmalloc(sh->ipool[MLX5_IPOOL_DECAP_ENCAP],
@@ -2608,6 +2649,7 @@ flow_dv_encap_decap_resource_register
 					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
 					  "cannot allocate resource memory");
 	*cache_resource = *resource;
+	cache_resource->idx = dev_flow->handle->dvh.rix_encap_decap;
 	ret = mlx5_flow_os_create_flow_action_packet_reformat
 					(sh->ctx, domain, cache_resource,
 					 &cache_resource->action);
@@ -2619,9 +2661,17 @@ flow_dv_encap_decap_resource_register
 	}
 	rte_atomic32_init(&cache_resource->refcnt);
 	rte_atomic32_inc(&cache_resource->refcnt);
-	ILIST_INSERT(sh->ipool[MLX5_IPOOL_DECAP_ENCAP], &sh->encaps_decaps,
-		     dev_flow->handle->dvh.rix_encap_decap, cache_resource,
-		     next);
+	if (mlx5_hlist_insert_ex(sh->encaps_decaps, &cache_resource->entry,
+				 flow_dv_encap_decap_resource_match,
+				 (void *)cache_resource)) {
+		claim_zero(mlx5_flow_os_destroy_flow_action
+						(cache_resource->action));
+		mlx5_ipool_free(priv->sh->ipool[MLX5_IPOOL_DECAP_ENCAP],
+				cache_resource->idx);
+		return rte_flow_error_set(error, EEXIST,
+					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					  NULL, "action exist");
+	}
 	dev_flow->dv.encap_decap = cache_resource;
 	DRV_LOG(DEBUG, "new encap/decap resource %p: refcnt %d++",
 		(void *)cache_resource,
@@ -3958,6 +4008,40 @@ flow_dv_validate_action_modify_ipv6_dscp(const uint64_t action_flags,
 }
 
 /**
+ * Match modify-header resource.
+ *
+ * @param entry
+ *   Pointer to exist resource entry object.
+ * @param ctx
+ *   Pointer to new modify-header resource.
+ *
+ * @return
+ *   0 on matching, -1 otherwise.
+ */
+static int
+flow_dv_modify_hdr_resource_match(struct mlx5_hlist_entry *entry, void *ctx)
+{
+	struct mlx5_flow_dv_modify_hdr_resource *resource;
+	struct mlx5_flow_dv_modify_hdr_resource *cache_resource;
+	uint32_t actions_len;
+
+	resource = (struct mlx5_flow_dv_modify_hdr_resource *)ctx;
+	cache_resource = container_of(entry,
+				      struct mlx5_flow_dv_modify_hdr_resource,
+				      entry);
+	actions_len = resource->actions_num * sizeof(resource->actions[0]);
+	if (resource->entry.key == cache_resource->entry.key &&
+	    resource->ft_type == cache_resource->ft_type &&
+	    resource->actions_num == cache_resource->actions_num &&
+	    resource->flags == cache_resource->flags &&
+	    !memcmp((const void *)resource->actions,
+		    (const void *)cache_resource->actions,
+		    actions_len))
+		return 0;
+	return -1;
+}
+
+/**
  * Find existing modify-header resource or create and register a new one.
  *
  * @param dev[in, out]
@@ -3984,6 +4068,15 @@ flow_dv_modify_hdr_resource_register
 	struct mlx5_flow_dv_modify_hdr_resource *cache_resource;
 	struct mlx5dv_dr_domain *ns;
 	uint32_t actions_len;
+	struct mlx5_hlist_entry *entry;
+	union mlx5_flow_modify_hdr_key hdr_mod_key = {
+		{
+			.ft_type = resource->ft_type,
+			.actions_num = resource->actions_num,
+			.group = dev_flow->dv.group,
+			.cksum = 0,
+		}
+	};
 	int ret;
 
 	resource->flags = dev_flow->dv.group ? 0 :
@@ -4001,20 +4094,22 @@ flow_dv_modify_hdr_resource_register
 		ns = sh->rx_domain;
 	/* Lookup a matching resource from cache. */
 	actions_len = resource->actions_num * sizeof(resource->actions[0]);
-	LIST_FOREACH(cache_resource, &sh->modify_cmds, next) {
-		if (resource->ft_type == cache_resource->ft_type &&
-		    resource->actions_num == cache_resource->actions_num &&
-		    resource->flags == cache_resource->flags &&
-		    !memcmp((const void *)resource->actions,
-			    (const void *)cache_resource->actions,
-			    actions_len)) {
-			DRV_LOG(DEBUG, "modify-header resource %p: refcnt %d++",
-				(void *)cache_resource,
-				rte_atomic32_read(&cache_resource->refcnt));
-			rte_atomic32_inc(&cache_resource->refcnt);
-			dev_flow->handle->dvh.modify_hdr = cache_resource;
-			return 0;
-		}
+	hdr_mod_key.cksum = __rte_raw_cksum(resource->actions, actions_len, 0);
+	resource->entry.key = hdr_mod_key.v64;
+	entry = mlx5_hlist_lookup_ex(sh->modify_cmds, resource->entry.key,
+				     flow_dv_modify_hdr_resource_match,
+				     (void *)resource);
+	if (entry) {
+		cache_resource = container_of(entry,
+					struct mlx5_flow_dv_modify_hdr_resource,
+					entry);
+		DRV_LOG(DEBUG, "modify-header resource %p: refcnt %d++",
+			(void *)cache_resource,
+			rte_atomic32_read(&cache_resource->refcnt));
+		rte_atomic32_inc(&cache_resource->refcnt);
+		dev_flow->handle->dvh.modify_hdr = cache_resource;
+		return 0;
+
 	}
 	/* Register new modify-header resource. */
 	cache_resource = mlx5_malloc(MLX5_MEM_ZERO,
@@ -4037,7 +4132,16 @@ flow_dv_modify_hdr_resource_register
 	}
 	rte_atomic32_init(&cache_resource->refcnt);
 	rte_atomic32_inc(&cache_resource->refcnt);
-	LIST_INSERT_HEAD(&sh->modify_cmds, cache_resource, next);
+	if (mlx5_hlist_insert_ex(sh->modify_cmds, &cache_resource->entry,
+				 flow_dv_modify_hdr_resource_match,
+				 (void *)cache_resource)) {
+		claim_zero(mlx5_flow_os_destroy_flow_action
+						(cache_resource->action));
+		mlx5_free(cache_resource);
+		return rte_flow_error_set(error, EEXIST,
+					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					  NULL, "action exist");
+	}
 	dev_flow->handle->dvh.modify_hdr = cache_resource;
 	DRV_LOG(DEBUG, "new modify-header resource %p: refcnt %d++",
 		(void *)cache_resource,
@@ -4398,7 +4502,7 @@ flow_dv_pool_create(struct rte_eth_dev *dev, struct mlx5_devx_obj *dcs,
 		cont->last_pool_idx = pool->index;
 	}
 	/* Pool initialization must be updated before host thread access. */
-	rte_cio_wmb();
+	rte_io_wmb();
 	rte_atomic16_add(&cont->n_valid, 1);
 	return pool;
 }
@@ -8863,7 +8967,7 @@ __flow_dv_apply(struct rte_eth_dev *dev, struct rte_flow *flow,
 				dv->actions[n++] = priv->sh->esw_drop_action;
 			} else {
 				struct mlx5_hrxq *drop_hrxq;
-				drop_hrxq = mlx5_hrxq_drop_new(dev);
+				drop_hrxq = mlx5_drop_action_create(dev);
 				if (!drop_hrxq) {
 					rte_flow_error_set
 						(error, errno,
@@ -8874,7 +8978,7 @@ __flow_dv_apply(struct rte_eth_dev *dev, struct rte_flow *flow,
 				}
 				/*
 				 * Drop queues will be released by the specify
-				 * mlx5_hrxq_drop_release() function. Assign
+				 * mlx5_drop_action_destroy() function. Assign
 				 * the special index to hrxq to mark the queue
 				 * has been allocated.
 				 */
@@ -8897,12 +9001,12 @@ __flow_dv_apply(struct rte_eth_dev *dev, struct rte_flow *flow,
 			if (!hrxq_idx) {
 				hrxq_idx = mlx5_hrxq_new
 						(dev, rss_desc->key,
-						MLX5_RSS_HASH_KEY_LEN,
-						dev_flow->hash_fields,
-						rss_desc->queue,
-						rss_desc->queue_num,
-						!!(dh->layers &
-						MLX5_FLOW_LAYER_TUNNEL));
+						 MLX5_RSS_HASH_KEY_LEN,
+						 dev_flow->hash_fields,
+						 rss_desc->queue,
+						 rss_desc->queue_num,
+						 !!(dh->layers &
+						 MLX5_FLOW_LAYER_TUNNEL));
 			}
 			hrxq = mlx5_ipool_get(priv->sh->ipool[MLX5_IPOOL_HRXQ],
 					      hrxq_idx);
@@ -8959,7 +9063,7 @@ error_default_miss:
 		/* hrxq is union, don't clear it if the flag is not set. */
 		if (dh->rix_hrxq) {
 			if (dh->fate_action == MLX5_FLOW_FATE_DROP) {
-				mlx5_hrxq_drop_release(dev);
+				mlx5_drop_action_destroy(dev);
 				dh->rix_hrxq = 0;
 			} else if (dh->fate_action == MLX5_FLOW_FATE_QUEUE) {
 				mlx5_hrxq_release(dev, dh->rix_hrxq);
@@ -9038,9 +9142,8 @@ flow_dv_encap_decap_resource_release(struct rte_eth_dev *dev,
 	if (rte_atomic32_dec_and_test(&cache_resource->refcnt)) {
 		claim_zero(mlx5_flow_os_destroy_flow_action
 						(cache_resource->action));
-		ILIST_REMOVE(priv->sh->ipool[MLX5_IPOOL_DECAP_ENCAP],
-			     &priv->sh->encaps_decaps, idx,
-			     cache_resource, next);
+		mlx5_hlist_remove(priv->sh->encaps_decaps,
+				  &cache_resource->entry);
 		mlx5_ipool_free(priv->sh->ipool[MLX5_IPOOL_DECAP_ENCAP], idx);
 		DRV_LOG(DEBUG, "encap/decap resource %p: removed",
 			(void *)cache_resource);
@@ -9122,6 +9225,8 @@ flow_dv_default_miss_resource_release(struct rte_eth_dev *dev)
 /**
  * Release a modify-header resource.
  *
+ * @param dev
+ *   Pointer to Ethernet device.
  * @param handle
  *   Pointer to mlx5_flow_handle.
  *
@@ -9129,8 +9234,10 @@ flow_dv_default_miss_resource_release(struct rte_eth_dev *dev)
  *   1 while a reference on it exists, 0 when freed.
  */
 static int
-flow_dv_modify_hdr_resource_release(struct mlx5_flow_handle *handle)
+flow_dv_modify_hdr_resource_release(struct rte_eth_dev *dev,
+				    struct mlx5_flow_handle *handle)
 {
+	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_flow_dv_modify_hdr_resource *cache_resource =
 							handle->dvh.modify_hdr;
 
@@ -9141,7 +9248,8 @@ flow_dv_modify_hdr_resource_release(struct mlx5_flow_handle *handle)
 	if (rte_atomic32_dec_and_test(&cache_resource->refcnt)) {
 		claim_zero(mlx5_flow_os_destroy_flow_action
 						(cache_resource->action));
-		LIST_REMOVE(cache_resource, next);
+		mlx5_hlist_remove(priv->sh->modify_cmds,
+				  &cache_resource->entry);
 		mlx5_free(cache_resource);
 		DRV_LOG(DEBUG, "modify-header resource %p: removed",
 			(void *)cache_resource);
@@ -9248,7 +9356,7 @@ flow_dv_fate_resource_release(struct rte_eth_dev *dev,
 		return;
 	switch (handle->fate_action) {
 	case MLX5_FLOW_FATE_DROP:
-		mlx5_hrxq_drop_release(dev);
+		mlx5_drop_action_destroy(dev);
 		break;
 	case MLX5_FLOW_FATE_QUEUE:
 		mlx5_hrxq_release(dev, handle->rix_hrxq);
@@ -9351,7 +9459,7 @@ __flow_dv_destroy(struct rte_eth_dev *dev, struct rte_flow *flow)
 		if (dev_handle->dvh.rix_encap_decap)
 			flow_dv_encap_decap_resource_release(dev, dev_handle);
 		if (dev_handle->dvh.modify_hdr)
-			flow_dv_modify_hdr_resource_release(dev_handle);
+			flow_dv_modify_hdr_resource_release(dev, dev_handle);
 		if (dev_handle->dvh.rix_push_vlan)
 			flow_dv_push_vlan_action_resource_release(dev,
 								  dev_handle);

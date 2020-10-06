@@ -33,14 +33,13 @@ foreach flag: extra_flags
 	endif
 endforeach
 
-subdir('base')
-objs = [base_objs]
-
+deps += ['common_sfc_efx']
 sources = files(
 	'sfc_ethdev.c',
 	'sfc_kvargs.c',
 	'sfc.c',
 	'sfc_mcdi.c',
+	'sfc_sriov.c',
 	'sfc_intr.c',
 	'sfc_ev.c',
 	'sfc_port.c',
@@ -54,5 +53,3 @@ sources = files(
 	'sfc_ef10_essb_rx.c',
 	'sfc_ef10_tx.c'
 )
-
-includes += include_directories('base')

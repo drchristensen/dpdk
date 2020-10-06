@@ -37,6 +37,7 @@ static void qed_init_pci(struct ecore_dev *edev, struct rte_pci_device *pci_dev)
 	edev->regview = pci_dev->mem_resource[0].addr;
 	edev->doorbells = pci_dev->mem_resource[2].addr;
 	edev->db_size = pci_dev->mem_resource[2].len;
+	edev->pci_dev = pci_dev;
 }
 
 static int
@@ -220,7 +221,9 @@ static void qed_stop_iov_task(struct ecore_dev *edev)
 
 	for_each_hwfn(edev, i) {
 		p_hwfn = &edev->hwfns[i];
-		if (!IS_PF(edev))
+		if (IS_PF(edev))
+			rte_eal_alarm_cancel(qed_iov_pf_task, p_hwfn);
+		else
 			rte_eal_alarm_cancel(qede_vf_task, p_hwfn);
 	}
 }
@@ -648,10 +651,13 @@ void qed_link_update(struct ecore_hwfn *hwfn)
 	struct ecore_dev *edev = hwfn->p_dev;
 	struct qede_dev *qdev = (struct qede_dev *)edev;
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)qdev->ethdev;
+	int rc;
 
-	if (!qede_link_update(dev, 0))
-		_rte_eth_dev_callback_process(dev,
-					      RTE_ETH_EVENT_INTR_LSC, NULL);
+	rc = qede_link_update(dev, 0);
+	qed_inform_vf_link_state(hwfn);
+
+	if (!rc)
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 }
 
 static int qed_drain(struct ecore_dev *edev)
@@ -821,6 +827,7 @@ const struct qed_common_ops qed_common_ops_pass = {
 const struct qed_eth_ops qed_eth_ops_pass = {
 	INIT_STRUCT_FIELD(common, &qed_common_ops_pass),
 	INIT_STRUCT_FIELD(fill_dev_info, &qed_fill_eth_dev_info),
+	INIT_STRUCT_FIELD(sriov_configure, &qed_sriov_configure),
 };
 
 const struct qed_eth_ops *qed_get_eth_ops(void)

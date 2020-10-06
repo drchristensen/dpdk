@@ -38,9 +38,11 @@ libraries = [
 if is_windows
 	libraries = [
 		'kvargs',
+		'telemetry',
 		'eal',
 		'ring',
-		'mempool', 'mbuf', 'pci',
+		'mempool', 'mbuf', 'net', 'meter', 'ethdev', 'pci',
+		'hash',
 	] # only supported libraries for windows
 endif
 

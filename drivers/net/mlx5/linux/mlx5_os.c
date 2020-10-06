@@ -45,6 +45,8 @@
 #include "mlx5_flow.h"
 #include "rte_pmd_mlx5.h"
 #include "mlx5_verbs.h"
+#include "mlx5_nl.h"
+#include "mlx5_devx.h"
 
 #define MLX5_TAGS_HLIST_ARRAY_SIZE 8192
 
@@ -241,6 +243,21 @@ mlx5_alloc_shared_dr(struct mlx5_priv *priv)
 		err = ENOMEM;
 		goto error;
 	}
+	snprintf(s, sizeof(s), "%s_hdr_modify", sh->ibdev_name);
+	sh->modify_cmds = mlx5_hlist_create(s, MLX5_FLOW_HDR_MODIFY_HTABLE_SZ);
+	if (!sh->modify_cmds) {
+		DRV_LOG(ERR, "hdr modify hash creation failed");
+		err = ENOMEM;
+		goto error;
+	}
+	snprintf(s, sizeof(s), "%s_encaps_decaps", sh->ibdev_name);
+	sh->encaps_decaps = mlx5_hlist_create(s,
+					      MLX5_FLOW_ENCAP_DECAP_HTABLE_SZ);
+	if (!sh->encaps_decaps) {
+		DRV_LOG(ERR, "encap decap hash creation failed");
+		err = ENOMEM;
+		goto error;
+	}
 #ifdef HAVE_MLX5DV_DR
 	void *domain;
 
@@ -314,6 +331,14 @@ error:
 		mlx5_glue->destroy_flow_action(sh->pop_vlan_action);
 		sh->pop_vlan_action = NULL;
 	}
+	if (sh->encaps_decaps) {
+		mlx5_hlist_destroy(sh->encaps_decaps, NULL, NULL);
+		sh->encaps_decaps = NULL;
+	}
+	if (sh->modify_cmds) {
+		mlx5_hlist_destroy(sh->modify_cmds, NULL, NULL);
+		sh->modify_cmds = NULL;
+	}
 	if (sh->tag_table) {
 		/* tags should be destroyed with flow before. */
 		mlx5_hlist_destroy(sh->tag_table, NULL, NULL);
@@ -367,6 +392,14 @@ mlx5_os_free_shared_dr(struct mlx5_priv *priv)
 	}
 	pthread_mutex_destroy(&sh->dv_mutex);
 #endif /* HAVE_MLX5DV_DR */
+	if (sh->encaps_decaps) {
+		mlx5_hlist_destroy(sh->encaps_decaps, NULL, NULL);
+		sh->encaps_decaps = NULL;
+	}
+	if (sh->modify_cmds) {
+		mlx5_hlist_destroy(sh->modify_cmds, NULL, NULL);
+		sh->modify_cmds = NULL;
+	}
 	if (sh->tag_table) {
 		/* tags should be destroyed with flow before. */
 		mlx5_hlist_destroy(sh->tag_table, NULL, NULL);
@@ -585,6 +618,8 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 		}
 		eth_dev->device = dpdk_dev;
 		eth_dev->dev_ops = &mlx5_os_dev_sec_ops;
+		eth_dev->rx_descriptor_status = mlx5_rx_descriptor_status;
+		eth_dev->tx_descriptor_status = mlx5_tx_descriptor_status;
 		err = mlx5_proc_priv_init(eth_dev);
 		if (err)
 			return NULL;
@@ -1136,8 +1171,6 @@ err_secondary:
 		err = ENOMEM;
 		goto error;
 	}
-	/* Flag to call rte_eth_dev_release_port() in rte_eth_dev_close(). */
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 	if (priv->representor) {
 		eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR;
 		eth_dev->data->representor_id = priv->representor_id;
@@ -1149,6 +1182,19 @@ err_secondary:
 	 */
 	MLX5_ASSERT(spawn->ifindex);
 	priv->if_index = spawn->ifindex;
+	if (priv->pf_bond >= 0 && priv->master) {
+		/* Get bond interface info */
+		err = mlx5_sysfs_bond_info(priv->if_index,
+				     &priv->bond_ifindex,
+				     priv->bond_name);
+		if (err)
+			DRV_LOG(ERR, "unable to get bond info: %s",
+				strerror(rte_errno));
+		else
+			DRV_LOG(INFO, "PF device %u, bond device %u(%s)",
+				priv->if_index, priv->bond_ifindex,
+				priv->bond_name);
+	}
 	eth_dev->data->dev_private = priv;
 	priv->dev_data = eth_dev->data;
 	eth_dev->data->mac_addrs = priv->mac;
@@ -1192,6 +1238,9 @@ err_secondary:
 	eth_dev->rx_pkt_burst = removed_rx_burst;
 	eth_dev->tx_pkt_burst = removed_tx_burst;
 	eth_dev->dev_ops = &mlx5_os_dev_ops;
+	eth_dev->rx_descriptor_status = mlx5_rx_descriptor_status;
+	eth_dev->tx_descriptor_status = mlx5_tx_descriptor_status;
+	eth_dev->rx_queue_count = mlx5_rx_queue_count;
 	/* Register MAC address. */
 	claim_zero(mlx5_mac_addr_add(eth_dev, &mac, 0, 0));
 	if (config->vf && config->vf_nl_en)
@@ -1249,6 +1298,15 @@ err_secondary:
 			err = ENOMEM;
 			goto error;
 		}
+	}
+	if (config->devx && config->dv_flow_en && config->dest_tir) {
+		priv->obj_ops = devx_obj_ops;
+		priv->obj_ops.drop_action_create =
+						ibv_obj_ops.drop_action_create;
+		priv->obj_ops.drop_action_destroy =
+						ibv_obj_ops.drop_action_destroy;
+	} else {
+		priv->obj_ops = ibv_obj_ops;
 	}
 	/* Supported Verbs flow priority number detection. */
 	err = mlx5_flow_discover_priorities(eth_dev);
@@ -2317,6 +2375,23 @@ mlx5_os_set_allmulti(struct rte_eth_dev *dev, int enable)
 				mlx5_ifindex(dev), !!enable);
 }
 
+/**
+ * Flush device MAC addresses
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ *
+ */
+void
+mlx5_os_mac_addr_flush(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	mlx5_nl_mac_addr_flush(priv->nl_socket_route, mlx5_ifindex(dev),
+			       dev->data->mac_addrs,
+			       MLX5_MAX_MAC_ADDRESSES, priv->mac_own);
+}
+
 const struct eth_dev_ops mlx5_os_dev_ops = {
 	.dev_configure = mlx5_dev_configure,
 	.dev_start = mlx5_dev_start,
@@ -2363,13 +2438,10 @@ const struct eth_dev_ops mlx5_os_dev_ops = {
 	.rss_hash_update = mlx5_rss_hash_update,
 	.rss_hash_conf_get = mlx5_rss_hash_conf_get,
 	.filter_ctrl = mlx5_dev_filter_ctrl,
-	.rx_descriptor_status = mlx5_rx_descriptor_status,
-	.tx_descriptor_status = mlx5_tx_descriptor_status,
 	.rxq_info_get = mlx5_rxq_info_get,
 	.txq_info_get = mlx5_txq_info_get,
 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
 	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
-	.rx_queue_count = mlx5_rx_queue_count,
 	.rx_queue_intr_enable = mlx5_rx_intr_enable,
 	.rx_queue_intr_disable = mlx5_rx_intr_disable,
 	.is_removed = mlx5_is_removed,
@@ -2394,8 +2466,6 @@ const struct eth_dev_ops mlx5_os_dev_sec_ops = {
 	.rx_queue_stop = mlx5_rx_queue_stop,
 	.tx_queue_start = mlx5_tx_queue_start,
 	.tx_queue_stop = mlx5_tx_queue_stop,
-	.rx_descriptor_status = mlx5_rx_descriptor_status,
-	.tx_descriptor_status = mlx5_tx_descriptor_status,
 	.rxq_info_get = mlx5_rxq_info_get,
 	.txq_info_get = mlx5_txq_info_get,
 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
@@ -2447,8 +2517,6 @@ const struct eth_dev_ops mlx5_os_dev_ops_isolate = {
 	.vlan_strip_queue_set = mlx5_vlan_strip_queue_set,
 	.vlan_offload_set = mlx5_vlan_offload_set,
 	.filter_ctrl = mlx5_dev_filter_ctrl,
-	.rx_descriptor_status = mlx5_rx_descriptor_status,
-	.tx_descriptor_status = mlx5_tx_descriptor_status,
 	.rxq_info_get = mlx5_rxq_info_get,
 	.txq_info_get = mlx5_txq_info_get,
 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,

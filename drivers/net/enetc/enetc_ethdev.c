@@ -545,12 +545,15 @@ enetc_stats_reset(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 enetc_dev_close(struct rte_eth_dev *dev)
 {
 	uint16_t i;
 
 	PMD_INIT_FUNC_TRACE();
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
+
 	enetc_dev_stop(dev);
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
@@ -564,6 +567,11 @@ enetc_dev_close(struct rte_eth_dev *dev)
 		dev->data->tx_queues[i] = NULL;
 	}
 	dev->data->nb_tx_queues = 0;
+
+	if (rte_eal_iova_mode() == RTE_IOVA_PA)
+		dpaax_iova_table_depopulate();
+
+	return 0;
 }
 
 static int
@@ -914,14 +922,11 @@ enetc_dev_init(struct rte_eth_dev *eth_dev)
 }
 
 static int
-enetc_dev_uninit(struct rte_eth_dev *eth_dev __rte_unused)
+enetc_dev_uninit(struct rte_eth_dev *eth_dev)
 {
 	PMD_INIT_FUNC_TRACE();
 
-	if (rte_eal_iova_mode() == RTE_IOVA_PA)
-		dpaax_iova_table_depopulate();
-
-	return 0;
+	return enetc_dev_close(eth_dev);
 }
 
 static int

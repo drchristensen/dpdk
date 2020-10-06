@@ -549,12 +549,14 @@ rte_eth_dev_release_port(struct rte_eth_dev *eth_dev)
 	rte_eth_dev_shared_data_prepare();
 
 	if (eth_dev->state != RTE_ETH_DEV_UNUSED)
-		_rte_eth_dev_callback_process(eth_dev,
+		rte_eth_dev_callback_process(eth_dev,
 				RTE_ETH_EVENT_DESTROY, NULL);
 
 	rte_spinlock_lock(&rte_eth_dev_shared_data->ownership_lock);
 
 	eth_dev->state = RTE_ETH_DEV_UNUSED;
+	eth_dev->device = NULL;
+	eth_dev->intr_handle = NULL;
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 		rte_free(eth_dev->data->rx_queues);
@@ -1486,7 +1488,7 @@ rollback:
 }
 
 void
-_rte_eth_dev_reset(struct rte_eth_dev *dev)
+rte_eth_dev_internal_reset(struct rte_eth_dev *dev)
 {
 	if (dev->data->dev_started) {
 		RTE_ETHDEV_LOG(ERR, "Port %u must be stopped to allow reset\n",
@@ -1718,22 +1720,7 @@ rte_eth_dev_close(uint16_t port_id)
 	(*dev->dev_ops->dev_close)(dev);
 
 	rte_ethdev_trace_close(port_id);
-	/* check behaviour flag - temporary for PMD migration */
-	if ((dev->data->dev_flags & RTE_ETH_DEV_CLOSE_REMOVE) != 0) {
-		/* new behaviour: send event + reset state + free all data */
-		rte_eth_dev_release_port(dev);
-		return;
-	}
-	RTE_ETHDEV_LOG(DEBUG, "Port closing is using an old behaviour.\n"
-			"The driver %s should migrate to the new behaviour.\n",
-			dev->device->driver->name);
-	/* old behaviour: only free queue arrays */
-	dev->data->nb_rx_queues = 0;
-	rte_free(dev->data->rx_queues);
-	dev->data->rx_queues = NULL;
-	dev->data->nb_tx_queues = 0;
-	rte_free(dev->data->tx_queues);
-	dev->data->tx_queues = NULL;
+	rte_eth_dev_release_port(dev);
 }
 
 int
@@ -2382,6 +2369,43 @@ rte_eth_link_get_nowait(uint16_t port_id, struct rte_eth_link *eth_link)
 	}
 
 	return 0;
+}
+
+const char *
+rte_eth_link_speed_to_str(uint32_t link_speed)
+{
+	switch (link_speed) {
+	case ETH_SPEED_NUM_NONE: return "None";
+	case ETH_SPEED_NUM_10M:  return "10 Mbps";
+	case ETH_SPEED_NUM_100M: return "100 Mbps";
+	case ETH_SPEED_NUM_1G:   return "1 Gbps";
+	case ETH_SPEED_NUM_2_5G: return "2.5 Gbps";
+	case ETH_SPEED_NUM_5G:   return "5 Gbps";
+	case ETH_SPEED_NUM_10G:  return "10 Gbps";
+	case ETH_SPEED_NUM_20G:  return "20 Gbps";
+	case ETH_SPEED_NUM_25G:  return "25 Gbps";
+	case ETH_SPEED_NUM_40G:  return "40 Gbps";
+	case ETH_SPEED_NUM_50G:  return "50 Gbps";
+	case ETH_SPEED_NUM_56G:  return "56 Gbps";
+	case ETH_SPEED_NUM_100G: return "100 Gbps";
+	case ETH_SPEED_NUM_200G: return "200 Gbps";
+	case ETH_SPEED_NUM_UNKNOWN: return "Unknown";
+	default: return "Invalid";
+	}
+}
+
+int
+rte_eth_link_to_str(char *str, size_t len, const struct rte_eth_link *eth_link)
+{
+	if (eth_link->link_status == ETH_LINK_DOWN)
+		return snprintf(str, len, "Link down");
+	else
+		return snprintf(str, len, "Link up at %s %s %s",
+			rte_eth_link_speed_to_str(eth_link->link_speed),
+			(eth_link->link_duplex == ETH_LINK_FULL_DUPLEX) ?
+			"FDX" : "HDX",
+			(eth_link->link_autoneg == ETH_LINK_AUTONEG) ?
+			"Autoneg" : "Fixed");
 }
 
 int
@@ -4090,7 +4114,7 @@ rte_eth_dev_callback_unregister(uint16_t port_id,
 }
 
 int
-_rte_eth_dev_callback_process(struct rte_eth_dev *dev,
+rte_eth_dev_callback_process(struct rte_eth_dev *dev,
 	enum rte_eth_event_type event, void *ret_param)
 {
 	struct rte_eth_dev_callback *cb_lst;
@@ -4122,7 +4146,7 @@ rte_eth_dev_probing_finish(struct rte_eth_dev *dev)
 	if (dev == NULL)
 		return;
 
-	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_NEW, NULL);
+	rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_NEW, NULL);
 
 	dev->state = RTE_ETH_DEV_ATTACHED;
 }
@@ -4670,6 +4694,14 @@ rte_eth_rx_queue_info_get(uint16_t port_id, uint16_t queue_id,
 		return -EINVAL;
 	}
 
+	if (dev->data->rx_queues[queue_id] == NULL) {
+		RTE_ETHDEV_LOG(ERR,
+			       "Rx queue %"PRIu16" of device with port_id=%"
+			       PRIu16" has not been setup\n",
+			       queue_id, port_id);
+		return -EINVAL;
+	}
+
 	if (rte_eth_dev_is_rx_hairpin_queue(dev, queue_id)) {
 		RTE_ETHDEV_LOG(INFO,
 			"Can't get hairpin Rx queue %"PRIu16" info of device with port_id=%"PRIu16"\n",
@@ -4698,6 +4730,14 @@ rte_eth_tx_queue_info_get(uint16_t port_id, uint16_t queue_id,
 	dev = &rte_eth_devices[port_id];
 	if (queue_id >= dev->data->nb_tx_queues) {
 		RTE_ETHDEV_LOG(ERR, "Invalid TX queue_id=%u\n", queue_id);
+		return -EINVAL;
+	}
+
+	if (dev->data->tx_queues[queue_id] == NULL) {
+		RTE_ETHDEV_LOG(ERR,
+			       "Tx queue %"PRIu16" of device with port_id=%"
+			       PRIu16" has not been setup\n",
+			       queue_id, port_id);
 		return -EINVAL;
 	}
 
@@ -5275,6 +5315,57 @@ handle_port_list(const char *cmd __rte_unused,
 	return 0;
 }
 
+static void
+add_port_queue_stats(struct rte_tel_data *d, uint64_t *q_stats,
+		const char *stat_name)
+{
+	int q;
+	struct rte_tel_data *q_data = rte_tel_data_alloc();
+	rte_tel_data_start_array(q_data, RTE_TEL_U64_VAL);
+	for (q = 0; q < RTE_ETHDEV_QUEUE_STAT_CNTRS; q++)
+		rte_tel_data_add_array_u64(q_data, q_stats[q]);
+	rte_tel_data_add_dict_container(d, stat_name, q_data, 0);
+}
+
+#define ADD_DICT_STAT(stats, s) rte_tel_data_add_dict_u64(d, #s, stats.s)
+
+static int
+handle_port_stats(const char *cmd __rte_unused,
+		const char *params,
+		struct rte_tel_data *d)
+{
+	struct rte_eth_stats stats;
+	int port_id, ret;
+
+	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
+		return -1;
+
+	port_id = atoi(params);
+	if (!rte_eth_dev_is_valid_port(port_id))
+		return -1;
+
+	ret = rte_eth_stats_get(port_id, &stats);
+	if (ret < 0)
+		return -1;
+
+	rte_tel_data_start_dict(d);
+	ADD_DICT_STAT(stats, ipackets);
+	ADD_DICT_STAT(stats, opackets);
+	ADD_DICT_STAT(stats, ibytes);
+	ADD_DICT_STAT(stats, obytes);
+	ADD_DICT_STAT(stats, imissed);
+	ADD_DICT_STAT(stats, ierrors);
+	ADD_DICT_STAT(stats, oerrors);
+	ADD_DICT_STAT(stats, rx_nombuf);
+	add_port_queue_stats(d, stats.q_ipackets, "q_ipackets");
+	add_port_queue_stats(d, stats.q_opackets, "q_opackets");
+	add_port_queue_stats(d, stats.q_ibytes, "q_ibytes");
+	add_port_queue_stats(d, stats.q_obytes, "q_obytes");
+	add_port_queue_stats(d, stats.q_errors, "q_errors");
+
+	return 0;
+}
+
 static int
 handle_port_xstats(const char *cmd __rte_unused,
 		const char *params,
@@ -5284,11 +5375,15 @@ handle_port_xstats(const char *cmd __rte_unused,
 	struct rte_eth_xstat_name *xstat_names;
 	int port_id, num_xstats;
 	int i, ret;
+	char *end_param;
 
 	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
 		return -1;
 
-	port_id = atoi(params);
+	port_id = strtoul(params, &end_param, 0);
+	if (*end_param != '\0')
+		RTE_ETHDEV_LOG(NOTICE,
+			"Extra parameters passed to ethdev telemetry command, ignoring");
 	if (!rte_eth_dev_is_valid_port(port_id))
 		return -1;
 
@@ -5330,11 +5425,15 @@ handle_port_link_status(const char *cmd __rte_unused,
 	static const char *status_str = "status";
 	int ret, port_id;
 	struct rte_eth_link link;
+	char *end_param;
 
 	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
 		return -1;
 
-	port_id = atoi(params);
+	port_id = strtoul(params, &end_param, 0);
+	if (*end_param != '\0')
+		RTE_ETHDEV_LOG(NOTICE,
+			"Extra parameters passed to ethdev telemetry command, ignoring");
 	if (!rte_eth_dev_is_valid_port(port_id))
 		return -1;
 
@@ -5361,6 +5460,8 @@ RTE_INIT(ethdev_init_telemetry)
 {
 	rte_telemetry_register_cmd("/ethdev/list", handle_port_list,
 			"Returns list of available ethdev ports. Takes no parameters");
+	rte_telemetry_register_cmd("/ethdev/stats", handle_port_stats,
+			"Returns the common stats for a port. Parameters: int port_id");
 	rte_telemetry_register_cmd("/ethdev/xstats", handle_port_xstats,
 			"Returns the extended stats for a port. Parameters: int port_id");
 	rte_telemetry_register_cmd("/ethdev/link_status",

@@ -6,6 +6,12 @@
 #ifndef _BNXT_RQX_H_
 #define _BNXT_RQX_H_
 
+/* Maximum receive burst supported in vector mode. */
+#define RTE_BNXT_MAX_RX_BURST		64U
+
+/* Drop by default when receive desc is not available. */
+#define BNXT_DEFAULT_RX_DROP_EN		1
+
 struct bnxt;
 struct bnxt_rx_ring_info;
 struct bnxt_cp_ring_info;
@@ -31,6 +37,7 @@ struct bnxt_rx_queue {
 	uint8_t			crc_len; /* 0 if CRC stripped, 4 otherwise */
 	uint8_t			rx_deferred_start; /* not in global dev start */
 	uint8_t			rx_started; /* RX queue is started */
+	uint8_t			drop_en; /* Drop when rx desc not available. */
 
 	struct bnxt		*bp;
 	int			index;
@@ -39,6 +46,7 @@ struct bnxt_rx_queue {
 	uint32_t			rx_buf_size;
 	struct bnxt_rx_ring_info	*rx_ring;
 	struct bnxt_cp_ring_info	*cp_ring;
+	struct rte_mbuf			fake_mbuf;
 	rte_atomic64_t		rx_mbuf_alloc_fail;
 	const struct rte_memzone *mz;
 };

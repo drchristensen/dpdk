@@ -54,7 +54,7 @@
 #endif
 #include <rte_flow.h>
 #include <rte_metrics.h>
-#ifdef RTE_LIBRTE_BITRATE
+#ifdef RTE_LIBRTE_BITRATESTATS
 #include <rte_bitrate.h>
 #endif
 #ifdef RTE_LIBRTE_LATENCY_STATS
@@ -475,10 +475,20 @@ uint16_t nb_rx_queue_stats_mappings = 0;
  */
 uint8_t xstats_hide_zero;
 
+/*
+ * Measure of CPU cycles disabled by default
+ */
+uint8_t record_core_cycles;
+
+/*
+ * Display of RX and TX bursts disabled by default
+ */
+uint8_t record_burst_stats;
+
 unsigned int num_sockets = 0;
 unsigned int socket_ids[RTE_MAX_NUMA_NODES];
 
-#ifdef RTE_LIBRTE_BITRATE
+#ifdef RTE_LIBRTE_BITRATESTATS
 /* Bitrate statistics */
 struct rte_stats_bitrates *bitrate_data;
 lcoreid_t bitrate_lcore_id;
@@ -1679,7 +1689,6 @@ init_fwd_streams(void)
 	return 0;
 }
 
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
 static void
 pkt_burst_stats_display(const char *rx_tx, struct pkt_burst_stats *pbs)
 {
@@ -1746,7 +1755,6 @@ pkt_burst_stats_display(const char *rx_tx, struct pkt_burst_stats *pbs)
 		sburstp += burst_percent[i];
 	}
 }
-#endif /* RTE_TEST_PMD_RECORD_BURST_STATS */
 
 static void
 fwd_stream_stats_display(streamid_t stream_id)
@@ -1777,10 +1785,10 @@ fwd_stream_stats_display(streamid_t stream_id)
 		printf("\n");
 	}
 
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
-	pkt_burst_stats_display("RX", &fs->rx_burst_stats);
-	pkt_burst_stats_display("TX", &fs->tx_burst_stats);
-#endif
+	if (record_burst_stats) {
+		pkt_burst_stats_display("RX", &fs->rx_burst_stats);
+		pkt_burst_stats_display("TX", &fs->tx_burst_stats);
+	}
 }
 
 void
@@ -1800,9 +1808,7 @@ fwd_stats_display(void)
 	uint64_t total_tx_dropped = 0;
 	uint64_t total_rx_nombuf = 0;
 	struct rte_eth_stats stats;
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	uint64_t fwd_cycles = 0;
-#endif
 	uint64_t total_recv = 0;
 	uint64_t total_xmit = 0;
 	struct rte_port *port;
@@ -1830,9 +1836,8 @@ fwd_stats_display(void)
 		ports_stats[fs->rx_port].rx_bad_outer_l4_csum +=
 				fs->rx_bad_outer_l4_csum;
 
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-		fwd_cycles += fs->core_cycles;
-#endif
+		if (record_core_cycles)
+			fwd_cycles += fs->core_cycles;
 	}
 	for (i = 0; i < cur_fwd_config.nb_fwd_ports; i++) {
 		uint8_t j;
@@ -1913,14 +1918,14 @@ fwd_stats_display(void)
 			       stats.opackets + ports_stats[pt_id].tx_dropped);
 		}
 
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
-		if (ports_stats[pt_id].rx_stream)
-			pkt_burst_stats_display("RX",
-				&ports_stats[pt_id].rx_stream->rx_burst_stats);
-		if (ports_stats[pt_id].tx_stream)
-			pkt_burst_stats_display("TX",
-				&ports_stats[pt_id].tx_stream->tx_burst_stats);
-#endif
+		if (record_burst_stats) {
+			if (ports_stats[pt_id].rx_stream)
+				pkt_burst_stats_display("RX",
+					&ports_stats[pt_id].rx_stream->rx_burst_stats);
+			if (ports_stats[pt_id].tx_stream)
+				pkt_burst_stats_display("TX",
+					&ports_stats[pt_id].tx_stream->tx_burst_stats);
+		}
 
 		if (port->rx_queue_stats_mapping_enabled) {
 			printf("\n");
@@ -1961,24 +1966,24 @@ fwd_stats_display(void)
 	printf("  %s++++++++++++++++++++++++++++++++++++++++++++++"
 	       "%s\n",
 	       acc_stats_border, acc_stats_border);
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
+	if (record_core_cycles) {
 #define CYC_PER_MHZ 1E6
-	if (total_recv > 0 || total_xmit > 0) {
-		uint64_t total_pkts = 0;
-		if (strcmp(cur_fwd_eng->fwd_mode_name, "txonly") == 0 ||
-		    strcmp(cur_fwd_eng->fwd_mode_name, "flowgen") == 0)
-			total_pkts = total_xmit;
-		else
-			total_pkts = total_recv;
+		if (total_recv > 0 || total_xmit > 0) {
+			uint64_t total_pkts = 0;
+			if (strcmp(cur_fwd_eng->fwd_mode_name, "txonly") == 0 ||
+			    strcmp(cur_fwd_eng->fwd_mode_name, "flowgen") == 0)
+				total_pkts = total_xmit;
+			else
+				total_pkts = total_recv;
 
-		printf("\n  CPU cycles/packet=%.2F (total cycles="
-		       "%"PRIu64" / total %s packets=%"PRIu64") at %"PRIu64
-		       " MHz Clock\n",
-		       (double) fwd_cycles / total_pkts,
-		       fwd_cycles, cur_fwd_eng->fwd_mode_name, total_pkts,
-		       (uint64_t)(rte_get_tsc_hz() / CYC_PER_MHZ));
+			printf("\n  CPU cycles/packet=%.2F (total cycles="
+			       "%"PRIu64" / total %s packets=%"PRIu64") at %"PRIu64
+			       " MHz Clock\n",
+			       (double) fwd_cycles / total_pkts,
+			       fwd_cycles, cur_fwd_eng->fwd_mode_name, total_pkts,
+			       (uint64_t)(rte_get_tsc_hz() / CYC_PER_MHZ));
+		}
 	}
-#endif
 }
 
 void
@@ -2002,13 +2007,9 @@ fwd_stats_reset(void)
 		fs->rx_bad_l4_csum = 0;
 		fs->rx_bad_outer_l4_csum = 0;
 
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
 		memset(&fs->rx_burst_stats, 0, sizeof(fs->rx_burst_stats));
 		memset(&fs->tx_burst_stats, 0, sizeof(fs->tx_burst_stats));
-#endif
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 		fs->core_cycles = 0;
-#endif
 	}
 }
 
@@ -2063,7 +2064,7 @@ run_pkt_fwd_on_lcore(struct fwd_lcore *fc, packet_fwd_t pkt_fwd)
 	struct fwd_stream **fsm;
 	streamid_t nb_fs;
 	streamid_t sm_id;
-#ifdef RTE_LIBRTE_BITRATE
+#ifdef RTE_LIBRTE_BITRATESTATS
 	uint64_t tics_per_1sec;
 	uint64_t tics_datum;
 	uint64_t tics_current;
@@ -2078,7 +2079,7 @@ run_pkt_fwd_on_lcore(struct fwd_lcore *fc, packet_fwd_t pkt_fwd)
 	do {
 		for (sm_id = 0; sm_id < nb_fs; sm_id++)
 			(*pkt_fwd)(fsm[sm_id]);
-#ifdef RTE_LIBRTE_BITRATE
+#ifdef RTE_LIBRTE_BITRATESTATS
 		if (bitrate_enabled != 0 &&
 				bitrate_lcore_id == rte_lcore_id()) {
 			tics_current = rte_rdtsc();
@@ -2694,23 +2695,11 @@ close_port(portid_t pid)
 			continue;
 		}
 
-		if (rte_atomic16_cmpset(&(port->port_status),
-			RTE_PORT_STOPPED, RTE_PORT_HANDLING) == 0) {
-			printf("Port %d is now not stopped\n", pi);
-			continue;
-		}
-
-		if (port->flow_list)
-			port_flow_flush(pi);
+		port_flow_flush(pi);
 		rte_eth_dev_close(pi);
-
-		remove_invalid_ports();
-
-		if (rte_atomic16_cmpset(&(port->port_status),
-			RTE_PORT_HANDLING, RTE_PORT_CLOSED) == 0)
-			printf("Port %d cannot be set to closed\n", pi);
 	}
 
+	remove_invalid_ports();
 	printf("Done\n");
 }
 
@@ -2836,20 +2825,20 @@ detach_device(struct rte_device *dev)
 
 	printf("Removing a device...\n");
 
+	RTE_ETH_FOREACH_DEV_OF(sibling, dev) {
+		if (ports[sibling].port_status != RTE_PORT_CLOSED) {
+			if (ports[sibling].port_status != RTE_PORT_STOPPED) {
+				printf("Port %u not stopped\n", sibling);
+				return;
+			}
+			port_flow_flush(sibling);
+		}
+	}
+
 	if (rte_dev_remove(dev) < 0) {
 		TESTPMD_LOG(ERR, "Failed to detach device %s\n", dev->name);
 		return;
 	}
-	RTE_ETH_FOREACH_DEV_OF(sibling, dev) {
-		/* reset mapping between old ports and removed device */
-		rte_eth_devices[sibling].device = NULL;
-		if (ports[sibling].port_status != RTE_PORT_CLOSED) {
-			/* sibling ports are forced to be closed */
-			ports[sibling].port_status = RTE_PORT_CLOSED;
-			printf("Port %u is closed\n", sibling);
-		}
-	}
-
 	remove_invalid_ports();
 
 	printf("Device is detached\n");
@@ -2870,8 +2859,6 @@ detach_port_device(portid_t port_id)
 			return;
 		}
 		printf("Port was not closed\n");
-		if (ports[port_id].flow_list)
-			port_flow_flush(port_id);
 	}
 
 	detach_device(rte_eth_devices[port_id].device);
@@ -2901,12 +2888,7 @@ detach_devargs(char *identifier)
 				rte_eth_iterator_cleanup(&iterator);
 				return;
 			}
-
-			/* sibling ports are forced to be closed */
-			if (ports[port_id].flow_list)
-				port_flow_flush(port_id);
-			ports[port_id].port_status = RTE_PORT_CLOSED;
-			printf("Port %u is now closed\n", port_id);
+			port_flow_flush(port_id);
 		}
 	}
 
@@ -3001,6 +2983,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 	int ret;
+	char link_status[RTE_ETH_LINK_MAX_STR_LEN];
 
 	printf("Checking link statuses...\n");
 	fflush(stdout);
@@ -3020,14 +3003,9 @@ check_all_ports_link_status(uint32_t port_mask)
 			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
-				if (link.link_status)
-					printf(
-					"Port%d Link Up. speed %u Mbps- %s\n",
-					portid, link.link_speed,
-				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex"));
-				else
-					printf("Port %d Link Down\n", portid);
+				rte_eth_link_to_str(link_status,
+					sizeof(link_status), &link);
+				printf("Port %d %s\n", portid, link_status);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -3055,12 +3033,6 @@ check_all_ports_link_status(uint32_t port_mask)
 	}
 }
 
-/*
- * This callback is for remove a port for a device. It has limitation because
- * it is not for multiple port removal for a device.
- * TODO: the device detach invoke will plan to be removed from user side to
- * eal. And convert all PMDs to free port resources on ether device closing.
- */
 static void
 rmv_port_callback(void *arg)
 {
@@ -3117,6 +3089,10 @@ eth_event_callback(portid_t port_id, enum rte_eth_event_type type, void *param,
 		if (rte_eal_alarm_set(100000,
 				rmv_port_callback, (void *)(intptr_t)port_id))
 			fprintf(stderr, "Could not set up deferred device removal\n");
+		break;
+	case RTE_ETH_EVENT_DESTROY:
+		ports[port_id].port_status = RTE_PORT_CLOSED;
+		printf("Port %u is closed\n", port_id);
 		break;
 	default:
 		break;
@@ -3706,7 +3682,7 @@ main(int argc, char** argv)
 			 "Check the core mask argument\n");
 
 	/* Bitrate/latency stats disabled by default */
-#ifdef RTE_LIBRTE_BITRATE
+#ifdef RTE_LIBRTE_BITRATESTATS
 	bitrate_enabled = 0;
 #endif
 #ifdef RTE_LIBRTE_LATENCY_STATS
@@ -3800,7 +3776,7 @@ main(int argc, char** argv)
 #endif
 
 	/* Setup bitrate stats */
-#ifdef RTE_LIBRTE_BITRATE
+#ifdef RTE_LIBRTE_BITRATESTATS
 	if (bitrate_enabled != 0) {
 		bitrate_data = rte_stats_bitrate_create();
 		if (bitrate_data == NULL)

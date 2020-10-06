@@ -847,13 +847,13 @@ ice_dcf_stats_reset(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 ice_dcf_dev_close(struct rte_eth_dev *dev)
 {
 	struct ice_dcf_adapter *adapter = dev->data->dev_private;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return;
+		return 0;
 
 	dev->dev_ops = NULL;
 	dev->rx_pkt_burst = NULL;
@@ -861,6 +861,8 @@ ice_dcf_dev_close(struct rte_eth_dev *dev)
 
 	ice_dcf_uninit_parent_adapter(dev);
 	ice_dcf_uninit_hw(dev, &adapter->real_hw);
+
+	return 0;
 }
 
 static int
@@ -905,8 +907,6 @@ ice_dcf_dev_init(struct rte_eth_dev *eth_dev)
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
-
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	adapter->real_hw.vc_event_msg_cb = ice_dcf_handle_pf_event_msg;
 	if (ice_dcf_init_hw(eth_dev, &adapter->real_hw) != 0) {

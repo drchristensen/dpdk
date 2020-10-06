@@ -388,9 +388,21 @@ struct mlx5_flow_dv_matcher {
 
 #define MLX5_ENCAP_MAX_LEN 132
 
+/* Encap/decap resource key of the hash organization. */
+union mlx5_flow_encap_decap_key {
+	struct {
+		uint32_t ft_type:8;	/**< Flow table type, Rx or Tx. */
+		uint32_t refmt_type:8;	/**< Header reformat type. */
+		uint32_t buf_size:8;	/**< Encap buf size. */
+		uint32_t table_level:8;	/**< Root table or not. */
+		uint32_t cksum;		/**< Encap buf check sum. */
+	};
+	uint64_t v64;			/**< full 64bits value of key */
+};
+
 /* Encap/decap resource structure. */
 struct mlx5_flow_dv_encap_decap_resource {
-	ILIST_ENTRY(uint32_t)next;
+	struct mlx5_hlist_entry entry;
 	/* Pointer to next element. */
 	rte_atomic32_t refcnt; /**< Reference counter. */
 	void *action;
@@ -400,6 +412,7 @@ struct mlx5_flow_dv_encap_decap_resource {
 	uint8_t reformat_type;
 	uint8_t ft_type;
 	uint64_t flags; /**< Flags for RDMA API. */
+	uint32_t idx; /**< Index for the index memory pool. */
 };
 
 /* Tag resource structure. */
@@ -427,7 +440,7 @@ struct mlx5_flow_dv_tag_resource {
 
 /* Modify resource structure */
 struct mlx5_flow_dv_modify_hdr_resource {
-	LIST_ENTRY(mlx5_flow_dv_modify_hdr_resource) next;
+	struct mlx5_hlist_entry entry;
 	/* Pointer to next element. */
 	rte_atomic32_t refcnt; /**< Reference counter. */
 	void *action;
@@ -437,6 +450,17 @@ struct mlx5_flow_dv_modify_hdr_resource {
 	uint64_t flags; /**< Flags for RDMA API. */
 	struct mlx5_modification_cmd actions[];
 	/**< Modification actions. */
+};
+
+/* Modify resource key of the hash organization. */
+union mlx5_flow_modify_hdr_key {
+	struct {
+		uint32_t ft_type:8;	/**< Flow table type, Rx or Tx. */
+		uint32_t actions_num:5;	/**< Number of modification actions. */
+		uint32_t group:19;	/**< Flow group id. */
+		uint32_t cksum;		/**< Actions check sum. */
+	};
+	uint64_t v64;			/**< full 64bits value of key */
 };
 
 /* Jump action resource structure. */

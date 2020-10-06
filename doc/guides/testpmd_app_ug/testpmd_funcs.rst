@@ -218,6 +218,13 @@ For example:
      nvgre
      vxlan-gpe
 
+show port (module_eeprom|eeprom)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Display the EEPROM information of a port::
+
+   testpmd> show port (port_id) (module_eeprom|eeprom)
+
 show port rss reta
 ~~~~~~~~~~~~~~~~~~
 
@@ -709,6 +716,36 @@ Set the forwarding ports hexadecimal mask::
    testpmd> set portmask (mask)
 
 This is equivalent to the ``--portmask`` command-line option.
+
+set record-core-cycles
+~~~~~~~~~~~~~~~~~~~~~~
+
+Set the recording of CPU cycles::
+
+   testpmd> set record-core-cycles (on|off)
+
+Where:
+
+* ``on`` enables measurement of CPU cycles per packet.
+
+* ``off`` disables measurement of CPU cycles per packet.
+
+This is equivalent to the ``--record-core-cycles command-line`` option.
+
+set record-burst-stats
+~~~~~~~~~~~~~~~~~~~~~~
+
+Set the displaying of RX and TX bursts::
+
+   testpmd> set record-burst-stats (on|off)
+
+Where:
+
+* ``on`` enables display of RX and TX bursts.
+
+* ``off`` disables display of RX and TX bursts.
+
+This is equivalent to the ``--record-burst-stats command-line`` option.
 
 set burst
 ~~~~~~~~~
@@ -2889,19 +2926,22 @@ Add the port traffic management private shaper profile::
 
    testpmd> add port tm node shaper profile (port_id) (shaper_profile_id) \
    (cmit_tb_rate) (cmit_tb_size) (peak_tb_rate) (peak_tb_size) \
-   (packet_length_adjust)
+   (packet_length_adjust) (packet_mode)
 
 where:
 
 * ``shaper_profile id``: Shaper profile ID for the new profile.
-* ``cmit_tb_rate``: Committed token bucket rate (bytes per second).
-* ``cmit_tb_size``: Committed token bucket size (bytes).
-* ``peak_tb_rate``: Peak token bucket rate (bytes per second).
-* ``peak_tb_size``: Peak token bucket size (bytes).
+* ``cmit_tb_rate``: Committed token bucket rate (bytes per second or packets per second).
+* ``cmit_tb_size``: Committed token bucket size (bytes or packets).
+* ``peak_tb_rate``: Peak token bucket rate (bytes per second or packets per second).
+* ``peak_tb_size``: Peak token bucket size (bytes or packets).
 * ``packet_length_adjust``: The value (bytes) to be added to the length of
   each packet for the purpose of shaping. This parameter value can be used to
   correct the packet length with the framing overhead bytes that are consumed
   on the wire.
+* ``packet_mode``: Shaper configured in packet mode. This parameter value if
+  zero, configures shaper in byte mode and if non-zero configures it in packet
+  mode.
 
 Delete port traffic management private shaper profile
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3022,6 +3062,33 @@ where:
 * ``shaper_profile_id``: Shaper profile ID of the private shaper to be used by
   the node.
 * ``n_sp_priorities``: Number of strict priorities.
+* ``stats_mask``: Mask of statistics counter types to be enabled for this node.
+* ``n_shared_shapers``: Number of shared shapers.
+* ``shared_shaper_id``: Shared shaper id.
+
+Add port traffic management hierarchy nonleaf node with packet mode
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add nonleaf node with packet mode to port traffic management hierarchy::
+
+   testpmd> add port tm nonleaf node pktmode (port_id) (node_id) (parent_node_id) \
+   (priority) (weight) (level_id) (shaper_profile_id) \
+   (n_sp_priorities) (stats_mask) (n_shared_shapers) \
+   [(shared_shaper_0) (shared_shaper_1) ...] \
+
+where:
+
+* ``parent_node_id``: Node ID of the parent.
+* ``priority``: Node priority (highest node priority is zero). This is used by
+  the SP algorithm running on the parent node for scheduling this node.
+* ``weight``: Node weight (lowest weight is one). The node weight is relative
+  to the weight sum of all siblings that have the same priority. It is used by
+  the WFQ algorithm running on the parent node for scheduling this node.
+* ``level_id``: Hierarchy level of the node.
+* ``shaper_profile_id``: Shaper profile ID of the private shaper to be used by
+  the node.
+* ``n_sp_priorities``: Number of strict priorities. Packet mode is enabled on
+  all of them.
 * ``stats_mask``: Mask of statistics counter types to be enabled for this node.
 * ``n_shared_shapers``: Number of shared shapers.
 * ``shared_shaper_id``: Shared shaper id.

@@ -303,6 +303,7 @@ struct rte_eth_stats {
 #define ETH_SPEED_NUM_56G      56000 /**<  56 Gbps */
 #define ETH_SPEED_NUM_100G    100000 /**< 100 Gbps */
 #define ETH_SPEED_NUM_200G    200000 /**< 200 Gbps */
+#define ETH_SPEED_NUM_UNKNOWN UINT32_MAX /**< Unknown */
 
 /**
  * A structure used to retrieve link-level information of an Ethernet port.
@@ -322,6 +323,7 @@ struct rte_eth_link {
 #define ETH_LINK_UP          1 /**< Link is up (see link_status). */
 #define ETH_LINK_FIXED       0 /**< No autonegotiation (see link_autoneg). */
 #define ETH_LINK_AUTONEG     1 /**< Autonegotiated (see link_autoneg). */
+#define RTE_ETH_LINK_MAX_STR_LEN 40 /**< Max length of default link string. */
 
 /**
  * A structure used to configure the ring threshold registers of an RX/TX
@@ -551,6 +553,36 @@ struct rte_eth_rss_conf {
 #define RTE_ETH_RSS_L3_PRE56	   (1ULL << 54)
 #define RTE_ETH_RSS_L3_PRE64	   (1ULL << 53)
 #define RTE_ETH_RSS_L3_PRE96	   (1ULL << 52)
+
+/*
+ * Use the following macros to combine with the above layers
+ * to choose inner and outer layers or both for RSS computation.
+ * Bits 50 and 51 are reserved for this.
+ */
+
+/**
+ * level 0, requests the default behavior.
+ * Depending on the packet type, it can mean outermost, innermost,
+ * anything in between or even no RSS.
+ * It basically stands for the innermost encapsulation level RSS
+ * can be performed on according to PMD and device capabilities.
+ */
+#define ETH_RSS_LEVEL_PMD_DEFAULT       (0ULL << 50)
+
+/**
+ * level 1, requests RSS to be performed on the outermost packet
+ * encapsulation level.
+ */
+#define ETH_RSS_LEVEL_OUTERMOST         (1ULL << 50)
+
+/**
+ * level 2, requests RSS to be performed on the specified inner packet
+ * encapsulation level, from outermost to innermost (lower to higher values).
+ */
+#define ETH_RSS_LEVEL_INNERMOST         (2ULL << 50)
+#define ETH_RSS_LEVEL_MASK              (3ULL << 50)
+
+#define ETH_RSS_LEVEL(rss_hf) ((rss_hf & ETH_RSS_LEVEL_MASK) >> 50)
 
 /**
  * For input set change of hash filter, if SRC_ONLY and DST_ONLY of
@@ -1420,6 +1452,7 @@ struct rte_eth_rxq_info {
 	struct rte_eth_rxconf conf; /**< queue config parameters. */
 	uint8_t scattered_rx;       /**< scattered packets RX supported. */
 	uint16_t nb_desc;           /**< configured number of RXDs. */
+	uint16_t rx_buf_size;       /**< hardware receive buffer size. */
 } __rte_cache_min_aligned;
 
 /**
@@ -1621,11 +1654,6 @@ struct rte_eth_dev_owner {
 	char name[RTE_ETH_MAX_OWNER_NAME_LEN]; /**< The owner name. */
 };
 
-/**
- * Port is released (i.e. totally freed and data erased) on close.
- * Temporary flag for PMD migration to new rte_eth_dev_close() behaviour.
- */
-#define RTE_ETH_DEV_CLOSE_REMOVE 0x0001
 /** Device supports link state interrupt */
 #define RTE_ETH_DEV_INTR_LSC     0x0002
 /** Device is a bonded slave */
@@ -1723,8 +1751,7 @@ rte_eth_find_next_of(uint16_t port_id_start,
  */
 __rte_experimental
 uint16_t
-rte_eth_find_next_sibling(uint16_t port_id_start,
-		uint16_t ref_port_id);
+rte_eth_find_next_sibling(uint16_t port_id_start, uint16_t ref_port_id);
 
 /**
  * Macro to iterate over all ethdev ports sharing the same rte_device
@@ -2250,8 +2277,7 @@ int rte_eth_dev_set_link_down(uint16_t port_id);
 
 /**
  * Close a stopped Ethernet device. The device cannot be restarted!
- * The function frees all port resources if the driver supports
- * the flag RTE_ETH_DEV_CLOSE_REMOVE.
+ * The function frees all port resources.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
@@ -2374,15 +2400,16 @@ int rte_eth_allmulticast_disable(uint16_t port_id);
 int rte_eth_allmulticast_get(uint16_t port_id);
 
 /**
- * Retrieve the status (ON/OFF), the speed (in Mbps) and the mode (HALF-DUPLEX
- * or FULL-DUPLEX) of the physical link of an Ethernet device. It might need
- * to wait up to 9 seconds in it.
+ * Retrieve the link status (up/down), the duplex mode (half/full),
+ * the negotiation (auto/fixed), and if available, the speed (Mbps).
+ *
+ * It might need to wait up to 9 seconds.
+ * @see rte_eth_link_get_nowait.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
  * @param link
- *   A pointer to an *rte_eth_link* structure to be filled with
- *   the status, the speed and the mode of the Ethernet device link.
+ *   Link information written back.
  * @return
  *   - (0) if successful.
  *   - (-ENOTSUP) if the function is not supported in PMD driver.
@@ -2391,21 +2418,57 @@ int rte_eth_allmulticast_get(uint16_t port_id);
 int rte_eth_link_get(uint16_t port_id, struct rte_eth_link *link);
 
 /**
- * Retrieve the status (ON/OFF), the speed (in Mbps) and the mode (HALF-DUPLEX
- * or FULL-DUPLEX) of the physical link of an Ethernet device. It is a no-wait
- * version of rte_eth_link_get().
+ * Retrieve the link status (up/down), the duplex mode (half/full),
+ * the negotiation (auto/fixed), and if available, the speed (Mbps).
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
  * @param link
- *   A pointer to an *rte_eth_link* structure to be filled with
- *   the status, the speed and the mode of the Ethernet device link.
+ *   Link information written back.
  * @return
  *   - (0) if successful.
  *   - (-ENOTSUP) if the function is not supported in PMD driver.
  *   - (-ENODEV) if *port_id* invalid.
  */
 int rte_eth_link_get_nowait(uint16_t port_id, struct rte_eth_link *link);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * The function converts a link_speed to a string. It handles all special
+ * values like unknown or none speed.
+ *
+ * @param link_speed
+ *   link_speed of rte_eth_link struct
+ * @return
+ *   Link speed in textual format. It's pointer to immutable memory.
+ *   No free is required.
+ */
+__rte_experimental
+const char *rte_eth_link_speed_to_str(uint32_t link_speed);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * The function converts a rte_eth_link struct representing a link status to
+ * a string.
+ *
+ * @param str
+ *   A pointer to a string to be filled with textual representation of
+ *   device status. At least ETH_LINK_MAX_STR_LEN bytes should be allocated to
+ *   store default link status text.
+ * @param len
+ *   Length of available memory at 'str' string.
+ * @param eth_link
+ *   Link status returned by rte_eth_link_get function
+ * @return
+ *   Number of bytes written to str array.
+ */
+__rte_experimental
+int rte_eth_link_to_str(char *str, size_t len,
+			const struct rte_eth_link *eth_link);
 
 /**
  * Retrieve the general I/O statistics of an Ethernet device.
@@ -4545,11 +4608,11 @@ rte_eth_rx_queue_count(uint16_t port_id, uint16_t queue_id)
 
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -EINVAL);
 	dev = &rte_eth_devices[port_id];
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_queue_count, -ENOTSUP);
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->rx_queue_count, -ENOTSUP);
 	if (queue_id >= dev->data->nb_rx_queues)
 		return -EINVAL;
 
-	return (int)(*dev->dev_ops->rx_queue_count)(dev, queue_id);
+	return (int)(*dev->rx_queue_count)(dev, queue_id);
 }
 
 /**
@@ -4567,14 +4630,14 @@ rte_eth_rx_queue_count(uint16_t port_id, uint16_t queue_id)
  *  - (-ENODEV) if *port_id* invalid.
  *  - (-ENOTSUP) if the device does not support this function
  */
+__rte_deprecated
 static inline int
 rte_eth_rx_descriptor_done(uint16_t port_id, uint16_t queue_id, uint16_t offset)
 {
 	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_descriptor_done, -ENOTSUP);
-	return (*dev->dev_ops->rx_descriptor_done)( \
-		dev->data->rx_queues[queue_id], offset);
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->rx_descriptor_done, -ENOTSUP);
+	return (*dev->rx_descriptor_done)(dev->data->rx_queues[queue_id], offset);
 }
 
 #define RTE_ETH_RX_DESC_AVAIL    0 /**< Desc available for hw. */
@@ -4629,10 +4692,10 @@ rte_eth_rx_descriptor_status(uint16_t port_id, uint16_t queue_id,
 	if (queue_id >= dev->data->nb_rx_queues)
 		return -ENODEV;
 #endif
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_descriptor_status, -ENOTSUP);
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->rx_descriptor_status, -ENOTSUP);
 	rxq = dev->data->rx_queues[queue_id];
 
-	return (*dev->dev_ops->rx_descriptor_status)(rxq, offset);
+	return (*dev->rx_descriptor_status)(rxq, offset);
 }
 
 #define RTE_ETH_TX_DESC_FULL    0 /**< Desc filled for hw, waiting xmit. */
@@ -4686,10 +4749,10 @@ static inline int rte_eth_tx_descriptor_status(uint16_t port_id,
 	if (queue_id >= dev->data->nb_tx_queues)
 		return -ENODEV;
 #endif
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->tx_descriptor_status, -ENOTSUP);
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->tx_descriptor_status, -ENOTSUP);
 	txq = dev->data->tx_queues[queue_id];
 
-	return (*dev->dev_ops->tx_descriptor_status)(txq, offset);
+	return (*dev->tx_descriptor_status)(txq, offset);
 }
 
 /**

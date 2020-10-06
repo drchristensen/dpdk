@@ -76,7 +76,6 @@ enum {
 	/**< allocate mempool natively, use rte_pktmbuf_pool_create_extbuf */
 };
 
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
 /**
  * The data structure associated with RX and TX packet burst statistics
  * that are recorded for each forwarding stream.
@@ -84,7 +83,6 @@ enum {
 struct pkt_burst_stats {
 	unsigned int pkt_burst_spread[MAX_PKT_BURST];
 };
-#endif
 
 /** Information for a given RSS type. */
 struct rss_type_info {
@@ -129,13 +127,9 @@ struct fwd_stream {
 	uint64_t rx_bad_outer_l4_csum;
 	/**< received packets has bad outer l4 checksum */
 	unsigned int gro_times;	/**< GRO operation times */
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	uint64_t     core_cycles; /**< used for RX and TX processing */
-#endif
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
 	struct pkt_burst_stats rx_burst_stats;
 	struct pkt_burst_stats tx_burst_stats;
-#endif
 };
 
 /** Descriptor for a single flow. */
@@ -301,6 +295,8 @@ extern uint16_t nb_rx_queue_stats_mappings;
 extern uint8_t xstats_hide_zero; /**< Hide zero values for xstats display */
 
 /* globals used for configuration */
+extern uint8_t record_core_cycles; /**< Enables measurement of CPU cycles */
+extern uint8_t record_burst_stats; /**< Enables display of RX and TX bursts */
 extern uint16_t verbose_level; /**< Drives messages being displayed, if any. */
 extern int testpmd_logtype; /**< Log type for testpmd logs */
 extern uint8_t  interactive;
@@ -407,7 +403,7 @@ extern uint8_t latencystats_enabled;
 extern lcoreid_t latencystats_lcore_id;
 #endif
 
-#ifdef RTE_LIBRTE_BITRATE
+#ifdef RTE_LIBRTE_BITRATESTATS
 extern lcoreid_t bitrate_lcore_id;
 extern uint8_t bitrate_enabled;
 #endif
@@ -681,6 +677,34 @@ port_pci_reg_write(struct rte_port *port, uint32_t reg_off, uint32_t reg_v)
 #define port_id_pci_reg_write(pt_id, reg_off, reg_value) \
 	port_pci_reg_write(&ports[(pt_id)], (reg_off), (reg_value))
 
+static inline void
+get_start_cycles(uint64_t *start_tsc)
+{
+	if (record_core_cycles)
+		*start_tsc = rte_rdtsc();
+}
+
+static inline void
+get_end_cycles(struct fwd_stream *fs, uint64_t start_tsc)
+{
+	if (record_core_cycles)
+		fs->core_cycles += rte_rdtsc() - start_tsc;
+}
+
+static inline void
+inc_rx_burst_stats(struct fwd_stream *fs, uint16_t nb_rx)
+{
+	if (record_burst_stats)
+		fs->rx_burst_stats.pkt_burst_spread[nb_rx]++;
+}
+
+static inline void
+inc_tx_burst_stats(struct fwd_stream *fs, uint16_t nb_tx)
+{
+	if (record_burst_stats)
+		fs->tx_burst_stats.pkt_burst_spread[nb_tx]++;
+}
+
 /* Prototypes */
 unsigned int parse_item_list(char* str, const char* item_name,
 			unsigned int max_items,
@@ -697,6 +721,8 @@ void nic_stats_mapping_display(portid_t port_id);
 void device_infos_display(const char *identifier);
 void port_infos_display(portid_t port_id);
 void port_summary_display(portid_t port_id);
+void port_eeprom_display(portid_t port_id);
+void port_module_eeprom_display(portid_t port_id);
 void port_summary_header_display(void);
 void port_offload_cap_display(portid_t port_id);
 void rx_queue_infos_display(portid_t port_idi, uint16_t queue_id);
@@ -772,6 +798,8 @@ void set_qmap(portid_t port_id, uint8_t is_rx, uint16_t queue_id, uint8_t map_va
 
 void set_xstats_hide_zero(uint8_t on_off);
 
+void set_record_core_cycles(uint8_t on_off);
+void set_record_burst_stats(uint8_t on_off);
 void set_verbose_level(uint16_t vb_level);
 void set_tx_pkt_segments(unsigned *seg_lengths, unsigned nb_segs);
 void show_tx_pkt_segments(void);

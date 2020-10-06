@@ -700,6 +700,7 @@ check_link_status(uint32_t port_mask)
 	uint16_t portid;
 	struct rte_eth_link link;
 	int ret, link_status = 0;
+	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 	printf("\nChecking link status\n");
 	RTE_ETH_FOREACH_DEV(portid) {
@@ -715,15 +716,12 @@ check_link_status(uint32_t port_mask)
 		}
 
 		/* Print link status */
-		if (link.link_status) {
-			printf(
-				"Port %d Link Up. Speed %u Mbps - %s\n",
-				portid, link.link_speed,
-				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-				("full-duplex") : ("half-duplex"));
+		rte_eth_link_to_str(link_status_text,
+			sizeof(link_status_text), &link);
+		printf("Port %d %s\n", portid, link_status_text);
+
+		if (link.link_status)
 			link_status = 1;
-		} else
-			printf("Port %d Link Down\n", portid);
 	}
 	return link_status;
 }
@@ -734,7 +732,7 @@ configure_rawdev_queue(uint32_t dev_id)
 	struct rte_ioat_rawdev_config dev_config = { .ring_size = ring_size };
 	struct rte_rawdev_info info = { .dev_private = &dev_config };
 
-	if (rte_rawdev_configure(dev_id, &info) != 0) {
+	if (rte_rawdev_configure(dev_id, &info, sizeof(dev_config)) != 0) {
 		rte_exit(EXIT_FAILURE,
 			"Error with rte_rawdev_configure()\n");
 	}
@@ -757,7 +755,7 @@ assign_rawdevs(void)
 			do {
 				if (rdev_id == rte_rawdev_count())
 					goto end;
-				rte_rawdev_info_get(rdev_id++, &rdev_info);
+				rte_rawdev_info_get(rdev_id++, &rdev_info, 0);
 			} while (rdev_info.driver_name == NULL ||
 					strcmp(rdev_info.driver_name,
 						IOAT_PMD_RAWDEV_NAME_STR) != 0);

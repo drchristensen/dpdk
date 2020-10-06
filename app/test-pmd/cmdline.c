@@ -166,6 +166,9 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"show port (info|stats|summary|xstats|fdir|stat_qmap|dcb_tc|cap) (port_id|all)\n"
 			"    Display information for port_id, or all.\n\n"
 
+			"show port port_id (module_eeprom|eeprom)\n"
+			"    Display the module EEPROM or EEPROM information for port_id.\n\n"
+
 			"show port X rss reta (size) (mask0,mask1,...)\n"
 			"    Display the rss redirection table entry indicated"
 			" by masks on port X. size is used to indicate the"
@@ -529,6 +532,12 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Set the option to hide the zero values"
 			" for xstats display.\n"
 
+			"set record-core-cycles on|off\n"
+			"    Set the option to enable measurement of CPU cycles.\n"
+
+			"set record-burst-stats on|off\n"
+			"    Set the option to enable display of RX and TX bursts.\n"
+
 			"set port (port_id) vf (vf_id) rx|tx on|off\n"
 			"    Enable/Disable a VF receive/tranmit from a port\n\n"
 
@@ -794,7 +803,8 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"receive buffers available.\n\n"
 
 			"port config all rss (all|default|ip|tcp|udp|sctp|"
-			"ether|port|vxlan|geneve|nvgre|vxlan-gpe|none|<flowtype_id>)\n"
+			"ether|port|vxlan|geneve|nvgre|vxlan-gpe|none|level-default|"
+			"level-outer|level-inner|<flowtype_id>)\n"
 			"    Set the RSS mode.\n\n"
 
 			"port config port-id rss reta (hash,queue)[,(hash,queue)]\n"
@@ -1192,7 +1202,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"add port tm node shaper profile (port_id) (shaper_profile_id)"
 			" (cmit_tb_rate) (cmit_tb_size) (peak_tb_rate) (peak_tb_size)"
-			" (packet_length_adjust)\n"
+			" (packet_length_adjust) (packet_mode)\n"
 			"       Add port tm node private shaper profile.\n\n"
 
 			"del port tm node shaper profile (port_id) (shaper_profile_id)\n"
@@ -1223,6 +1233,12 @@ static void cmd_help_long_parsed(void *parsed_result,
 			" (n_sp_priorities) (stats_mask) (n_shared_shapers)"
 			" [(shared_shaper_id_0) (shared_shaper_id_1)...]\n"
 			"       Add port tm nonleaf node.\n\n"
+
+			"add port tm nonleaf node pktmode (port_id) (node_id) (parent_node_id)"
+			" (priority) (weight) (level_id) (shaper_profile_id)"
+			" (n_sp_priorities) (stats_mask) (n_shared_shapers)"
+			" [(shared_shaper_id_0) (shared_shaper_id_1)...]\n"
+			"       Add port tm nonleaf node with pkt mode enabled.\n\n"
 
 			"add port tm leaf node (port_id) (node_id) (parent_node_id)"
 			" (priority) (weight) (level_id) (shaper_profile_id)"
@@ -2334,7 +2350,16 @@ cmd_config_rss_parsed(void *parsed_result,
 		rss_conf.rss_hf = ETH_RSS_GTPU;
 	else if (!strcmp(res->value, "none"))
 		rss_conf.rss_hf = 0;
-	else if (!strcmp(res->value, "default"))
+	else if (!strcmp(res->value, "level-default")) {
+		rss_hf &= (~ETH_RSS_LEVEL_MASK);
+		rss_conf.rss_hf = (rss_hf | ETH_RSS_LEVEL_PMD_DEFAULT);
+	} else if (!strcmp(res->value, "level-outer")) {
+		rss_hf &= (~ETH_RSS_LEVEL_MASK);
+		rss_conf.rss_hf = (rss_hf | ETH_RSS_LEVEL_OUTERMOST);
+	} else if (!strcmp(res->value, "level-inner")) {
+		rss_hf &= (~ETH_RSS_LEVEL_MASK);
+		rss_conf.rss_hf = (rss_hf | ETH_RSS_LEVEL_INNERMOST);
+	} else if (!strcmp(res->value, "default"))
 		use_default = 1;
 	else if (isdigit(res->value[0]) && atoi(res->value) > 0 &&
 						atoi(res->value) < 64)
@@ -2393,7 +2418,8 @@ cmdline_parse_inst_t cmd_config_rss = {
 	.data = NULL,
 	.help_str = "port config all rss "
 		"all|default|eth|vlan|ip|tcp|udp|sctp|ether|port|vxlan|geneve|"
-		"nvgre|vxlan-gpe|l2tpv3|esp|ah|pfcp|none|<flowtype_id>",
+		"nvgre|vxlan-gpe|l2tpv3|esp|ah|pfcp|none|level-default|"
+		"level-outer|level-inner|<flowtype_id>",
 	.tokens = {
 		(void *)&cmd_config_rss_port,
 		(void *)&cmd_config_rss_keyword,
@@ -4268,6 +4294,9 @@ cmd_tx_vlan_set_parsed(void *parsed_result,
 {
 	struct cmd_tx_vlan_set_result *res = parsed_result;
 
+	if (port_id_is_invalid(res->port_id, ENABLED_WARN))
+		return;
+
 	if (!port_is_stopped(res->port_id)) {
 		printf("Please stop port %d first\n", res->port_id);
 		return;
@@ -4321,6 +4350,9 @@ cmd_tx_vlan_set_qinq_parsed(void *parsed_result,
 			    __rte_unused void *data)
 {
 	struct cmd_tx_vlan_set_qinq_result *res = parsed_result;
+
+	if (port_id_is_invalid(res->port_id, ENABLED_WARN))
+		return;
 
 	if (!port_is_stopped(res->port_id)) {
 		printf("Please stop port %d first\n", res->port_id);
@@ -4434,6 +4466,9 @@ cmd_tx_vlan_reset_parsed(void *parsed_result,
 			 __rte_unused void *data)
 {
 	struct cmd_tx_vlan_reset_result *res = parsed_result;
+
+	if (port_id_is_invalid(res->port_id, ENABLED_WARN))
+		return;
 
 	if (!port_is_stopped(res->port_id)) {
 		printf("Please stop port %d first\n", res->port_id);
@@ -7682,6 +7717,51 @@ cmdline_parse_inst_t cmd_showdevice = {
 		NULL,
 	},
 };
+
+/* *** SHOW MODULE EEPROM/EEPROM port INFO *** */
+struct cmd_showeeprom_result {
+	cmdline_fixed_string_t show;
+	cmdline_fixed_string_t port;
+	uint16_t portnum;
+	cmdline_fixed_string_t type;
+};
+
+static void cmd_showeeprom_parsed(void *parsed_result,
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
+{
+	struct cmd_showeeprom_result *res = parsed_result;
+
+	if (!strcmp(res->type, "eeprom"))
+		port_eeprom_display(res->portnum);
+	else if (!strcmp(res->type, "module_eeprom"))
+		port_module_eeprom_display(res->portnum);
+	else
+		printf("Unknown argument\n");
+}
+
+cmdline_parse_token_string_t cmd_showeeprom_show =
+	TOKEN_STRING_INITIALIZER(struct cmd_showeeprom_result, show, "show");
+cmdline_parse_token_string_t cmd_showeeprom_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_showeeprom_result, port, "port");
+cmdline_parse_token_num_t cmd_showeeprom_portnum =
+	TOKEN_NUM_INITIALIZER(struct cmd_showeeprom_result, portnum, UINT16);
+cmdline_parse_token_string_t cmd_showeeprom_type =
+	TOKEN_STRING_INITIALIZER(struct cmd_showeeprom_result, type, "module_eeprom#eeprom");
+
+cmdline_parse_inst_t cmd_showeeprom = {
+	.f = cmd_showeeprom_parsed,
+	.data = NULL,
+	.help_str = "show port <port_id> module_eeprom|eeprom",
+	.tokens = {
+		(void *)&cmd_showeeprom_show,
+		(void *)&cmd_showeeprom_port,
+		(void *)&cmd_showeeprom_portnum,
+		(void *)&cmd_showeeprom_type,
+		NULL,
+	},
+};
+
 /* *** SHOW QUEUE INFO *** */
 struct cmd_showqueue_result {
 	cmdline_fixed_string_t show;
@@ -8331,6 +8411,90 @@ cmdline_parse_inst_t cmd_set_xstats_hide_zero = {
 		(void *)&cmd_set_xstats_hide_zero_keyword,
 		(void *)&cmd_set_xstats_hide_zero_name,
 		(void *)&cmd_set_xstats_hide_zero_on_off,
+		NULL,
+	},
+};
+
+/* *** SET OPTION TO ENABLE MEASUREMENT OF CPU CYCLES *** */
+struct cmd_set_record_core_cycles_result {
+	cmdline_fixed_string_t keyword;
+	cmdline_fixed_string_t name;
+	cmdline_fixed_string_t on_off;
+};
+
+static void
+cmd_set_record_core_cycles_parsed(void *parsed_result,
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
+{
+	struct cmd_set_record_core_cycles_result *res;
+	uint16_t on_off = 0;
+
+	res = parsed_result;
+	on_off = !strcmp(res->on_off, "on") ? 1 : 0;
+	set_record_core_cycles(on_off);
+}
+
+cmdline_parse_token_string_t cmd_set_record_core_cycles_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_record_core_cycles_result,
+				 keyword, "set");
+cmdline_parse_token_string_t cmd_set_record_core_cycles_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_record_core_cycles_result,
+				 name, "record-core-cycles");
+cmdline_parse_token_string_t cmd_set_record_core_cycles_on_off =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_record_core_cycles_result,
+				 on_off, "on#off");
+
+cmdline_parse_inst_t cmd_set_record_core_cycles = {
+	.f = cmd_set_record_core_cycles_parsed,
+	.data = NULL,
+	.help_str = "set record-core-cycles on|off",
+	.tokens = {
+		(void *)&cmd_set_record_core_cycles_keyword,
+		(void *)&cmd_set_record_core_cycles_name,
+		(void *)&cmd_set_record_core_cycles_on_off,
+		NULL,
+	},
+};
+
+/* *** SET OPTION TO ENABLE DISPLAY OF RX AND TX BURSTS *** */
+struct cmd_set_record_burst_stats_result {
+	cmdline_fixed_string_t keyword;
+	cmdline_fixed_string_t name;
+	cmdline_fixed_string_t on_off;
+};
+
+static void
+cmd_set_record_burst_stats_parsed(void *parsed_result,
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
+{
+	struct cmd_set_record_burst_stats_result *res;
+	uint16_t on_off = 0;
+
+	res = parsed_result;
+	on_off = !strcmp(res->on_off, "on") ? 1 : 0;
+	set_record_burst_stats(on_off);
+}
+
+cmdline_parse_token_string_t cmd_set_record_burst_stats_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_record_burst_stats_result,
+				 keyword, "set");
+cmdline_parse_token_string_t cmd_set_record_burst_stats_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_record_burst_stats_result,
+				 name, "record-burst-stats");
+cmdline_parse_token_string_t cmd_set_record_burst_stats_on_off =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_record_burst_stats_result,
+				 on_off, "on#off");
+
+cmdline_parse_inst_t cmd_set_record_burst_stats = {
+	.f = cmd_set_record_burst_stats_parsed,
+	.data = NULL,
+	.help_str = "set record-burst-stats on|off",
+	.tokens = {
+		(void *)&cmd_set_record_burst_stats_keyword,
+		(void *)&cmd_set_record_burst_stats_name,
+		(void *)&cmd_set_record_burst_stats_on_off,
 		NULL,
 	},
 };
@@ -19400,6 +19564,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_load_from_file,
 	(cmdline_parse_inst_t *)&cmd_showport,
 	(cmdline_parse_inst_t *)&cmd_showqueue,
+	(cmdline_parse_inst_t *)&cmd_showeeprom,
 	(cmdline_parse_inst_t *)&cmd_showportall,
 	(cmdline_parse_inst_t *)&cmd_showdevice,
 	(cmdline_parse_inst_t *)&cmd_showcfg,
@@ -19487,6 +19652,8 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_set_fwd_eth_peer,
 	(cmdline_parse_inst_t *)&cmd_set_qmap,
 	(cmdline_parse_inst_t *)&cmd_set_xstats_hide_zero,
+	(cmdline_parse_inst_t *)&cmd_set_record_core_cycles,
+	(cmdline_parse_inst_t *)&cmd_set_record_burst_stats,
 	(cmdline_parse_inst_t *)&cmd_operate_port,
 	(cmdline_parse_inst_t *)&cmd_operate_specific_port,
 	(cmdline_parse_inst_t *)&cmd_operate_attach_port,
@@ -19656,6 +19823,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_del_port_tm_node_wred_profile,
 	(cmdline_parse_inst_t *)&cmd_set_port_tm_node_shaper_profile,
 	(cmdline_parse_inst_t *)&cmd_add_port_tm_nonleaf_node,
+	(cmdline_parse_inst_t *)&cmd_add_port_tm_nonleaf_node_pmode,
 	(cmdline_parse_inst_t *)&cmd_add_port_tm_leaf_node,
 	(cmdline_parse_inst_t *)&cmd_del_port_tm_node,
 	(cmdline_parse_inst_t *)&cmd_set_port_tm_node_parent,

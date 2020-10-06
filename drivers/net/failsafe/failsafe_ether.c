@@ -322,10 +322,10 @@ fs_dev_stats_save(struct sub_device *sdev)
 	if (err) {
 		uint64_t timestamp = sdev->stats_snapshot.timestamp;
 
-		WARN("Could not access latest statistics from sub-device %d.\n",
+		WARN("Could not access latest statistics from sub-device %d.",
 			 SUB_ID(sdev));
 		if (timestamp != 0)
-			WARN("Using latest snapshot taken before %"PRIu64" seconds.\n",
+			WARN("Using latest snapshot taken before %"PRIu64" seconds.",
 				 (rte_rdtsc() - timestamp) / rte_get_tsc_hz());
 	}
 	failsafe_stats_increment
@@ -602,9 +602,9 @@ failsafe_eth_lsc_event_callback(uint16_t port_id __rte_unused,
 	ret = dev->dev_ops->link_update(dev, 0);
 	/* We must pass on the LSC event */
 	if (ret)
-		return _rte_eth_dev_callback_process(dev,
-						     RTE_ETH_EVENT_INTR_LSC,
-						     NULL);
+		return rte_eth_dev_callback_process(dev,
+						    RTE_ETH_EVENT_INTR_LSC,
+						    NULL);
 	else
 		return 0;
 }

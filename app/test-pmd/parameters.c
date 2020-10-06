@@ -66,11 +66,12 @@ usage(char* progname)
 	       "--tx-ip=SRC,DST | --tx-udp=PORT | "
 #endif
 	       "--pkt-filter-mode= |"
-	       "--rss-ip | --rss-udp | "
-	       "--rxpt= | --rxht= | --rxwt= | --rxfreet= | "
-	       "--txpt= | --txht= | --txwt= | --txfreet= | "
+	       "--rss-ip | --rss-udp | --rss-level-inner | --rss-level-outer |"
+	       "--rxpt= | --rxht= | --rxwt= |"
+	       " --rxfreet= | --txpt= | --txht= | --txwt= | --txfreet= | "
 	       "--txrst= | --tx-offloads= | | --rx-offloads= | "
-	       "--vxlan-gpe-port= ]\n",
+	       "--vxlan-gpe-port= | --record-core-cycles | "
+	       "--record-burst-stats]\n",
 	       progname);
 #ifdef RTE_LIBRTE_CMDLINE
 	printf("  --interactive: run in interactive mode.\n");
@@ -151,6 +152,8 @@ usage(char* progname)
 			"swap L2,L3,L4 for MAC, IPv4/IPv6 and TCP/UDP only.\n");
 	printf("  --rss-ip: set RSS functions to IPv4/IPv6 only .\n");
 	printf("  --rss-udp: set RSS functions to IPv4/IPv6 + UDP.\n");
+	printf("  --rss-level-inner: set RSS hash level to innermost\n");
+	printf("  --rss-level-outer: set RSS hash level to outermost\n");
 	printf("  --rxq=N: set the number of RX queues per port to N.\n");
 	printf("  --rxd=N: set the number of descriptors in RX rings to N.\n");
 	printf("  --txq=N: set the number of TX queues per port to N.\n");
@@ -216,6 +219,8 @@ usage(char* progname)
 	       "valid only with --mp-alloc=anon\n");
 	printf("  --rx-mq-mode=0xX: hexadecimal bitmask of RX mq mode can be "
 	       "enabled\n");
+	printf("  --record-core-cycles: enable measurement of CPU cycles.\n");
+	printf("  --record-burst-stats: enable display of RX and TX bursts.\n");
 }
 
 #ifdef RTE_LIBRTE_CMDLINE
@@ -613,7 +618,7 @@ launch_args_parse(int argc, char** argv)
 #ifdef RTE_LIBRTE_LATENCY_STATS
 		{ "latencystats",               1, 0, 0 },
 #endif
-#ifdef RTE_LIBRTE_BITRATE
+#ifdef RTE_LIBRTE_BITRATESTATS
 		{ "bitrate-stats",              1, 0, 0 },
 #endif
 		{ "disable-crc-strip",          0, 0, 0 },
@@ -632,6 +637,8 @@ launch_args_parse(int argc, char** argv)
 		{ "forward-mode",               1, 0, 0 },
 		{ "rss-ip",			0, 0, 0 },
 		{ "rss-udp",			0, 0, 0 },
+		{ "rss-level-outer",		0, 0, 0 },
+		{ "rss-level-inner",		0, 0, 0 },
 		{ "rxq",			1, 0, 0 },
 		{ "txq",			1, 0, 0 },
 		{ "rxd",			1, 0, 0 },
@@ -677,6 +684,8 @@ launch_args_parse(int argc, char** argv)
 		{ "noisy-lkup-num-reads-writes", 1, 0, 0 },
 		{ "no-iova-contig",             0, 0, 0 },
 		{ "rx-mq-mode",                 1, 0, 0 },
+		{ "record-core-cycles",         0, 0, 0 },
+		{ "record-burst-stats",         0, 0, 0 },
 		{ 0, 0, 0, 0 },
 	};
 
@@ -986,7 +995,7 @@ launch_args_parse(int argc, char** argv)
 						 " must be >= 0\n", n);
 			}
 #endif
-#ifdef RTE_LIBRTE_BITRATE
+#ifdef RTE_LIBRTE_BITRATESTATS
 			if (!strcmp(lgopts[opt_idx].name, "bitrate-stats")) {
 				n = atoi(optarg);
 				if (n >= 0) {
@@ -1051,6 +1060,10 @@ launch_args_parse(int argc, char** argv)
 				rss_hf = ETH_RSS_IP;
 			if (!strcmp(lgopts[opt_idx].name, "rss-udp"))
 				rss_hf = ETH_RSS_UDP;
+			if (!strcmp(lgopts[opt_idx].name, "rss-level-inner"))
+				rss_hf |= ETH_RSS_LEVEL_INNERMOST;
+			if (!strcmp(lgopts[opt_idx].name, "rss-level-outer"))
+				rss_hf |= ETH_RSS_LEVEL_OUTERMOST;
 			if (!strcmp(lgopts[opt_idx].name, "rxq")) {
 				n = atoi(optarg);
 				if (n >= 0 && check_nb_rxq((queueid_t)n) == 0)
@@ -1381,6 +1394,10 @@ launch_args_parse(int argc, char** argv)
 						 "rx-mq-mode must be >= 0 and <= %d\n",
 						 ETH_MQ_RX_VMDQ_DCB_RSS);
 			}
+			if (!strcmp(lgopts[opt_idx].name, "record-core-cycles"))
+				record_core_cycles = 1;
+			if (!strcmp(lgopts[opt_idx].name, "record-burst-stats"))
+				record_burst_stats = 1;
 			break;
 		case 'h':
 			usage(argv[0]);

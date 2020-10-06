@@ -77,7 +77,7 @@ static int  eth_igb_start(struct rte_eth_dev *dev);
 static void eth_igb_stop(struct rte_eth_dev *dev);
 static int  eth_igb_dev_set_link_up(struct rte_eth_dev *dev);
 static int  eth_igb_dev_set_link_down(struct rte_eth_dev *dev);
-static void eth_igb_close(struct rte_eth_dev *dev);
+static int eth_igb_close(struct rte_eth_dev *dev);
 static int eth_igb_reset(struct rte_eth_dev *dev);
 static int  eth_igb_promiscuous_enable(struct rte_eth_dev *dev);
 static int  eth_igb_promiscuous_disable(struct rte_eth_dev *dev);
@@ -155,7 +155,7 @@ static void igbvf_intr_disable(struct e1000_hw *hw);
 static int igbvf_dev_configure(struct rte_eth_dev *dev);
 static int igbvf_dev_start(struct rte_eth_dev *dev);
 static void igbvf_dev_stop(struct rte_eth_dev *dev);
-static void igbvf_dev_close(struct rte_eth_dev *dev);
+static int igbvf_dev_close(struct rte_eth_dev *dev);
 static int igbvf_promiscuous_enable(struct rte_eth_dev *dev);
 static int igbvf_promiscuous_disable(struct rte_eth_dev *dev);
 static int igbvf_allmulticast_enable(struct rte_eth_dev *dev);
@@ -380,10 +380,6 @@ static const struct eth_dev_ops eth_igb_ops = {
 	.rx_queue_intr_enable = eth_igb_rx_queue_intr_enable,
 	.rx_queue_intr_disable = eth_igb_rx_queue_intr_disable,
 	.rx_queue_release     = eth_igb_rx_queue_release,
-	.rx_queue_count       = eth_igb_rx_queue_count,
-	.rx_descriptor_done   = eth_igb_rx_descriptor_done,
-	.rx_descriptor_status = eth_igb_rx_descriptor_status,
-	.tx_descriptor_status = eth_igb_tx_descriptor_status,
 	.tx_queue_setup       = eth_igb_tx_queue_setup,
 	.tx_queue_release     = eth_igb_tx_queue_release,
 	.tx_done_cleanup      = eth_igb_tx_done_cleanup,
@@ -441,9 +437,6 @@ static const struct eth_dev_ops igbvf_eth_dev_ops = {
 	.dev_supported_ptypes_get = eth_igb_supported_ptypes_get,
 	.rx_queue_setup       = eth_igb_rx_queue_setup,
 	.rx_queue_release     = eth_igb_rx_queue_release,
-	.rx_descriptor_done   = eth_igb_rx_descriptor_done,
-	.rx_descriptor_status = eth_igb_rx_descriptor_status,
-	.tx_descriptor_status = eth_igb_tx_descriptor_status,
 	.tx_queue_setup       = eth_igb_tx_queue_setup,
 	.tx_queue_release     = eth_igb_tx_queue_release,
 	.tx_done_cleanup      = eth_igb_tx_done_cleanup,
@@ -754,6 +747,10 @@ eth_igb_dev_init(struct rte_eth_dev *eth_dev)
 	uint32_t ctrl_ext;
 
 	eth_dev->dev_ops = &eth_igb_ops;
+	eth_dev->rx_queue_count = eth_igb_rx_queue_count;
+	eth_dev->rx_descriptor_done   = eth_igb_rx_descriptor_done;
+	eth_dev->rx_descriptor_status = eth_igb_rx_descriptor_status;
+	eth_dev->tx_descriptor_status = eth_igb_tx_descriptor_status;
 	eth_dev->rx_pkt_burst = &eth_igb_recv_pkts;
 	eth_dev->tx_pkt_burst = &eth_igb_xmit_pkts;
 	eth_dev->tx_pkt_prepare = &eth_igb_prep_pkts;
@@ -843,11 +840,6 @@ eth_igb_dev_init(struct rte_eth_dev *eth_dev)
 	/* Copy the permanent MAC address */
 	rte_ether_addr_copy((struct rte_ether_addr *)hw->mac.addr,
 			&eth_dev->data->mac_addrs[0]);
-
-	/* Pass the information to the rte_eth_dev_close() that it should also
-	 * release the private port resources.
-	 */
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	/* initialize the vfta */
 	memset(shadow_vfta, 0, sizeof(*shadow_vfta));
@@ -949,6 +941,9 @@ eth_igbvf_dev_init(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	eth_dev->dev_ops = &igbvf_eth_dev_ops;
+	eth_dev->rx_descriptor_done   = eth_igb_rx_descriptor_done;
+	eth_dev->rx_descriptor_status = eth_igb_rx_descriptor_status;
+	eth_dev->tx_descriptor_status = eth_igb_tx_descriptor_status;
 	eth_dev->rx_pkt_burst = &eth_igb_recv_pkts;
 	eth_dev->tx_pkt_burst = &eth_igb_xmit_pkts;
 	eth_dev->tx_pkt_prepare = &eth_igb_prep_pkts;
@@ -996,11 +991,6 @@ eth_igbvf_dev_init(struct rte_eth_dev *eth_dev)
 			RTE_ETHER_ADDR_LEN * hw->mac.rar_entry_count);
 		return -ENOMEM;
 	}
-
-	/* Pass the information to the rte_eth_dev_close() that it should also
-	 * release the private port resources.
-	 */
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	/* Generate a random MAC address, if none was assigned by PF. */
 	if (rte_is_zero_ether_addr(perm_addr)) {
@@ -1535,7 +1525,7 @@ eth_igb_dev_set_link_down(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 eth_igb_close(struct rte_eth_dev *dev)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1544,6 +1534,9 @@ eth_igb_close(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct e1000_filter_info *filter_info =
 		E1000_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	eth_igb_stop(dev);
 
@@ -1604,6 +1597,8 @@ eth_igb_close(struct rte_eth_dev *dev)
 
 	/* clear all the filters list */
 	igb_filterlist_flush(dev);
+
+	return 0;
 }
 
 /*
@@ -2920,8 +2915,7 @@ eth_igb_interrupt_action(struct rte_eth_dev *dev,
 			     pci_dev->addr.bus,
 			     pci_dev->addr.devid,
 			     pci_dev->addr.function);
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
-					      NULL);
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 	}
 
 	return 0;
@@ -2983,8 +2977,8 @@ void igbvf_mbx_process(struct rte_eth_dev *dev)
 		/* dummy mbx read to ack pf */
 		if (mbx->ops.read(hw, &in_msg, 1, 0))
 			return;
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET,
-					      NULL);
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET,
+					     NULL);
 	}
 }
 
@@ -3382,7 +3376,7 @@ igbvf_dev_stop(struct rte_eth_dev *dev)
 	adapter->stopped = true;
 }
 
-static void
+static int
 igbvf_dev_close(struct rte_eth_dev *dev)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -3390,6 +3384,9 @@ igbvf_dev_close(struct rte_eth_dev *dev)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	e1000_reset_hw(hw);
 
@@ -3413,6 +3410,8 @@ igbvf_dev_close(struct rte_eth_dev *dev)
 	rte_intr_callback_unregister(&pci_dev->intr_handle,
 				     eth_igbvf_interrupt_handler,
 				     (void *)dev);
+
+	return 0;
 }
 
 static int

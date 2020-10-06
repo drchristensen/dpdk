@@ -209,13 +209,16 @@ nfb_eth_dev_info(struct rte_eth_dev *dev,
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-static void
+static int
 nfb_eth_dev_close(struct rte_eth_dev *dev)
 {
 	struct pmd_internals *internals = dev->data->dev_private;
 	uint16_t i;
 	uint16_t nb_rx = dev->data->nb_rx_queues;
 	uint16_t nb_tx = dev->data->nb_tx_queues;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	nfb_eth_dev_stop(dev);
 
@@ -233,8 +236,7 @@ nfb_eth_dev_close(struct rte_eth_dev *dev)
 	}
 	dev->data->nb_tx_queues = 0;
 
-	rte_free(dev->data->mac_addrs);
-	dev->data->mac_addrs = NULL;
+	return 0;
 }
 
 /**
@@ -454,9 +456,6 @@ nfb_eth_dev_init(struct rte_eth_dev *dev)
 		}
 		rte_kvargs_free(kvlist);
 	}
-
-	/* Let rte_eth_dev_close() release the port resources */
-	dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	/*
 	 * Get number of available DMA RX and TX queues, which is maximum

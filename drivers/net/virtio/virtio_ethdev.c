@@ -609,10 +609,9 @@ virtio_init_queue(struct rte_eth_dev *dev, uint16_t vtpci_queue_idx)
 		txr = hdr_mz->addr;
 		memset(txr, 0, vq_size * sizeof(*txr));
 		for (i = 0; i < vq_size; i++) {
-			struct vring_desc *start_dp = txr[i].tx_indir;
-
 			/* first indirect descriptor is always the tx header */
 			if (!vtpci_packed_queue(hw)) {
+				struct vring_desc *start_dp = txr[i].tx_indir;
 				vring_desc_init_split(start_dp,
 						      RTE_DIM(txr[i].tx_indir));
 				start_dp->addr = txvq->virtio_net_hdr_mem
@@ -621,6 +620,16 @@ virtio_init_queue(struct rte_eth_dev *dev, uint16_t vtpci_queue_idx)
 						   tx_hdr);
 				start_dp->len = hw->vtnet_hdr_size;
 				start_dp->flags = VRING_DESC_F_NEXT;
+			} else {
+				struct vring_packed_desc *start_dp =
+					txr[i].tx_packed_indir;
+				vring_desc_init_indirect_packed(start_dp,
+				      RTE_DIM(txr[i].tx_packed_indir));
+				start_dp->addr = txvq->virtio_net_hdr_mem
+					+ i * sizeof(*txr)
+					+ offsetof(struct virtio_tx_region,
+						   tx_hdr);
+				start_dp->len = hw->vtnet_hdr_size;
 			}
 		}
 	}
@@ -704,16 +713,18 @@ virtio_alloc_queues(struct rte_eth_dev *dev)
 
 static void virtio_queues_unbind_intr(struct rte_eth_dev *dev);
 
-static void
+static int
 virtio_dev_close(struct rte_eth_dev *dev)
 {
 	struct virtio_hw *hw = dev->data->dev_private;
 	struct rte_intr_conf *intr_conf = &dev->data->dev_conf.intr_conf;
 
 	PMD_INIT_LOG(DEBUG, "virtio_dev_close");
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	if (!hw->opened)
-		return;
+		return 0;
 	hw->opened = false;
 
 	/* reset the NIC */
@@ -743,6 +754,8 @@ virtio_dev_close(struct rte_eth_dev *dev)
 		if (!hw->modern)
 			rte_pci_ioport_unmap(VTPCI_IO(hw));
 	}
+
+	return 0;
 }
 
 static int
@@ -920,7 +933,6 @@ static const struct eth_dev_ops virtio_eth_dev_ops = {
 	.rx_queue_intr_enable    = virtio_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable   = virtio_dev_rx_queue_intr_disable,
 	.rx_queue_release        = virtio_dev_queue_release,
-	.rx_descriptor_done      = virtio_dev_rx_queue_done,
 	.tx_queue_setup          = virtio_dev_tx_queue_setup,
 	.tx_queue_release        = virtio_dev_queue_release,
 	/* collect stats per queue */
@@ -1355,12 +1367,13 @@ virtio_negotiate_features(struct virtio_hw *hw, uint64_t req_features)
 	PMD_INIT_LOG(DEBUG, "features after negotiate = %" PRIx64,
 		hw->guest_features);
 
-	if (hw->modern) {
-		if (!vtpci_with_feature(hw, VIRTIO_F_VERSION_1)) {
-			PMD_INIT_LOG(ERR,
-				"VIRTIO_F_VERSION_1 features is not enabled.");
-			return -1;
-		}
+	if (hw->modern && !vtpci_with_feature(hw, VIRTIO_F_VERSION_1)) {
+		PMD_INIT_LOG(ERR,
+			"VIRTIO_F_VERSION_1 features is not enabled.");
+		return -1;
+	}
+
+	if (hw->modern || hw->virtio_user_dev) {
 		vtpci_set_status(hw, VIRTIO_CONFIG_STATUS_FEATURES_OK);
 		if (!(vtpci_get_status(hw) & VIRTIO_CONFIG_STATUS_FEATURES_OK)) {
 			PMD_INIT_LOG(ERR,
@@ -1490,9 +1503,9 @@ virtio_interrupt_handler(void *param)
 
 	if (isr & VIRTIO_PCI_ISR_CONFIG) {
 		if (virtio_dev_link_update(dev, 0) == 0)
-			_rte_eth_dev_callback_process(dev,
-						      RTE_ETH_EVENT_INTR_LSC,
-						      NULL);
+			rte_eth_dev_callback_process(dev,
+						     RTE_ETH_EVENT_INTR_LSC,
+						     NULL);
 
 		if (vtpci_with_feature(hw, VIRTIO_NET_F_STATUS)) {
 			vtpci_read_dev_config(hw,
@@ -1666,7 +1679,6 @@ virtio_configure_intr(struct rte_eth_dev *dev)
 
 	return 0;
 }
-#define SPEED_UNKNOWN    0xffffffff
 #define DUPLEX_UNKNOWN   0xff
 /* reset device and renegotiate features if needed */
 static int
@@ -1723,7 +1735,7 @@ virtio_init_device(struct rte_eth_dev *eth_dev, uint64_t req_features)
 		     hw->mac_addr[0], hw->mac_addr[1], hw->mac_addr[2],
 		     hw->mac_addr[3], hw->mac_addr[4], hw->mac_addr[5]);
 
-	if (hw->speed == SPEED_UNKNOWN) {
+	if (hw->speed == ETH_SPEED_NUM_UNKNOWN) {
 		if (vtpci_with_feature(hw, VIRTIO_NET_F_SPEED_DUPLEX)) {
 			config = &local_config;
 			vtpci_read_dev_config(hw,
@@ -1736,8 +1748,6 @@ virtio_init_device(struct rte_eth_dev *eth_dev, uint64_t req_features)
 			hw->duplex = config->duplex;
 		}
 	}
-	if (hw->speed == SPEED_UNKNOWN)
-		hw->speed = ETH_SPEED_NUM_10G;
 	if (hw->duplex == DUPLEX_UNKNOWN)
 		hw->duplex = ETH_LINK_FULL_DUPLEX;
 	PMD_INIT_LOG(DEBUG, "link speed = %d, duplex = %d",
@@ -1889,7 +1899,7 @@ int
 eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 {
 	struct virtio_hw *hw = eth_dev->data->dev_private;
-	uint32_t speed = SPEED_UNKNOWN;
+	uint32_t speed = ETH_SPEED_NUM_UNKNOWN;
 	int vectorized = 0;
 	int ret;
 
@@ -1903,6 +1913,7 @@ eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	eth_dev->dev_ops = &virtio_eth_dev_ops;
+	eth_dev->rx_descriptor_done = virtio_dev_rx_queue_done;
 
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
 		if (!hw->virtio_user_dev) {
@@ -1921,11 +1932,6 @@ eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 	if (ret < 0)
 		return ret;
 	hw->speed = speed;
-	/*
-	 * Pass the information to the rte_eth_dev_close() that it should also
-	 * release the private port resources.
-	 */
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	/* Allocate memory for storing MAC addresses */
 	eth_dev->data->mac_addrs = rte_zmalloc("virtio",
@@ -2035,6 +2041,8 @@ virtio_dev_speed_capa_get(uint32_t speed)
 		return ETH_LINK_SPEED_56G;
 	case ETH_SPEED_NUM_100G:
 		return ETH_LINK_SPEED_100G;
+	case ETH_SPEED_NUM_200G:
+		return ETH_LINK_SPEED_200G;
 	default:
 		return 0;
 	}
@@ -2552,6 +2560,7 @@ virtio_dev_link_update(struct rte_eth_dev *dev, __rte_unused int wait_to_complet
 
 	if (!hw->started) {
 		link.link_status = ETH_LINK_DOWN;
+		link.link_speed = ETH_SPEED_NUM_NONE;
 	} else if (vtpci_with_feature(hw, VIRTIO_NET_F_STATUS)) {
 		PMD_INIT_LOG(DEBUG, "Get link status from hw");
 		vtpci_read_dev_config(hw,
@@ -2559,6 +2568,7 @@ virtio_dev_link_update(struct rte_eth_dev *dev, __rte_unused int wait_to_complet
 				&status, sizeof(status));
 		if ((status & VIRTIO_NET_S_LINK_UP) == 0) {
 			link.link_status = ETH_LINK_DOWN;
+			link.link_speed = ETH_SPEED_NUM_NONE;
 			PMD_INIT_LOG(DEBUG, "Port %d is down",
 				     dev->data->port_id);
 		} else {

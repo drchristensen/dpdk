@@ -39,6 +39,7 @@ test_sources = files('commands.c',
 	'test_efd.c',
 	'test_efd_perf.c',
 	'test_errno.c',
+	'test_ethdev_link.c',
 	'test_event_crypto_adapter.c',
 	'test_event_eth_rx_adapter.c',
 	'test_event_ring.c',
@@ -170,6 +171,7 @@ test_deps = ['acl',
 	'ring',
 	'security',
 	'stack',
+	'telemetry',
 	'timer'
 ]
 
@@ -200,6 +202,7 @@ fast_tests = [
         ['eal_flags_misc_autotest', false],
         ['eal_fs_autotest', true],
         ['errno_autotest', true],
+        ['ethdev_link_status', true],
         ['event_ring_autotest', true],
         ['fib_autotest', true],
         ['fib6_autotest', true],
@@ -345,8 +348,8 @@ if dpdk_conf.has('RTE_LIBRTE_SKELETON_EVENTDEV_PMD')
 	test_deps += 'pmd_skeleton_event'
 endif
 if dpdk_conf.has('RTE_LIBRTE_TELEMETRY')
-	test_sources += 'test_telemetry_json.c'
-	fast_tests += [['telemetry_json_autotest', true]]
+	test_sources += ['test_telemetry_json.c', 'test_telemetry_data.c']
+	fast_tests += [['telemetry_json_autotest', true], ['telemetry_data_autotest', true]]
 endif
 
 # The following linkages of drivers are required because

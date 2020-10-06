@@ -8,10 +8,13 @@ INTERNAL {
 	bman_query_free_buffers;
 	bman_release;
 	bman_thread_irq;
+	dpaa_get_ioctl_version_number;
 	dpaa_get_eth_port_cfg;
 	dpaa_get_qm_channel_caam;
 	dpaa_get_qm_channel_pool;
 	dpaa_get_link_status;
+	dpaa_restart_link_autoneg;
+	dpaa_update_link_speed;
 	dpaa_intr_disable;
 	dpaa_intr_enable;
 	dpaa_svr_family;
@@ -33,6 +36,7 @@ INTERNAL {
 	fman_if_promiscuous_enable;
 	fman_if_reset_mcast_filter_table;
 	fman_if_set_bp;
+	fman_if_set_err_fqid;
 	fman_if_set_fc_quanta;
 	fman_if_set_fc_threshold;
 	fman_if_set_fdoff;
@@ -44,11 +48,13 @@ INTERNAL {
 	fman_if_stats_get_all;
 	fman_if_stats_reset;
 	fman_ip_rev;
+	fman_if_receive_rx_errors;
 	fsl_qman_fq_portal_create;
 	netcfg_acquire;
 	netcfg_release;
 	per_lcore_dpaa_io;
 	qman_alloc_cgrid_range;
+	qman_alloc_fqid_range;
 	qman_alloc_pool_range;
 	qman_clear_irq;
 	qman_create_cgr;

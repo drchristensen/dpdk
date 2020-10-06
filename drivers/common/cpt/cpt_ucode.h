@@ -2862,7 +2862,7 @@ alloc_op_meta(struct rte_mbuf *m_src,
 		tailroom = rte_pktmbuf_tailroom(m_src);
 		if (likely(tailroom > len + 8)) {
 			mdata = (uint8_t *)m_src->buf_addr + m_src->buf_len;
-			mphys = m_src->buf_physaddr + m_src->buf_len;
+			mphys = m_src->buf_iova + m_src->buf_len;
 			mdata -= len;
 			mphys -= len;
 			buf->vaddr = mdata;
@@ -2918,7 +2918,7 @@ prepare_iov_from_pkt(struct rte_mbuf *pkt,
 
 	if (!start_offset) {
 		seg_data = rte_pktmbuf_mtod(pkt, void *);
-		seg_phys = rte_pktmbuf_mtophys(pkt);
+		seg_phys = rte_pktmbuf_iova(pkt);
 		seg_size = pkt->data_len;
 	} else {
 		while (start_offset >= pkt->data_len) {
@@ -2927,7 +2927,7 @@ prepare_iov_from_pkt(struct rte_mbuf *pkt,
 		}
 
 		seg_data = rte_pktmbuf_mtod_offset(pkt, void *, start_offset);
-		seg_phys = rte_pktmbuf_mtophys_offset(pkt, start_offset);
+		seg_phys = rte_pktmbuf_iova_offset(pkt, start_offset);
 		seg_size = pkt->data_len - start_offset;
 		if (!seg_size)
 			return 1;
@@ -2942,7 +2942,7 @@ prepare_iov_from_pkt(struct rte_mbuf *pkt,
 
 	while (unlikely(pkt != NULL)) {
 		seg_data = rte_pktmbuf_mtod(pkt, void *);
-		seg_phys = rte_pktmbuf_mtophys(pkt);
+		seg_phys = rte_pktmbuf_iova(pkt);
 		seg_size = pkt->data_len;
 		if (!seg_size)
 			break;
@@ -2972,7 +2972,7 @@ prepare_iov_from_pkt_inplace(struct rte_mbuf *pkt,
 	iov_ptr_t *iovec;
 
 	seg_data = rte_pktmbuf_mtod(pkt, void *);
-	seg_phys = rte_pktmbuf_mtophys(pkt);
+	seg_phys = rte_pktmbuf_iova(pkt);
 	seg_size = pkt->data_len;
 
 	/* first seg */
@@ -3001,7 +3001,7 @@ prepare_iov_from_pkt_inplace(struct rte_mbuf *pkt,
 
 	while (unlikely(pkt != NULL)) {
 		seg_data = rte_pktmbuf_mtod(pkt, void *);
-		seg_phys = rte_pktmbuf_mtophys(pkt);
+		seg_phys = rte_pktmbuf_iova(pkt);
 		seg_size = pkt->data_len;
 
 		if (!seg_size)
@@ -3463,7 +3463,7 @@ fill_digest_params(struct rte_crypto_op *cop,
 			params.mac_buf.vaddr =
 				rte_pktmbuf_mtod_offset(m_dst, void *, off);
 			params.mac_buf.dma_addr =
-				rte_pktmbuf_mtophys_offset(m_dst, off);
+				rte_pktmbuf_iova_offset(m_dst, off);
 			params.mac_buf.size = mac_len;
 		}
 	} else {

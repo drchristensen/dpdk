@@ -1155,13 +1155,16 @@ eth_tx_queue_release(void *q)
 	}
 }
 
-static void
+static int
 eth_dev_close(struct rte_eth_dev *dev)
 {
 	struct pmd_internals *internals = dev->data->dev_private;
 	uint16_t i;
 	uint16_t nb_rx = dev->data->nb_rx_queues;
 	uint16_t nb_tx = dev->data->nb_tx_queues;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	eth_dev_stop(dev);
 
@@ -1178,8 +1181,7 @@ eth_dev_close(struct rte_eth_dev *dev)
 	}
 	dev->data->nb_tx_queues = 0;
 
-	rte_free(dev->data->mac_addrs);
-	dev->data->mac_addrs = NULL;
+	return 0;
 }
 
 static int
@@ -1485,9 +1487,6 @@ rte_szedata2_eth_dev_init(struct rte_eth_dev *dev, struct port_info *pi)
 
 	PMD_INIT_LOG(INFO, "Initializing eth_dev %s (driver %s)", data->name,
 			RTE_STR(RTE_SZEDATA2_DRIVER_NAME));
-
-	/* Let rte_eth_dev_close() release the port resources */
-	dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	/* Fill internal private structure. */
 	internals->dev = dev;
@@ -1802,7 +1801,7 @@ szedata2_eth_dev_release_interval(struct rte_eth_dev **eth_devs,
 
 	for (i = from; i < to; i++) {
 		rte_szedata2_eth_dev_uninit(eth_devs[i]);
-		rte_eth_dev_pci_release(eth_devs[i]);
+		rte_eth_dev_release_port(eth_devs[i]);
 	}
 }
 
@@ -1853,7 +1852,7 @@ static int szedata2_eth_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		if (ret != 0) {
 			PMD_INIT_LOG(ERR, "Failed to init eth_dev for port %u",
 					i);
-			rte_eth_dev_pci_release(eth_devs[i]);
+			rte_eth_dev_release_port(eth_devs[i]);
 			szedata2_eth_dev_release_interval(eth_devs, 0, i);
 			rte_free(list_entry);
 			return ret;
@@ -1911,10 +1910,8 @@ static int szedata2_eth_pci_remove(struct rte_pci_device *pci_dev)
 				pci_dev->device.name, i);
 		PMD_DRV_LOG(DEBUG, "Removing eth_dev %s", name);
 		eth_dev = rte_eth_dev_allocated(name);
-		if (!eth_dev) {
-			PMD_DRV_LOG(ERR, "eth_dev %s not found", name);
-			retval = retval ? retval : -ENODEV;
-		}
+		if (eth_dev == NULL)
+			continue; /* port already released */
 
 		ret = rte_szedata2_eth_dev_uninit(eth_dev);
 		if (ret != 0) {
@@ -1922,7 +1919,7 @@ static int szedata2_eth_pci_remove(struct rte_pci_device *pci_dev)
 			retval = retval ? retval : ret;
 		}
 
-		rte_eth_dev_pci_release(eth_dev);
+		rte_eth_dev_release_port(eth_dev);
 	}
 
 	return retval;

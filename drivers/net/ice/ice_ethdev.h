@@ -136,6 +136,9 @@
 #define ICE_RXTX_BYTES_HIGH(bytes) ((bytes) & ~ICE_40_BIT_MASK)
 #define ICE_RXTX_BYTES_LOW(bytes) ((bytes) & ICE_40_BIT_MASK)
 
+/* Max number of flexible descriptor rxdid */
+#define ICE_FLEX_DESC_RXDID_MAX_NUM 64
+
 /* DDP package type */
 enum ice_pkg_type {
 	ICE_PKG_TYPE_UNKNOWN,
@@ -262,6 +265,8 @@ enum proto_xtr_type {
 	PROTO_XTR_IPV6,
 	PROTO_XTR_IPV6_FLOW,
 	PROTO_XTR_TCP,
+	PROTO_XTR_IP_OFFSET,
+	PROTO_XTR_MAX /* The last one */
 };
 
 enum ice_fdir_tunnel_type {
@@ -285,6 +290,8 @@ struct ice_fdir_filter_conf {
 	struct rte_flow_action_count act_count;
 
 	uint64_t input_set;
+	uint64_t outer_input_set; /* only for tunnel packets outer fields */
+	uint32_t mark_flag;
 };
 
 #define ICE_MAX_FDIR_FILTER_NUM		(1024 * 16)
@@ -432,6 +439,7 @@ struct ice_pf {
 	bool init_link_up;
 	uint64_t old_rx_bytes;
 	uint64_t old_tx_bytes;
+	uint64_t supported_rxdid; /* bitmap for supported RXDID */
 };
 
 #define ICE_MAX_QUEUE_NUM  2048
@@ -443,7 +451,6 @@ struct ice_devargs {
 	int safe_mode_support;
 	uint8_t proto_xtr_dflt;
 	int pipe_mode_support;
-	int flow_mark_support;
 	uint8_t proto_xtr[ICE_MAX_QUEUE_NUM];
 };
 
@@ -464,6 +471,7 @@ struct ice_adapter {
 	bool is_safe_mode;
 	struct ice_devargs devargs;
 	enum ice_pkg_type active_pkg_type; /* loaded ddp package type */
+	uint16_t fdir_ref_cnt;
 };
 
 struct ice_vsi_vlan_pvid_info {

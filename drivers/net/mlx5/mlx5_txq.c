@@ -155,9 +155,9 @@ txq_sync_cq(struct mlx5_txq_data *txq)
 		cqe->op_own = MLX5_CQE_INVALIDATE;
 	}
 	/* Resync CQE and WQE (WQ in reset state). */
-	rte_cio_wmb();
+	rte_io_wmb();
 	*txq->cq_db = rte_cpu_to_be_32(txq->cq_ci);
-	rte_cio_wmb();
+	rte_io_wmb();
 }
 
 /**
@@ -244,7 +244,7 @@ mlx5_tx_queue_stop(struct rte_eth_dev *dev, uint16_t idx)
 {
 	int ret;
 
-	if (dev->data->tx_queue_state[idx] == RTE_ETH_QUEUE_STATE_HAIRPIN) {
+	if (rte_eth_dev_is_tx_hairpin_queue(dev, idx)) {
 		DRV_LOG(ERR, "Hairpin queue can't be stopped");
 		rte_errno = EINVAL;
 		return -EINVAL;
@@ -371,7 +371,7 @@ mlx5_tx_queue_start(struct rte_eth_dev *dev, uint16_t idx)
 {
 	int ret;
 
-	if (dev->data->tx_queue_state[idx] == RTE_ETH_QUEUE_STATE_HAIRPIN) {
+	if (rte_eth_dev_is_tx_hairpin_queue(dev, idx)) {
 		DRV_LOG(ERR, "Hairpin queue can't be started");
 		rte_errno = EINVAL;
 		return -EINVAL;
@@ -907,6 +907,7 @@ mlx5_txq_obj_devx_new(struct rte_eth_dev *dev, uint16_t idx)
 	size_t page_size;
 	struct mlx5_cqe *cqe;
 	uint32_t i, nqe;
+	void *reg_addr;
 	size_t alignment = (size_t)-1;
 	int ret = 0;
 
@@ -991,11 +992,11 @@ mlx5_txq_obj_devx_new(struct rte_eth_dev *dev, uint16_t idx)
 	/* Create completion queue object with DevX. */
 	cq_attr.cqe_size = (sizeof(struct mlx5_cqe) == 128) ?
 			    MLX5_CQE_SIZE_128B : MLX5_CQE_SIZE_64B;
-	cq_attr.uar_page_id = sh->tx_uar->page_id;
+	cq_attr.uar_page_id = mlx5_os_get_devx_uar_page_id(sh->tx_uar);
 	cq_attr.eqn = sh->txpp.eqn;
 	cq_attr.q_umem_valid = 1;
 	cq_attr.q_umem_offset = (uintptr_t)txq_obj->cq_buf % page_size;
-	cq_attr.q_umem_id = txq_obj->cq_umem->umem_id;
+	cq_attr.q_umem_id = mlx5_os_get_umem_id(txq_obj->cq_umem);
 	cq_attr.db_umem_valid = 1;
 	cq_attr.db_umem_offset = txq_obj->cq_dbrec_offset;
 	cq_attr.db_umem_id = mlx5_os_get_umem_id(txq_obj->cq_dbrec_page->umem);
@@ -1069,7 +1070,7 @@ mlx5_txq_obj_devx_new(struct rte_eth_dev *dev, uint16_t idx)
 	sq_attr.allow_multi_pkt_send_wqe = !!priv->config.mps;
 	sq_attr.allow_swp = !!priv->config.swp;
 	sq_attr.min_wqe_inline_mode = priv->config.hca_attr.vport_inline_mode;
-	sq_attr.wq_attr.uar_page = sh->tx_uar->page_id;
+	sq_attr.wq_attr.uar_page = mlx5_os_get_devx_uar_page_id(sh->tx_uar);
 	sq_attr.wq_attr.wq_type = MLX5_WQ_TYPE_CYCLIC;
 	sq_attr.wq_attr.pd = sh->pdn;
 	sq_attr.wq_attr.log_wq_stride = rte_log2_u32(MLX5_WQE_SIZE);
@@ -1079,7 +1080,7 @@ mlx5_txq_obj_devx_new(struct rte_eth_dev *dev, uint16_t idx)
 	sq_attr.wq_attr.dbr_umem_id =
 			mlx5_os_get_umem_id(txq_obj->cq_dbrec_page->umem);
 	sq_attr.wq_attr.wq_umem_valid = 1;
-	sq_attr.wq_attr.wq_umem_id = txq_obj->sq_umem->umem_id;
+	sq_attr.wq_attr.wq_umem_id = mlx5_os_get_umem_id(txq_obj->sq_umem);
 	sq_attr.wq_attr.wq_umem_offset = (uintptr_t)txq_obj->sq_buf % page_size;
 	txq_obj->sq_devx = mlx5_devx_cmd_create_sq(sh->ctx, &sq_attr);
 	if (!txq_obj->sq_devx) {
@@ -1120,9 +1121,11 @@ mlx5_txq_obj_devx_new(struct rte_eth_dev *dev, uint16_t idx)
 		priv->sh->tdn = priv->sh->td->id;
 #endif
 	MLX5_ASSERT(sh->tx_uar);
-	MLX5_ASSERT(sh->tx_uar->reg_addr);
-	txq_ctrl->bf_reg = sh->tx_uar->reg_addr;
-	txq_ctrl->uar_mmap_offset = sh->tx_uar->mmap_off;
+	reg_addr = mlx5_os_get_devx_uar_reg_addr(sh->tx_uar);
+	MLX5_ASSERT(reg_addr);
+	txq_ctrl->bf_reg = reg_addr;
+	txq_ctrl->uar_mmap_offset =
+		mlx5_os_get_devx_uar_mmap_offset(sh->tx_uar);
 	rte_atomic32_set(&txq_obj->refcnt, 1);
 	txq_uar_init(txq_ctrl);
 	LIST_INSERT_HEAD(&priv->txqsobj, txq_obj, next);
@@ -1314,7 +1317,7 @@ mlx5_txq_obj_new(struct rte_eth_dev *dev, uint16_t idx,
 	txq_data->cqe_n = log2above(cq_info.cqe_cnt);
 	txq_data->cqe_s = 1 << txq_data->cqe_n;
 	txq_data->cqe_m = txq_data->cqe_s - 1;
-	txq_data->qp_num_8s = tmpl.qp->qp_num << 8;
+	txq_data->qp_num_8s = ((struct ibv_qp *)tmpl.qp)->qp_num << 8;
 	txq_data->wqes = qp.sq.buf;
 	txq_data->wqe_n = log2above(qp.sq.wqe_cnt);
 	txq_data->wqe_s = 1 << txq_data->wqe_n;

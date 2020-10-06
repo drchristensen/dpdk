@@ -107,7 +107,7 @@ rawdev device for use by an application:
 
         for (i = 0; i < count && !found; i++) {
                 struct rte_rawdev_info info = { .dev_private = NULL };
-                found = (rte_rawdev_info_get(i, &info) == 0 &&
+                found = (rte_rawdev_info_get(i, &info, 0) == 0 &&
                                 strcmp(info.driver_name,
                                                 IOAT_PMD_RAWDEV_NAME_STR) == 0);
         }
@@ -142,7 +142,7 @@ The following code shows how the device is configured in
         /* ... */
 
         p.ring_size = IOAT_TEST_RINGSIZE;
-        if (rte_rawdev_configure(dev_id, &info) != 0) {
+        if (rte_rawdev_configure(dev_id, &info, sizeof(p)) != 0) {
                 printf("Error with rte_rawdev_configure()\n");
                 return -1;
         }

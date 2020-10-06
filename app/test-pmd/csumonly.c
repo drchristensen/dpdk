@@ -789,22 +789,14 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 	uint16_t nb_segments = 0;
 	int ret;
 
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	uint64_t start_tsc;
-	uint64_t end_tsc;
-	uint64_t core_cycles;
-#endif
+	uint64_t start_tsc = 0;
 
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	start_tsc = rte_rdtsc();
-#endif
+	get_start_cycles(&start_tsc);
 
 	/* receive a burst of packet */
 	nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, pkts_burst,
 				 nb_pkt_per_burst);
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
-	fs->rx_burst_stats.pkt_burst_spread[nb_rx]++;
-#endif
+	inc_rx_burst_stats(fs, nb_rx);
 	if (unlikely(nb_rx == 0))
 		return;
 
@@ -1088,9 +1080,7 @@ tunnel_update:
 	fs->rx_bad_l4_csum += rx_bad_l4_csum;
 	fs->rx_bad_outer_l4_csum += rx_bad_outer_l4_csum;
 
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
-	fs->tx_burst_stats.pkt_burst_spread[nb_tx]++;
-#endif
+	inc_tx_burst_stats(fs, nb_tx);
 	if (unlikely(nb_tx < nb_rx)) {
 		fs->fwd_dropped += (nb_rx - nb_tx);
 		do {
@@ -1098,11 +1088,7 @@ tunnel_update:
 		} while (++nb_tx < nb_rx);
 	}
 
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	end_tsc = rte_rdtsc();
-	core_cycles = (end_tsc - start_tsc);
-	fs->core_cycles = (uint64_t) (fs->core_cycles + core_cycles);
-#endif
+	get_end_cycles(fs, start_tsc);
 }
 
 struct fwd_engine csum_fwd_engine = {

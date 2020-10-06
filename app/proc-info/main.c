@@ -672,6 +672,7 @@ show_port(void)
 		struct rte_eth_dev_info dev_info;
 		struct rte_eth_rxq_info queue_info;
 		struct rte_eth_rss_conf rss_conf;
+		char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 		memset(&rss_conf, 0, sizeof(rss_conf));
 
@@ -685,12 +686,10 @@ show_port(void)
 			printf("Link get failed (port %u): %s\n",
 			       i, rte_strerror(-ret));
 		} else {
-			printf("\t  -- link speed %d duplex %d,"
-					" auto neg %d status %d\n",
-					link.link_speed,
-					link.link_duplex,
-					link.link_autoneg,
-					link.link_status);
+			rte_eth_link_to_str(link_status_text,
+					sizeof(link_status_text),
+					&link);
+			printf("\t%s\n", link_status_text);
 		}
 		printf("\t  -- promiscuous (%d)\n",
 				rte_eth_promiscuous_get(i));
@@ -709,15 +708,20 @@ show_port(void)
 		for (j = 0; j < dev_info.nb_rx_queues; j++) {
 			ret = rte_eth_rx_queue_info_get(i, j, &queue_info);
 			if (ret == 0) {
-				printf("\t  -- queue %d rx scatter %d"
-						" descriptors %d"
-						" offloads 0x%"PRIx64
-						" mempool socket %d\n",
+				printf("\t  -- queue %u rx scatter %u"
+						" descriptors %u"
+						" offloads 0x%" PRIx64
+						" mempool socket %d",
 						j,
 						queue_info.scattered_rx,
 						queue_info.nb_desc,
 						queue_info.conf.offloads,
 						queue_info.mp->socket_id);
+
+				if (queue_info.rx_buf_size != 0)
+					printf(" rx buffer size %u",
+						queue_info.rx_buf_size);
+				printf("\n");
 			}
 		}
 
@@ -1344,6 +1348,9 @@ main(int argc, char **argv)
 		show_mempool(mempool_name);
 	if (enable_iter_mempool)
 		iter_mempool(mempool_iter_name);
+
+	RTE_ETH_FOREACH_DEV(i)
+		rte_eth_dev_close(i);
 
 	ret = rte_eal_cleanup();
 	if (ret)

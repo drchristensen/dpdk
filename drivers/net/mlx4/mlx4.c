@@ -370,12 +370,14 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-static void
+static int
 mlx4_dev_close(struct rte_eth_dev *dev)
 {
 	struct mlx4_priv *priv = dev->data->dev_private;
 	unsigned int i;
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 	DEBUG("%p: closing device \"%s\"",
 	      (void *)dev,
 	      ((priv->ctx != NULL) ? priv->ctx->device->name : ""));
@@ -400,6 +402,9 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 		MLX4_ASSERT(priv->ctx == NULL);
 	mlx4_intr_uninstall(priv);
 	memset(priv, 0, sizeof(*priv));
+	/* mac_addrs must not be freed because part of dev_private */
+	dev->data->mac_addrs = NULL;
+	return 0;
 }
 
 static const struct eth_dev_ops mlx4_dev_ops = {

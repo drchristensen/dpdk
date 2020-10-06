@@ -198,11 +198,14 @@ eth_kni_dev_stop(struct rte_eth_dev *dev)
 	dev->data->dev_link.link_status = 0;
 }
 
-static void
+static int
 eth_kni_close(struct rte_eth_dev *eth_dev)
 {
 	struct pmd_internals *internals;
 	int ret;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	eth_kni_dev_stop(eth_dev);
 
@@ -214,6 +217,8 @@ eth_kni_close(struct rte_eth_dev *eth_dev)
 	if (ret)
 		PMD_LOG(WARNING, "Not able to release kni for %s",
 			eth_dev->data->name);
+
+	return 0;
 }
 
 static int
@@ -385,8 +390,6 @@ eth_kni_create(struct rte_vdev_device *vdev,
 	data->promiscuous = 1;
 	data->all_multicast = 1;
 
-	data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
-
 	rte_eth_random_addr(internals->eth_addr.addr_bytes);
 
 	eth_dev->dev_ops = &eth_kni_ops;
@@ -488,16 +491,14 @@ eth_kni_remove(struct rte_vdev_device *vdev)
 
 	/* find the ethdev entry */
 	eth_dev = rte_eth_dev_allocated(name);
-	if (eth_dev == NULL)
-		return -1;
-
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
-		eth_kni_dev_stop(eth_dev);
-		return rte_eth_dev_release_port(eth_dev);
+	if (eth_dev != NULL) {
+		if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+			eth_kni_dev_stop(eth_dev);
+			return rte_eth_dev_release_port(eth_dev);
+		}
+		eth_kni_close(eth_dev);
+		rte_eth_dev_release_port(eth_dev);
 	}
-
-	eth_kni_close(eth_dev);
-	rte_eth_dev_release_port(eth_dev);
 
 	is_kni_initialized--;
 	if (is_kni_initialized == 0)

@@ -167,6 +167,9 @@ static inline uint16_t bnxt_tpa_start_agg_id(struct bnxt *bp,
 
 #define BNXT_RX_POST_THRESH	32
 
+/* Number of descriptors to process per inner loop in vector mode. */
+#define RTE_BNXT_DESCS_PER_LOOP		4U
+
 enum pkt_hash_types {
 	PKT_HASH_TYPE_NONE,	/* Undefined type */
 	PKT_HASH_TYPE_L2,	/* Input: src_MAC, dest_MAC */
@@ -181,10 +184,6 @@ struct bnxt_tpa_info {
 	struct rx_tpa_v2_abuf_cmpl	agg_arr[TPA_MAX_NUM_SEGS];
 };
 
-struct bnxt_sw_rx_bd {
-	struct rte_mbuf		*mbuf; /* data associated with RX descriptor */
-};
-
 struct bnxt_rx_ring_info {
 	uint16_t		rx_prod;
 	uint16_t		ag_prod;
@@ -194,8 +193,8 @@ struct bnxt_rx_ring_info {
 
 	struct rx_prod_pkt_bd	*rx_desc_ring;
 	struct rx_prod_pkt_bd	*ag_desc_ring;
-	struct bnxt_sw_rx_bd	*rx_buf_ring; /* sw ring */
-	struct bnxt_sw_rx_bd	*ag_buf_ring; /* sw ring */
+	struct rte_mbuf		**rx_buf_ring; /* sw ring */
+	struct rte_mbuf		**ag_buf_ring; /* sw ring */
 
 	rte_iova_t		rx_desc_mapping;
 	rte_iova_t		ag_desc_mapping;
@@ -242,4 +241,12 @@ void bnxt_set_mark_in_mbuf(struct bnxt *bp,
 #define BNXT_CFA_META_EEM_TCAM_SHIFT		31
 #define BNXT_CFA_META_EM_TEST(x) ((x) >> BNXT_CFA_META_EEM_TCAM_SHIFT)
 
+#define BNXT_PTYPE_TBL_DIM	128
+extern uint32_t bnxt_ptype_table[BNXT_PTYPE_TBL_DIM];
+
+#define BNXT_OL_FLAGS_TBL_DIM	32
+extern uint32_t bnxt_ol_flags_table[BNXT_OL_FLAGS_TBL_DIM];
+
+#define BNXT_OL_FLAGS_ERR_TBL_DIM 16
+extern uint32_t bnxt_ol_flags_err_table[BNXT_OL_FLAGS_ERR_TBL_DIM];
 #endif

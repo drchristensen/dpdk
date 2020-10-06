@@ -39,7 +39,8 @@ RTE_LOG_REGISTER(ioat_pmd_logtype, rawdev.ioat, INFO);
 #define COMPLETION_SZ sizeof(__m128i)
 
 static int
-ioat_dev_configure(const struct rte_rawdev *dev, rte_rawdev_obj_t config)
+ioat_dev_configure(const struct rte_rawdev *dev, rte_rawdev_obj_t config,
+		size_t config_size)
 {
 	struct rte_ioat_rawdev_config *params = config;
 	struct rte_ioat_rawdev *ioat = dev->dev_private;
@@ -49,7 +50,7 @@ ioat_dev_configure(const struct rte_rawdev *dev, rte_rawdev_obj_t config)
 	if (dev->started)
 		return -EBUSY;
 
-	if (params == NULL)
+	if (params == NULL || config_size != sizeof(*params))
 		return -EINVAL;
 
 	if (params->ring_size > 4096 || params->ring_size < 64 ||
@@ -110,14 +111,18 @@ ioat_dev_stop(struct rte_rawdev *dev)
 	RTE_SET_USED(dev);
 }
 
-static void
-ioat_dev_info_get(struct rte_rawdev *dev, rte_rawdev_obj_t dev_info)
+static int
+ioat_dev_info_get(struct rte_rawdev *dev, rte_rawdev_obj_t dev_info,
+		size_t dev_info_size)
 {
 	struct rte_ioat_rawdev_config *cfg = dev_info;
 	struct rte_ioat_rawdev *ioat = dev->dev_private;
 
-	if (cfg != NULL)
-		cfg->ring_size = ioat->ring_size;
+	if (dev_info == NULL || dev_info_size != sizeof(*cfg))
+		return -EINVAL;
+
+	cfg->ring_size = ioat->ring_size;
+	return 0;
 }
 
 static const char * const xstat_names[] = {

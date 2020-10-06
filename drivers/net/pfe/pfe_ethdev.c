@@ -385,29 +385,26 @@ pfe_eth_stop(struct rte_eth_dev *dev/*, int wake*/)
 	dev->tx_pkt_burst = &pfe_dummy_xmit_pkts;
 }
 
-static void
-pfe_eth_exit(struct rte_eth_dev *dev, struct pfe *pfe)
+static int
+pfe_eth_close(struct rte_eth_dev *dev)
 {
 	PMD_INIT_FUNC_TRACE();
+
+	if (!dev)
+		return -1;
+
+	if (!g_pfe)
+		return -1;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	pfe_eth_stop(dev);
 	/* Close the device file for link status */
 	pfe_eth_close_cdev(dev->data->dev_private);
 
-	rte_eth_dev_release_port(dev);
-	pfe->nb_devs--;
-}
-
-static void
-pfe_eth_close(struct rte_eth_dev *dev)
-{
-	if (!dev)
-		return;
-
-	if (!g_pfe)
-		return;
-
-	pfe_eth_exit(dev, g_pfe);
+	munmap(g_pfe->cbus_baseaddr, g_pfe->cbus_size);
+	g_pfe->nb_devs--;
 
 	if (g_pfe->nb_devs == 0) {
 		pfe_hif_exit(g_pfe);
@@ -415,6 +412,8 @@ pfe_eth_close(struct rte_eth_dev *dev)
 		rte_free(g_pfe);
 		g_pfe = NULL;
 	}
+
+	return 0;
 }
 
 static int
@@ -427,9 +426,6 @@ static int
 pfe_eth_info(struct rte_eth_dev *dev,
 		struct rte_eth_dev_info *dev_info)
 {
-	struct pfe_eth_priv_s *internals = dev->data->dev_private;
-
-	dev_info->if_index = internals->id;
 	dev_info->max_mac_addrs = PFE_MAX_MACS;
 	dev_info->max_rx_queues = dev->data->nb_rx_queues;
 	dev_info->max_tx_queues = dev->data->nb_tx_queues;
@@ -1145,6 +1141,7 @@ pmd_pfe_remove(struct rte_vdev_device *vdev)
 {
 	const char *name;
 	struct rte_eth_dev *eth_dev = NULL;
+	int ret = 0;
 
 	name = rte_vdev_device_name(vdev);
 	if (name == NULL)
@@ -1156,19 +1153,12 @@ pmd_pfe_remove(struct rte_vdev_device *vdev)
 		return 0;
 
 	eth_dev = rte_eth_dev_allocated(name);
-	if (eth_dev == NULL)
-		return -ENODEV;
-
-	pfe_eth_exit(eth_dev, g_pfe);
-	munmap(g_pfe->cbus_baseaddr, g_pfe->cbus_size);
-
-	if (g_pfe->nb_devs == 0) {
-		pfe_hif_exit(g_pfe);
-		pfe_hif_lib_exit(g_pfe);
-		rte_free(g_pfe);
-		g_pfe = NULL;
+	if (eth_dev) {
+		pfe_eth_close(eth_dev);
+		ret = rte_eth_dev_release_port(eth_dev);
 	}
-	return 0;
+
+	return ret;
 }
 
 static
