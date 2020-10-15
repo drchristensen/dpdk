@@ -967,6 +967,14 @@ F: drivers/crypto/armv8/
 F: doc/guides/cryptodevs/armv8.rst
 F: doc/guides/cryptodevs/features/armv8.ini
 
+Broadcom FlexSparc
+M: Ajit Khaparde <ajit.khaparde@broadcom.com>
+M: Raveendra Padasalagi <raveendra.padasalagi@broadcom.com>
+M: Vikas Gupta <vikas.gupta@broadcom.com>
+F: drivers/crypto/bcmfs/
+F: doc/guides/cryptodevs/bcmfs.rst
+F: doc/guides/cryptodevs/features/bcmfs.ini
+
 Cavium OCTEON TX crypto
 M: Anoob Joseph <anoobj@marvell.com>
 F: drivers/common/cpt/
@@ -1275,7 +1283,7 @@ M: Jiayu Hu <jiayu.hu@intel.com>
 F: lib/librte_gso/
 F: doc/guides/prog_guide/generic_segmentation_offload_lib.rst
 
-IPsec - EXPERIMENTAL
+IPsec
 M: Konstantin Ananyev <konstantin.ananyev@intel.com>
 T: git://dpdk.org/next/dpdk-next-crypto
 F: lib/librte_ipsec/

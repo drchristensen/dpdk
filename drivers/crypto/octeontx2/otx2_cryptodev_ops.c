@@ -353,6 +353,7 @@ sym_session_configure(int driver_id, struct rte_crypto_sym_xform *xform,
 		      struct rte_cryptodev_sym_session *sess,
 		      struct rte_mempool *pool)
 {
+	struct rte_crypto_sym_xform *temp_xform = xform;
 	struct cpt_sess_misc *misc;
 	void *priv;
 	int ret;
@@ -391,6 +392,13 @@ sym_session_configure(int driver_id, struct rte_crypto_sym_xform *xform,
 
 		if (ret)
 			goto priv_put;
+	}
+
+	if ((GET_SESS_FC_TYPE(misc) == HASH_HMAC) &&
+			cpt_mac_len_verify(&temp_xform->auth)) {
+		CPT_LOG_ERR("MAC length is not supported");
+		ret = -ENOTSUP;
+		goto priv_put;
 	}
 
 	set_sym_session_private_data(sess, driver_id, misc);
@@ -648,8 +656,8 @@ otx2_cpt_enqueue_sym_sessless(struct otx2_cpt_qp *qp, struct rte_crypto_op *op,
 	int ret;
 
 	/* Create temporary session */
-
-	if (rte_mempool_get(qp->sess_mp, (void **)&sess))
+	sess = rte_cryptodev_sym_session_create(qp->sess_mp);
+	if (sess == NULL)
 		return -ENOMEM;
 
 	ret = sym_session_configure(driver_id, sym_op->xform, sess,
@@ -842,6 +850,7 @@ otx2_cpt_sec_post_process(struct rte_crypto_op *cop, uintptr_t *rsp)
 	vq_cmd_word0_t *word0 = (vq_cmd_word0_t *)&req->ist.ei0;
 	struct rte_crypto_sym_op *sym_op = cop->sym;
 	struct rte_mbuf *m = sym_op->m_src;
+	struct rte_ipv6_hdr *ip6;
 	struct rte_ipv4_hdr *ip;
 	uint16_t m_len;
 	int mdata_len;
@@ -852,9 +861,17 @@ otx2_cpt_sec_post_process(struct rte_crypto_op *cop, uintptr_t *rsp)
 
 	if ((word0->s.opcode & 0xff) == OTX2_IPSEC_PO_PROCESS_IPSEC_INB) {
 		data = rte_pktmbuf_mtod(m, char *);
-		ip = (struct rte_ipv4_hdr *)(data + OTX2_IPSEC_PO_INB_RPTR_HDR);
 
-		m_len = rte_be_to_cpu_16(ip->total_length);
+		if (rsp[4] == RTE_SECURITY_IPSEC_TUNNEL_IPV4) {
+			ip = (struct rte_ipv4_hdr *)(data +
+				OTX2_IPSEC_PO_INB_RPTR_HDR);
+			m_len = rte_be_to_cpu_16(ip->total_length);
+		} else {
+			ip6 = (struct rte_ipv6_hdr *)(data +
+				OTX2_IPSEC_PO_INB_RPTR_HDR);
+			m_len = rte_be_to_cpu_16(ip6->payload_len) +
+				sizeof(struct rte_ipv6_hdr);
+		}
 
 		m->data_len = m_len;
 		m->pkt_len = m_len;
@@ -866,6 +883,8 @@ static inline void
 otx2_cpt_dequeue_post_process(struct otx2_cpt_qp *qp, struct rte_crypto_op *cop,
 			      uintptr_t *rsp, uint8_t cc)
 {
+	unsigned int sz;
+
 	if (cop->type == RTE_CRYPTO_OP_TYPE_SYMMETRIC) {
 		if (cop->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION) {
 			if (likely(cc == OTX2_IPSEC_PO_CC_SUCCESS)) {
@@ -894,6 +913,9 @@ otx2_cpt_dequeue_post_process(struct otx2_cpt_qp *qp, struct rte_crypto_op *cop,
 		if (unlikely(cop->sess_type == RTE_CRYPTO_OP_SESSIONLESS)) {
 			sym_session_clear(otx2_cryptodev_driver_id,
 					  cop->sym->session);
+			sz = rte_cryptodev_sym_get_existing_header_session_size(
+					cop->sym->session);
+			memset(cop->sym->session, 0, sz);
 			rte_mempool_put(qp->sess_mp, cop->sym->session);
 			cop->sym->session = NULL;
 		}

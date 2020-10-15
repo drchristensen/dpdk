@@ -62,6 +62,12 @@ New Features
   The functions are provided as a generic stubs and
   x86 specific implementation.
 
+* **Added prefetch with intention to write APIs.**
+
+  Added new prefetch function variants e.g. ``rte_prefetch0_write``,
+  which allow the programmer to prefetch a cache line and also indicate
+  the intention to write.
+
 * **Updated CRC modules of the net library.**
 
   * Added runtime selection of the optimal architecture-specific CRC path.
@@ -146,6 +152,62 @@ New Features
     ``--portmask=N``
     where N represents the hexadecimal bitmask of ports used.
 
+* **Added raw data-path APIs for cryptodev library.**
+
+  Cryptodev is added with raw data-path APIs to accelerate external
+  libraries or applications which need to avail fast cryptodev
+  enqueue/dequeue operations but does not necessarily depends on
+  mbufs and cryptodev operation mempools.
+
+* **Updated the aesni_mb crypto PMD.**
+
+  * Added support for AES-ECB 128, 192 and 256.
+  * Added support for ZUC-EEA3/EIA3 algorithms.
+  * Added support for SNOW3G-UEA2/UIA2 algorithms.
+  * Added support for KASUMI-F8/F9 algorithms.
+  * Added support for Chacha20-Poly1305.
+  * Added support for AES-256 CCM algorithm.
+
+* **Updated the aesni_gcm crypto PMD.**
+
+  * Added SGL support for AES-GMAC.
+
+* **Added Broadcom BCMFS symmetric crypto PMD.**
+
+  Added a symmetric crypto PMD for Broadcom FlexSparc crypto units.
+  See :doc:`../cryptodevs/bcmfs` guide for more details on this new PMD.
+
+* **Updated DPAA2_SEC crypto PMD.**
+
+  * Added DES-CBC support for cipher_only, chain and ipsec protocol.
+  * Added support for non-HMAC auth algorithms
+    (MD5, SHA1, SHA224, SHA256, SHA384, SHA512).
+
+* **Updated Marvell NITROX symmetric crypto PMD.**
+
+  * Added AES-GCM support.
+  * Added cipher only offload support.
+
+* **Updated the OCTEON TX2 crypto PMD.**
+
+  * Updated the OCTEON TX2 crypto PMD lookaside protocol offload for IPsec with
+    IPv6 support.
+
+* **Updated QAT crypto PMD.**
+
+  * Added Raw Data-path APIs support.
+
+* **Added Intel ACC100 bbdev PMD.**
+
+  Added a new ``acc100`` bbdev driver for the Intel\ |reg| ACC100 accelerator
+  also known as Mount Bryce.  See the
+  :doc:`../bbdevs/acc100` BBDEV guide for more details on this new driver.
+
+* **Updated rte_security library to support SDAP.**
+
+  ``rte_security_pdcp_xform`` in ``rte_security`` lib is updated to enable
+  5G NR processing of SDAP header in PMDs.
+
 * **Added Marvell OCTEON TX2 regex PMD.**
 
   Added a new PMD driver for hardware regex offload block for OCTEON TX2 SoC.
@@ -197,6 +259,11 @@ New Features
      subport bandwidth profile to subport porfile table at runtime.
 
    * Added support to update subport rate dynamically.
+
+* **Updated FIPS validation sample application.**
+
+  * Added scatter gather support.
+  * Added NIST GCMVS complaint GMAC test method support.
 
 
 Removed Items
@@ -294,6 +361,40 @@ API Changes
 
 * vhost: Moved vDPA APIs from experimental to stable.
 
+* cryptodev: The structure ``rte_crypto_sym_vec`` is updated to support both
+  cpu_crypto synchrounous operation and asynchronous raw data-path APIs.
+
+* cryptodev: ``RTE_CRYPTO_AEAD_LIST_END`` from ``enum rte_crypto_aead_algorithm``,
+  ``RTE_CRYPTO_CIPHER_LIST_END`` from ``enum rte_crypto_cipher_algorithm`` and
+  ``RTE_CRYPTO_AUTH_LIST_END`` from ``enum rte_crypto_auth_algorithm``
+  are removed to avoid future ABI breakage while adding new algorithms.
+
+* scheduler: Renamed functions ``rte_cryptodev_scheduler_slave_attach``,
+  ``rte_cryptodev_scheduler_slave_detach`` and
+  ``rte_cryptodev_scheduler_slaves_get`` to
+  ``rte_cryptodev_scheduler_worker_attach``,
+  ``rte_cryptodev_scheduler_worker_detach`` and
+  ``rte_cryptodev_scheduler_workers_get`` accordingly.
+
+* scheduler: Renamed the configuration value
+  ``RTE_CRYPTODEV_SCHEDULER_MAX_NB_SLAVES`` to
+  ``RTE_CRYPTODEV_SCHEDULER_MAX_NB_WORKERS``.
+
+* security: ``hfn_ovrd`` field in ``rte_security_pdcp_xform`` is changed from
+  ``uint32_t`` to ``uint8_t`` so that a new field ``sdap_enabled`` can be added
+  to support SDAP.
+
+* ipsec: ``RTE_SATP_LOG2_NUM`` has been dropped from ``enum`` and
+  subsequently moved ``rte_ipsec`` lib from experimental to stable.
+
+* baseband/fpga_lte_fec: Renamed function ``fpga_lte_fec_configure`` to
+  ``rte_fpga_lte_fec_configure`` and structure ``fpga_lte_fec_conf`` to
+  ``rte_fpga_lte_fec_conf``.
+
+* baseband/fpga_5gnr_fec: Renamed function ``fpga_5gnr_fec_configure`` to
+  ``rte_fpga_5gnr_fec_configure`` and structure ``fpga_5gnr_fec_conf`` to
+  ``rte_fpga_5gnr_fec_conf``.
+
 * rawdev: Added a structure size parameter to the functions
   ``rte_rawdev_queue_setup()``, ``rte_rawdev_queue_conf_get()``,
   ``rte_rawdev_info_get()`` and ``rte_rawdev_configure()``,
@@ -344,6 +445,8 @@ ABI Changes
    This section is a comment. Do not overwrite or remove it.
    Also, make sure to start the actual text at the margin.
    =======================================================
+
+* eal: Removed the not implemented function ``rte_dump_registers()``.
 
 * ``ethdev`` changes
 
