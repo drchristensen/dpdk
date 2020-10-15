@@ -63,11 +63,44 @@
 #define HNS3_RESET_WAIT_MS	100
 #define HNS3_RESET_WAIT_CNT	200
 
+/* FEC mode order defined in HNS3 hardware */
+#define HNS3_HW_FEC_MODE_NOFEC  0
+#define HNS3_HW_FEC_MODE_BASER  1
+#define HNS3_HW_FEC_MODE_RS     2
+
 enum hns3_evt_cause {
 	HNS3_VECTOR0_EVENT_RST,
 	HNS3_VECTOR0_EVENT_MBX,
 	HNS3_VECTOR0_EVENT_ERR,
 	HNS3_VECTOR0_EVENT_OTHER,
+};
+
+static const struct rte_eth_fec_capa speed_fec_capa_tbl[] = {
+	{ ETH_SPEED_NUM_10G, RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(AUTO) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(BASER) },
+
+	{ ETH_SPEED_NUM_25G, RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(AUTO) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(BASER) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(RS) },
+
+	{ ETH_SPEED_NUM_40G, RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(AUTO) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(BASER) },
+
+	{ ETH_SPEED_NUM_50G, RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(AUTO) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(BASER) |
+			     RTE_ETH_FEC_MODE_CAPA_MASK(RS) },
+
+	{ ETH_SPEED_NUM_100G, RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+			      RTE_ETH_FEC_MODE_CAPA_MASK(AUTO) |
+			      RTE_ETH_FEC_MODE_CAPA_MASK(RS) },
+
+	{ ETH_SPEED_NUM_200G, RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+			      RTE_ETH_FEC_MODE_CAPA_MASK(AUTO) |
+			      RTE_ETH_FEC_MODE_CAPA_MASK(RS) }
 };
 
 static enum hns3_reset_level hns3_get_reset_level(struct hns3_adapter *hns,
@@ -81,6 +114,8 @@ static int hns3_add_mc_addr(struct hns3_hw *hw,
 			    struct rte_ether_addr *mac_addr);
 static int hns3_remove_mc_addr(struct hns3_hw *hw,
 			    struct rte_ether_addr *mac_addr);
+static int hns3_restore_fec(struct hns3_hw *hw);
+static int hns3_query_dev_fec_info(struct rte_eth_dev *dev);
 
 static void
 hns3_pf_disable_irq0(struct hns3_hw *hw)
@@ -2293,20 +2328,25 @@ hns3_dev_configure(struct rte_eth_dev *dev)
 	bool gro_en;
 	int ret;
 
+	hw->cfg_max_queues = RTE_MAX(nb_rx_q, nb_tx_q);
+
 	/*
-	 * Hardware does not support individually enable/disable/reset the Tx or
-	 * Rx queue in hns3 network engine. Driver must enable/disable/reset Tx
-	 * and Rx queues at the same time. When the numbers of Tx queues
-	 * allocated by upper applications are not equal to the numbers of Rx
-	 * queues, driver needs to setup fake Tx or Rx queues to adjust numbers
-	 * of Tx/Rx queues. otherwise, network engine can not work as usual. But
-	 * these fake queues are imperceptible, and can not be used by upper
-	 * applications.
+	 * Some versions of hardware network engine does not support
+	 * individually enable/disable/reset the Tx or Rx queue. These devices
+	 * must enable/disable/reset Tx and Rx queues at the same time. When the
+	 * numbers of Tx queues allocated by upper applications are not equal to
+	 * the numbers of Rx queues, driver needs to setup fake Tx or Rx queues
+	 * to adjust numbers of Tx/Rx queues. otherwise, network engine can not
+	 * work as usual. But these fake queues are imperceptible, and can not
+	 * be used by upper applications.
 	 */
-	ret = hns3_set_fake_rx_or_tx_queues(dev, nb_rx_q, nb_tx_q);
-	if (ret) {
-		hns3_err(hw, "Failed to set rx/tx fake queues: %d", ret);
-		return ret;
+	if (!hns3_dev_indep_txrx_supported(hw)) {
+		ret = hns3_set_fake_rx_or_tx_queues(dev, nb_rx_q, nb_tx_q);
+		if (ret) {
+			hns3_err(hw, "fail to set Rx/Tx fake queues, ret = %d.",
+				 ret);
+			return ret;
+		}
 	}
 
 	hw->adapter_state = HNS3_NIC_CONFIGURING;
@@ -2504,6 +2544,10 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 				 DEV_TX_OFFLOAD_MBUF_FAST_FREE |
 				 hns3_txvlan_cap_get(hw));
 
+	if (hns3_dev_indep_txrx_supported(hw))
+		info->dev_capa = RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
+				 RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP;
+
 	info->rx_desc_lim = (struct rte_eth_desc_lim) {
 		.nb_max = HNS3_MAX_RING_DESC,
 		.nb_min = HNS3_MIN_RING_DESC,
@@ -2660,6 +2704,49 @@ hns3_query_function_status(struct hns3_hw *hw)
 }
 
 static int
+hns3_get_pf_max_tqp_num(struct hns3_hw *hw)
+{
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
+	struct hns3_pf *pf = &hns->pf;
+
+	if (pf->tqp_config_mode == HNS3_FLEX_MAX_TQP_NUM_MODE) {
+		/*
+		 * The total_tqps_num obtained from firmware is maximum tqp
+		 * numbers of this port, which should be used for PF and VFs.
+		 * There is no need for pf to have so many tqp numbers in
+		 * most cases. RTE_LIBRTE_HNS3_MAX_TQP_NUM_PER_PF,
+		 * coming from config file, is assigned to maximum queue number
+		 * for the PF of this port by user. So users can modify the
+		 * maximum queue number of PF according to their own application
+		 * scenarios, which is more flexible to use. In addition, many
+		 * memories can be saved due to allocating queue statistics
+		 * room according to the actual number of queues required. The
+		 * maximum queue number of PF for network engine with
+		 * revision_id greater than 0x30 is assigned by config file.
+		 */
+		if (RTE_LIBRTE_HNS3_MAX_TQP_NUM_PER_PF <= 0) {
+			hns3_err(hw, "RTE_LIBRTE_HNS3_MAX_TQP_NUM_PER_PF(%d) "
+				 "must be greater than 0.",
+				 RTE_LIBRTE_HNS3_MAX_TQP_NUM_PER_PF);
+			return -EINVAL;
+		}
+
+		hw->tqps_num = RTE_MIN(RTE_LIBRTE_HNS3_MAX_TQP_NUM_PER_PF,
+				       hw->total_tqps_num);
+	} else {
+		/*
+		 * Due to the limitation on the number of PF interrupts
+		 * available, the maximum queue number assigned to PF on
+		 * the network engine with revision_id 0x21 is 64.
+		 */
+		hw->tqps_num = RTE_MIN(hw->total_tqps_num,
+				       HNS3_MAX_TQP_NUM_HIP08_PF);
+	}
+
+	return 0;
+}
+
+static int
 hns3_query_pf_resource(struct hns3_hw *hw)
 {
 	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
@@ -2676,9 +2763,13 @@ hns3_query_pf_resource(struct hns3_hw *hw)
 	}
 
 	req = (struct hns3_pf_res_cmd *)desc.data;
-	hw->total_tqps_num = rte_le_to_cpu_16(req->tqp_num);
+	hw->total_tqps_num = rte_le_to_cpu_16(req->tqp_num) +
+			     rte_le_to_cpu_16(req->ext_tqp_num);
+	ret = hns3_get_pf_max_tqp_num(hw);
+	if (ret)
+		return ret;
+
 	pf->pkt_buf_size = rte_le_to_cpu_16(req->buf_size) << HNS3_BUF_UNIT_S;
-	hw->tqps_num = RTE_MIN(hw->total_tqps_num, HNS3_MAX_TQP_NUM_PER_FUNC);
 	pf->func_num = rte_le_to_cpu_16(req->pf_own_fun_number);
 
 	if (req->tx_buf_size)
@@ -2709,6 +2800,7 @@ hns3_parse_cfg(struct hns3_cfg *cfg, struct hns3_cmd_desc *desc)
 {
 	struct hns3_cfg_param_cmd *req;
 	uint64_t mac_addr_tmp_high;
+	uint8_t ext_rss_size_max;
 	uint64_t mac_addr_tmp;
 	uint32_t i;
 
@@ -2761,6 +2853,21 @@ hns3_parse_cfg(struct hns3_cfg *cfg, struct hns3_cmd_desc *desc)
 					HNS3_CFG_UMV_TBL_SPACE_S);
 	if (!cfg->umv_space)
 		cfg->umv_space = HNS3_DEFAULT_UMV_SPACE_PER_PF;
+
+	ext_rss_size_max = hns3_get_field(rte_le_to_cpu_32(req->param[2]),
+					       HNS3_CFG_EXT_RSS_SIZE_M,
+					       HNS3_CFG_EXT_RSS_SIZE_S);
+
+	/*
+	 * Field ext_rss_size_max obtained from firmware will be more flexible
+	 * for future changes and expansions, which is an exponent of 2, instead
+	 * of reading out directly. If this field is not zero, hns3 PF PMD
+	 * driver uses it as rss_size_max under one TC. Device, whose revision
+	 * id is greater than or equal to PCI_REVISION_ID_HIP09_A, obtains the
+	 * maximum number of queues supported under a TC through this field.
+	 */
+	if (ext_rss_size_max)
+		cfg->rss_size_max = 1U << ext_rss_size_max;
 }
 
 /* hns3_get_board_cfg: query the static parameter from NCL_config file in flash
@@ -2886,7 +2993,9 @@ hns3_query_dev_specifications(struct hns3_hw *hw)
 static int
 hns3_get_capability(struct hns3_hw *hw)
 {
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
 	struct rte_pci_device *pci_dev;
+	struct hns3_pf *pf = &hns->pf;
 	struct rte_eth_dev *eth_dev;
 	uint16_t device_id;
 	uint8_t revision;
@@ -2901,6 +3010,13 @@ hns3_get_capability(struct hns3_hw *hw)
 	    device_id == HNS3_DEV_ID_100G_RDMA_MACSEC ||
 	    device_id == HNS3_DEV_ID_200G_RDMA)
 		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_DCB_B, 1);
+
+	ret = hns3_query_dev_fec_info(eth_dev);
+	if (ret) {
+		PMD_INIT_LOG(ERR,
+			     "failed to query FEC information, ret = %d", ret);
+		return ret;
+	}
 
 	/* Get PCI revision id */
 	ret = rte_pci_read_config(pci_dev, &revision, HNS3_PCI_REVISION_ID_LEN,
@@ -2920,6 +3036,7 @@ hns3_get_capability(struct hns3_hw *hw)
 		hw->tso_mode = HNS3_TSO_SW_CAL_PSEUDO_H_CSUM;
 		hw->vlan_mode = HNS3_SW_SHIFT_AND_DISCARD_MODE;
 		hw->min_tx_pkt_len = HNS3_HIP08_MIN_TX_PKT_LEN;
+		pf->tqp_config_mode = HNS3_FIXED_MAX_TQP_NUM_MODE;
 		return 0;
 	}
 
@@ -2937,6 +3054,7 @@ hns3_get_capability(struct hns3_hw *hw)
 	hw->tso_mode = HNS3_TSO_HW_CAL_PSEUDO_H_CSUM;
 	hw->vlan_mode = HNS3_HW_SHIFT_AND_DISCARD_MODE;
 	hw->min_tx_pkt_len = HNS3_HIP09_MIN_TX_PKT_LEN;
+	pf->tqp_config_mode = HNS3_FLEX_MAX_TQP_NUM_MODE;
 
 	return 0;
 }
@@ -3032,7 +3150,7 @@ hns3_get_configuration(struct hns3_hw *hw)
 
 	ret = hns3_get_board_configuration(hw);
 	if (ret)
-		PMD_INIT_LOG(ERR, "Failed to get board configuration: %d", ret);
+		PMD_INIT_LOG(ERR, "failed to get board configuration: %d", ret);
 
 	return ret;
 }
@@ -3065,29 +3183,18 @@ hns3_map_tqps_to_func(struct hns3_hw *hw, uint16_t func_id, uint16_t tqp_pid,
 static int
 hns3_map_tqp(struct hns3_hw *hw)
 {
-	uint16_t tqps_num = hw->total_tqps_num;
-	uint16_t func_id;
-	uint16_t tqp_id;
-	bool is_pf;
-	int num;
 	int ret;
 	int i;
 
 	/*
-	 * In current version VF is not supported when PF is driven by DPDK
-	 * driver, so we allocate tqps to PF as much as possible.
+	 * In current version, VF is not supported when PF is driven by DPDK
+	 * driver, so we assign total tqps_num tqps allocated to this port
+	 * to PF.
 	 */
-	tqp_id = 0;
-	num = DIV_ROUND_UP(hw->total_tqps_num, HNS3_MAX_TQP_NUM_PER_FUNC);
-	for (func_id = HNS3_PF_FUNC_ID; func_id < num; func_id++) {
-		is_pf = func_id == HNS3_PF_FUNC_ID ? true : false;
-		for (i = 0;
-		     i < HNS3_MAX_TQP_NUM_PER_FUNC && tqp_id < tqps_num; i++) {
-			ret = hns3_map_tqps_to_func(hw, func_id, tqp_id++, i,
-						    is_pf);
-			if (ret)
-				return ret;
-		}
+	for (i = 0; i < hw->total_tqps_num; i++) {
+		ret = hns3_map_tqps_to_func(hw, HNS3_PF_FUNC_ID, i, i, true);
+		if (ret)
+			return ret;
 	}
 
 	return 0;
@@ -4542,17 +4649,21 @@ hns3_init_pf(struct rte_eth_dev *eth_dev)
 		goto err_get_config;
 	}
 
+	ret = hns3_tqp_stats_init(hw);
+	if (ret)
+		goto err_get_config;
+
 	ret = hns3_init_hardware(hns);
 	if (ret) {
 		PMD_INIT_LOG(ERR, "Failed to init hardware: %d", ret);
-		goto err_get_config;
+		goto err_init_hw;
 	}
 
 	/* Initialize flow director filter list & hash */
 	ret = hns3_fdir_filter_init(hns);
 	if (ret) {
 		PMD_INIT_LOG(ERR, "Failed to alloc hashmap for fdir: %d", ret);
-		goto err_hw_init;
+		goto err_fdir;
 	}
 
 	hns3_set_default_rss_args(hw);
@@ -4561,16 +4672,17 @@ hns3_init_pf(struct rte_eth_dev *eth_dev)
 	if (ret) {
 		PMD_INIT_LOG(ERR, "fail to enable hw error interrupts: %d",
 			     ret);
-		goto err_fdir;
+		goto err_enable_intr;
 	}
 
 	return 0;
 
-err_fdir:
+err_enable_intr:
 	hns3_fdir_filter_uninit(hns);
-err_hw_init:
+err_fdir:
 	hns3_uninit_umv_space(hw);
-
+err_init_hw:
+	hns3_tqp_stats_uninit(hw);
 err_get_config:
 	hns3_pf_disable_irq0(hw);
 	rte_intr_disable(&pci_dev->intr_handle);
@@ -4602,6 +4714,7 @@ hns3_uninit_pf(struct rte_eth_dev *eth_dev)
 	hns3_promisc_uninit(hw);
 	hns3_fdir_filter_uninit(hns);
 	hns3_uninit_umv_space(hw);
+	hns3_tqp_stats_uninit(hw);
 	hns3_pf_disable_irq0(hw);
 	rte_intr_disable(&pci_dev->intr_handle);
 	hns3_intr_unregister(&pci_dev->intr_handle, hns3_interrupt_handler,
@@ -4622,23 +4735,22 @@ hns3_do_start(struct hns3_adapter *hns, bool reset_queue)
 	if (ret)
 		return ret;
 
-	/* Enable queues */
-	ret = hns3_start_queues(hns, reset_queue);
+	ret = hns3_init_queues(hns, reset_queue);
 	if (ret) {
-		PMD_INIT_LOG(ERR, "Failed to start queues: %d", ret);
+		PMD_INIT_LOG(ERR, "failed to init queues, ret = %d.", ret);
 		return ret;
 	}
 
-	/* Enable MAC */
 	ret = hns3_cfg_mac_mode(hw, true);
 	if (ret) {
-		PMD_INIT_LOG(ERR, "Failed to enable MAC: %d", ret);
+		PMD_INIT_LOG(ERR, "failed to enable MAC, ret = %d", ret);
 		goto err_config_mac_mode;
 	}
 	return 0;
 
 err_config_mac_mode:
-	hns3_stop_queues(hns, true);
+	hns3_dev_release_mbufs(hns);
+	hns3_reset_all_tqps(hns);
 	return ret;
 }
 
@@ -4769,6 +4881,32 @@ hns3_dev_start(struct rte_eth_dev *dev)
 		return ret;
 	}
 
+	/*
+	 * There are three register used to control the status of a TQP
+	 * (contains a pair of Tx queue and Rx queue) in the new version network
+	 * engine. One is used to control the enabling of Tx queue, the other is
+	 * used to control the enabling of Rx queue, and the last is the master
+	 * switch used to control the enabling of the tqp. The Tx register and
+	 * TQP register must be enabled at the same time to enable a Tx queue.
+	 * The same applies to the Rx queue. For the older network engine, this
+	 * function only refresh the enabled flag, and it is used to update the
+	 * status of queue in the dpdk framework.
+	 */
+	ret = hns3_start_all_txqs(dev);
+	if (ret) {
+		hw->adapter_state = HNS3_NIC_CONFIGURED;
+		rte_spinlock_unlock(&hw->lock);
+		return ret;
+	}
+
+	ret = hns3_start_all_rxqs(dev);
+	if (ret) {
+		hns3_stop_all_txqs(dev);
+		hw->adapter_state = HNS3_NIC_CONFIGURED;
+		rte_spinlock_unlock(&hw->lock);
+		return ret;
+	}
+
 	hw->adapter_state = HNS3_NIC_STARTED;
 	rte_spinlock_unlock(&hw->lock);
 
@@ -4781,11 +4919,12 @@ hns3_dev_start(struct rte_eth_dev *dev)
 
 	/* Enable interrupt of all rx queues before enabling queues */
 	hns3_dev_all_rx_queue_intr_enable(hw, true);
+
 	/*
-	 * When finished the initialization, enable queues to receive/transmit
-	 * packets.
+	 * After finished the initialization, enable tqps to receive/transmit
+	 * packets and refresh all queue status.
 	 */
-	hns3_enable_all_queues(hw, true);
+	hns3_start_tqps(hw);
 
 	hns3_info(hw, "hns3 dev start successful!");
 	return 0;
@@ -4795,7 +4934,6 @@ static int
 hns3_do_stop(struct hns3_adapter *hns)
 {
 	struct hns3_hw *hw = &hns->hw;
-	bool reset_queue;
 	int ret;
 
 	ret = hns3_cfg_mac_mode(hw, false);
@@ -4805,11 +4943,15 @@ hns3_do_stop(struct hns3_adapter *hns)
 
 	if (rte_atomic16_read(&hw->reset.disable_cmd) == 0) {
 		hns3_configure_all_mac_addr(hns, true);
-		reset_queue = true;
-	} else
-		reset_queue = false;
+		ret = hns3_reset_all_tqps(hns);
+		if (ret) {
+			hns3_err(hw, "failed to reset all queues ret = %d.",
+				 ret);
+			return ret;
+		}
+	}
 	hw->mac.default_addr_setted = false;
-	return hns3_stop_queues(hns, reset_queue);
+	return 0;
 }
 
 static void
@@ -4866,6 +5008,7 @@ hns3_dev_stop(struct rte_eth_dev *dev)
 
 	rte_spinlock_lock(&hw->lock);
 	if (rte_atomic16_read(&hw->reset.resetting) == 0) {
+		hns3_stop_tqps(hw);
 		hns3_do_stop(hns);
 		hns3_unmap_rx_interrupt(dev);
 		hns3_dev_release_mbufs(hns);
@@ -5105,7 +5248,7 @@ hns3_reinit_dev(struct hns3_adapter *hns)
 		return ret;
 	}
 
-	ret = hns3_reset_all_queues(hns);
+	ret = hns3_reset_all_tqps(hns);
 	if (ret) {
 		hns3_err(hw, "Failed to reset all queues: %d", ret);
 		return ret;
@@ -5383,6 +5526,7 @@ hns3_stop_service(struct hns3_adapter *hns)
 	rte_spinlock_lock(&hw->lock);
 	if (hns->hw.adapter_state == HNS3_NIC_STARTED ||
 	    hw->adapter_state == HNS3_NIC_STOPPING) {
+		hns3_enable_all_queues(hw, false);
 		hns3_do_stop(hns);
 		hw->reset.mbuf_deferred_free = true;
 	} else
@@ -5465,6 +5609,10 @@ hns3_restore_conf(struct hns3_adapter *hns)
 	if (ret)
 		goto err_promisc;
 
+	ret = hns3_restore_fec(hw);
+	if (ret)
+		goto err_promisc;
+
 	if (hns->hw.adapter_state == HNS3_NIC_STARTED) {
 		ret = hns3_do_start(hns, false);
 		if (ret)
@@ -5543,6 +5691,313 @@ hns3_reset_service(void *param)
 		hns3_msix_process(hns, reset_level);
 }
 
+static unsigned int
+hns3_get_speed_capa_num(uint16_t device_id)
+{
+	unsigned int num;
+
+	switch (device_id) {
+	case HNS3_DEV_ID_25GE:
+	case HNS3_DEV_ID_25GE_RDMA:
+		num = 2;
+		break;
+	case HNS3_DEV_ID_100G_RDMA_MACSEC:
+	case HNS3_DEV_ID_200G_RDMA:
+		num = 1;
+		break;
+	default:
+		num = 0;
+		break;
+	}
+
+	return num;
+}
+
+static int
+hns3_get_speed_fec_capa(struct rte_eth_fec_capa *speed_fec_capa,
+			uint16_t device_id)
+{
+	switch (device_id) {
+	case HNS3_DEV_ID_25GE:
+	/* fallthrough */
+	case HNS3_DEV_ID_25GE_RDMA:
+		speed_fec_capa[0].speed = speed_fec_capa_tbl[1].speed;
+		speed_fec_capa[0].capa = speed_fec_capa_tbl[1].capa;
+
+		/* In HNS3 device, the 25G NIC is compatible with 10G rate */
+		speed_fec_capa[1].speed = speed_fec_capa_tbl[0].speed;
+		speed_fec_capa[1].capa = speed_fec_capa_tbl[0].capa;
+		break;
+	case HNS3_DEV_ID_100G_RDMA_MACSEC:
+		speed_fec_capa[0].speed = speed_fec_capa_tbl[4].speed;
+		speed_fec_capa[0].capa = speed_fec_capa_tbl[4].capa;
+		break;
+	case HNS3_DEV_ID_200G_RDMA:
+		speed_fec_capa[0].speed = speed_fec_capa_tbl[5].speed;
+		speed_fec_capa[0].capa = speed_fec_capa_tbl[5].capa;
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+
+static int
+hns3_fec_get_capability(struct rte_eth_dev *dev,
+			struct rte_eth_fec_capa *speed_fec_capa,
+			unsigned int num)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	uint16_t device_id = pci_dev->id.device_id;
+	unsigned int capa_num;
+	int ret;
+
+	capa_num = hns3_get_speed_capa_num(device_id);
+	if (capa_num == 0) {
+		hns3_err(hw, "device(0x%x) is not supported by hns3 PMD",
+			 device_id);
+		return -ENOTSUP;
+	}
+
+	if (speed_fec_capa == NULL || num < capa_num)
+		return capa_num;
+
+	ret = hns3_get_speed_fec_capa(speed_fec_capa, device_id);
+	if (ret)
+		return -ENOTSUP;
+
+	return capa_num;
+}
+
+static int
+get_current_fec_auto_state(struct hns3_hw *hw, uint8_t *state)
+{
+	struct hns3_config_fec_cmd *req;
+	struct hns3_cmd_desc desc;
+	int ret;
+
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_CONFIG_FEC_MODE, true);
+	req = (struct hns3_config_fec_cmd *)desc.data;
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret) {
+		hns3_err(hw, "get current fec auto state failed, ret = %d",
+			 ret);
+		return ret;
+	}
+
+	*state = req->fec_mode & (1U << HNS3_MAC_CFG_FEC_AUTO_EN_B);
+	return 0;
+}
+
+static int
+hns3_fec_get(struct rte_eth_dev *dev, uint32_t *fec_capa)
+{
+#define QUERY_ACTIVE_SPEED	1
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct hns3_sfp_speed_cmd *resp;
+	uint32_t tmp_fec_capa;
+	uint8_t auto_state;
+	struct hns3_cmd_desc desc;
+	int ret;
+
+	/*
+	 * If link is down and AUTO is enabled, AUTO is returned, otherwise,
+	 * configured FEC mode is returned.
+	 * If link is up, current FEC mode is returned.
+	 */
+	if (hw->mac.link_status == ETH_LINK_DOWN) {
+		ret = get_current_fec_auto_state(hw, &auto_state);
+		if (ret)
+			return ret;
+
+		if (auto_state == 0x1) {
+			*fec_capa = RTE_ETH_FEC_MODE_CAPA_MASK(AUTO);
+			return 0;
+		}
+	}
+
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_SFP_GET_SPEED, true);
+	resp = (struct hns3_sfp_speed_cmd *)desc.data;
+	resp->query_type = QUERY_ACTIVE_SPEED;
+
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret == -EOPNOTSUPP) {
+		hns3_err(hw, "IMP do not support get FEC, ret = %d", ret);
+		return ret;
+	} else if (ret) {
+		hns3_err(hw, "get FEC failed, ret = %d", ret);
+		return ret;
+	}
+
+	/*
+	 * FEC mode order defined in hns3 hardware is inconsistend with
+	 * that defined in the ethdev library. So the sequence needs
+	 * to be converted.
+	 */
+	switch (resp->active_fec) {
+	case HNS3_HW_FEC_MODE_NOFEC:
+		tmp_fec_capa = RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC);
+		break;
+	case HNS3_HW_FEC_MODE_BASER:
+		tmp_fec_capa = RTE_ETH_FEC_MODE_CAPA_MASK(BASER);
+		break;
+	case HNS3_HW_FEC_MODE_RS:
+		tmp_fec_capa = RTE_ETH_FEC_MODE_CAPA_MASK(RS);
+		break;
+	default:
+		tmp_fec_capa = RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC);
+		break;
+	}
+
+	*fec_capa = tmp_fec_capa;
+	return 0;
+}
+
+static int
+hns3_set_fec_hw(struct hns3_hw *hw, uint32_t mode)
+{
+	struct hns3_config_fec_cmd *req;
+	struct hns3_cmd_desc desc;
+	int ret;
+
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_CONFIG_FEC_MODE, false);
+
+	req = (struct hns3_config_fec_cmd *)desc.data;
+	switch (mode) {
+	case RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC):
+		hns3_set_field(req->fec_mode, HNS3_MAC_CFG_FEC_MODE_M,
+				HNS3_MAC_CFG_FEC_MODE_S, HNS3_MAC_FEC_OFF);
+		break;
+	case RTE_ETH_FEC_MODE_CAPA_MASK(BASER):
+		hns3_set_field(req->fec_mode, HNS3_MAC_CFG_FEC_MODE_M,
+				HNS3_MAC_CFG_FEC_MODE_S, HNS3_MAC_FEC_BASER);
+		break;
+	case RTE_ETH_FEC_MODE_CAPA_MASK(RS):
+		hns3_set_field(req->fec_mode, HNS3_MAC_CFG_FEC_MODE_M,
+				HNS3_MAC_CFG_FEC_MODE_S, HNS3_MAC_FEC_RS);
+		break;
+	case RTE_ETH_FEC_MODE_CAPA_MASK(AUTO):
+		hns3_set_bit(req->fec_mode, HNS3_MAC_CFG_FEC_AUTO_EN_B, 1);
+		break;
+	default:
+		return 0;
+	}
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret)
+		hns3_err(hw, "set fec mode failed, ret = %d", ret);
+
+	return ret;
+}
+
+static uint32_t
+get_current_speed_fec_cap(struct hns3_hw *hw, struct rte_eth_fec_capa *fec_capa)
+{
+	struct hns3_mac *mac = &hw->mac;
+	uint32_t cur_capa;
+
+	switch (mac->link_speed) {
+	case ETH_SPEED_NUM_10G:
+		cur_capa = fec_capa[1].capa;
+		break;
+	case ETH_SPEED_NUM_25G:
+	case ETH_SPEED_NUM_100G:
+	case ETH_SPEED_NUM_200G:
+		cur_capa = fec_capa[0].capa;
+		break;
+	default:
+		cur_capa = 0;
+		break;
+	}
+
+	return cur_capa;
+}
+
+static bool
+is_fec_mode_one_bit_set(uint32_t mode)
+{
+	int cnt = 0;
+	uint8_t i;
+
+	for (i = 0; i < sizeof(mode); i++)
+		if (mode >> i & 0x1)
+			cnt++;
+
+	return cnt == 1 ? true : false;
+}
+
+static int
+hns3_fec_set(struct rte_eth_dev *dev, uint32_t mode)
+{
+#define FEC_CAPA_NUM 2
+	struct hns3_adapter *hns = dev->data->dev_private;
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(hns);
+	struct hns3_pf *pf = &hns->pf;
+
+	struct rte_eth_fec_capa fec_capa[FEC_CAPA_NUM];
+	uint32_t cur_capa;
+	uint32_t num = FEC_CAPA_NUM;
+	int ret;
+
+	ret = hns3_fec_get_capability(dev, fec_capa, num);
+	if (ret < 0)
+		return ret;
+
+	/* HNS3 PMD driver only support one bit set mode, e.g. 0x1, 0x4 */
+	if (!is_fec_mode_one_bit_set(mode))
+		hns3_err(hw, "FEC mode(0x%x) not supported in HNS3 PMD,"
+			     "FEC mode should be only one bit set", mode);
+
+	/*
+	 * Check whether the configured mode is within the FEC capability.
+	 * If not, the configured mode will not be supported.
+	 */
+	cur_capa = get_current_speed_fec_cap(hw, fec_capa);
+	if (!(cur_capa & mode)) {
+		hns3_err(hw, "unsupported FEC mode = 0x%x", mode);
+		return -EINVAL;
+	}
+
+	ret = hns3_set_fec_hw(hw, mode);
+	if (ret)
+		return ret;
+
+	pf->fec_mode = mode;
+	return 0;
+}
+
+static int
+hns3_restore_fec(struct hns3_hw *hw)
+{
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
+	struct hns3_pf *pf = &hns->pf;
+	uint32_t mode = pf->fec_mode;
+	int ret;
+
+	ret = hns3_set_fec_hw(hw, mode);
+	if (ret)
+		hns3_err(hw, "restore fec mode(0x%x) failed, ret = %d",
+			 mode, ret);
+
+	return ret;
+}
+
+static int
+hns3_query_dev_fec_info(struct rte_eth_dev *dev)
+{
+	struct hns3_adapter *hns = dev->data->dev_private;
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(hns);
+	struct hns3_pf *pf = &hns->pf;
+	int ret;
+
+	ret = hns3_fec_get(dev, &pf->fec_mode);
+	if (ret)
+		hns3_err(hw, "query device FEC info failed, ret = %d", ret);
+
+	return ret;
+}
+
 static const struct eth_dev_ops hns3_eth_dev_ops = {
 	.dev_configure      = hns3_dev_configure,
 	.dev_start          = hns3_dev_start,
@@ -5566,6 +6021,10 @@ static const struct eth_dev_ops hns3_eth_dev_ops = {
 	.tx_queue_setup         = hns3_tx_queue_setup,
 	.rx_queue_release       = hns3_dev_rx_queue_release,
 	.tx_queue_release       = hns3_dev_tx_queue_release,
+	.rx_queue_start         = hns3_dev_rx_queue_start,
+	.rx_queue_stop          = hns3_dev_rx_queue_stop,
+	.tx_queue_start         = hns3_dev_tx_queue_start,
+	.tx_queue_stop          = hns3_dev_tx_queue_stop,
 	.rx_queue_intr_enable   = hns3_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable  = hns3_dev_rx_queue_intr_disable,
 	.rxq_info_get           = hns3_rxq_info_get,
@@ -5592,6 +6051,9 @@ static const struct eth_dev_ops hns3_eth_dev_ops = {
 	.get_reg                = hns3_get_regs,
 	.get_dcb_info           = hns3_get_dcb_info,
 	.dev_supported_ptypes_get = hns3_dev_supported_ptypes_get,
+	.fec_get_capability     = hns3_fec_get_capability,
+	.fec_get                = hns3_fec_get,
+	.fec_set                = hns3_fec_set,
 };
 
 static const struct hns3_reset_ops hns3_reset_ops = {

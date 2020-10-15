@@ -55,11 +55,31 @@ New Features
      Also, make sure to start the actual text at the margin.
      =======================================================
 
+* **Added write combining store APIs.**
+
+  Added ``rte_write32_wc`` and ``rte_write32_wc_relaxed`` APIs
+  that enable write combining stores (depending on architecture).
+  The functions are provided as a generic stubs and
+  x86 specific implementation.
+
+* **Updated CRC modules of the net library.**
+
+  * Added runtime selection of the optimal architecture-specific CRC path.
+  * Added optimized implementations of CRC32-Ethernet and CRC16-CCITT
+    using the AVX512 and VPCLMULQDQ instruction sets.
+
+* **Added the FEC API, for a generic FEC query and config.**
+
+  Added the FEC API which provides functions for query FEC capabilities and
+  current FEC mode from device. Also, API for configuring FEC mode is also provided.
+
 * **Updated Broadcom bnxt driver.**
 
   Updated the Broadcom bnxt driver with new features and improvements, including:
 
   * Added support for 200G PAM4 link speed.
+  * Added support for RSS hash level selection.
+  * Updated HWRM structures to 1.10.1.70 version.
 
 * **Updated Cisco enic driver.**
 
@@ -67,6 +87,11 @@ New Features
   * Added support for egress PORT_ID action
   * Added support for non-zero priorities for group 0 flows
   * Added support for VXLAN decap combined with VLAN pop
+
+* **Added hns3 FEC PMD, for supporting query and config FEC mode.**
+
+  Added the FEC PMD which provides functions for query FEC capabilities and
+  current FEC mode from device. Also, PMD for configuring FEC mode is also provided.
 
 * **Updated Solarflare network PMD.**
 
@@ -79,6 +104,22 @@ New Features
   * Added support for Vhost-vDPA backend to Virtio-user PMD.
   * Changed default link speed to unknown.
   * Added support for 200G link speed.
+
+* **Updated Intel i40e driver.**
+
+  Updated the Intel i40e driver to use write combining stores.
+
+* **Updated Intel ixgbe driver.**
+
+  Updated the Intel ixgbe driver to use write combining stores.
+
+* **Updated Intel ice driver.**
+
+  Updated the Intel ice driver to use write combining stores.
+
+* **Updated Intel qat driver.**
+
+  Updated the Intel qat driver to use write combining stores.
 
 * **Added Ice Lake (Gen4) support for Intel NTB.**
 
@@ -105,6 +146,32 @@ New Features
     ``--portmask=N``
     where N represents the hexadecimal bitmask of ports used.
 
+* **Added Marvell OCTEON TX2 regex PMD.**
+
+  Added a new PMD driver for hardware regex offload block for OCTEON TX2 SoC.
+
+  See the :doc:`../regexdevs/octeontx2` for more details.
+
+* **Updated ioat rawdev driver**
+
+  The ioat rawdev driver has been updated and enhanced. Changes include:
+
+  * Added support for Intel\ |reg| Data Streaming Accelerator hardware.
+    For more information, see https://01.org/blogs/2019/introducing-intel-data-streaming-accelerator
+  * Added support for the fill operation via the API ``rte_ioat_enqueue_fill()``,
+    where the hardware fills an area of memory with a repeating pattern.
+  * Added a per-device configuration flag to disable management
+    of user-provided completion handles.
+  * Renamed the ``rte_ioat_do_copies()`` API to ``rte_ioat_perform_ops()``,
+    and renamed the ``rte_ioat_completed_copies()`` API to ``rte_ioat_completed_ops()``
+    to better reflect the APIs' purposes, and remove the implication that
+    they are limited to copy operations only.
+    [Note: The old API is still provided but marked as deprecated in the code]
+  * Added a new API ``rte_ioat_fence()`` to add a fence between operations.
+    This API replaces the ``fence`` flag parameter in the ``rte_ioat_enqueue_copies()`` function,
+    and is clearer as there is no ambiguity as to whether the flag should be
+    set on the last operation before the fence or the first operation after it.
+
 * **Updated the pipeline library for alignment with the P4 language.**
 
   Added new Software Switch (SWX) pipeline type that provides more
@@ -115,6 +182,21 @@ New Features
   * The actions and the pipeline are defined with instructions.
   * Extern objects and functions can be plugged into the pipeline.
   * Transaction-oriented table updates.
+
+* **Add new AVX512 specific classify algorithms for ACL library.**
+
+  * Added new ``RTE_ACL_CLASSIFY_AVX512X16`` vector implementation,
+    which can process up to 16 flows in parallel. Requires AVX512 support.
+
+  * Added new ``RTE_ACL_CLASSIFY_AVX512X32`` vector implementation,
+    which can process up to 32 flows in parallel. Requires AVX512 support.
+
+* **Added support to update subport bandwidth dynamically.**
+
+   * Added new API ``rte_sched_port_subport_profile_add`` to add new
+     subport bandwidth profile to subport porfile table at runtime.
+
+   * Added support to update subport rate dynamically.
 
 
 Removed Items
@@ -205,6 +287,11 @@ API Changes
   * ``_rte_eth_dev_callback_process()`` -> ``rte_eth_dev_callback_process()``
   * ``_rte_eth_dev_reset`` -> ``rte_eth_dev_internal_reset()``
 
+* ethdev: Modified field type of ``base`` and ``nb_queue`` in struct
+  ``rte_eth_dcb_tc_queue_mapping`` from ``uint8_t`` to ``uint16_t``.
+  As the data of ``uint8_t`` will be truncated when queue number under
+  a TC is greater than 256.
+
 * vhost: Moved vDPA APIs from experimental to stable.
 
 * rawdev: Added a structure size parameter to the functions
@@ -223,10 +310,24 @@ API Changes
   Following this change, the ``ioat_rawdev_autotest`` command has been
   removed as no longer needed.
 
+* raw/ioat: As noted above, the ``rte_ioat_do_copies()`` and
+  ``rte_ioat_completed_copies()`` functions have been renamed to
+  ``rte_ioat_perform_ops()`` and ``rte_ioat_completed_ops()`` respectively.
+
 * stack: the experimental tag has been dropped from the stack library, and its
   interfaces are considered stable as of DPDK 20.11.
 
 * bpf: ``RTE_BPF_XTYPE_NUM`` has been dropped from ``rte_bpf_xtype``.
+
+* acl: ``RTE_ACL_CLASSIFY_NUM`` enum value has been removed.
+  This enum value was not used inside DPDK, while it prevented to add new
+  classify algorithms without causing an ABI breakage.
+
+* sched: Added ``subport_profile_id`` as argument
+  to function ``rte_sched_subport_config``.
+
+* sched: Removed ``tb_rate``, ``tc_rate``, ``tc_period`` and ``tb_size``
+  from ``struct rte_sched_subport_params``.
 
 
 ABI Changes
@@ -258,6 +359,8 @@ ABI Changes
     which was already internal data structure.
 
   * ``ethdev`` internal functions are marked with ``__rte_internal`` tag.
+
+* sched: Added new fields to ``struct rte_sched_subport_port_params``.
 
 
 Known Issues

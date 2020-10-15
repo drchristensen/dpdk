@@ -241,7 +241,8 @@ enum rte_acl_classify_alg {
 	RTE_ACL_CLASSIFY_AVX2 = 3,    /**< requires AVX2 support. */
 	RTE_ACL_CLASSIFY_NEON = 4,    /**< requires NEON support. */
 	RTE_ACL_CLASSIFY_ALTIVEC = 5,    /**< requires ALTIVEC support. */
-	RTE_ACL_CLASSIFY_NUM          /* should always be the last one. */
+	RTE_ACL_CLASSIFY_AVX512X16 = 6,  /**< requires AVX512 support. */
+	RTE_ACL_CLASSIFY_AVX512X32 = 7,  /**< requires AVX512 support. */
 };
 
 /**
@@ -330,6 +331,7 @@ rte_acl_classify_alg(const struct rte_acl_ctx *ctx,
  *   existing algorithm, and that it could be run on the given CPU.
  * @return
  *   - -EINVAL if the parameters are invalid.
+ *   - -ENOTSUP requested algorithm is not supported by given platform.
  *   - Zero if operation completed successfully.
  */
 extern int

@@ -2166,10 +2166,7 @@ void
 rte_eth_tx_buffer_drop_callback(struct rte_mbuf **pkts, uint16_t unsent,
 		void *userdata __rte_unused)
 {
-	unsigned i;
-
-	for (i = 0; i < unsent; i++)
-		rte_pktmbuf_free(pkts[i]);
+	rte_pktmbuf_free_bulk(pkts, unsent);
 }
 
 void
@@ -2177,11 +2174,8 @@ rte_eth_tx_buffer_count_callback(struct rte_mbuf **pkts, uint16_t unsent,
 		void *userdata)
 {
 	uint64_t *count = userdata;
-	unsigned i;
 
-	for (i = 0; i < unsent; i++)
-		rte_pktmbuf_free(pkts[i]);
-
+	rte_pktmbuf_free_bulk(pkts, unsent);
 	*count += unsent;
 }
 
@@ -3666,6 +3660,50 @@ rte_eth_led_off(uint16_t port_id)
 	return eth_err(port_id, (*dev->dev_ops->dev_led_off)(dev));
 }
 
+int
+rte_eth_fec_get_capability(uint16_t port_id,
+			   struct rte_eth_fec_capa *speed_fec_capa,
+			   unsigned int num)
+{
+	struct rte_eth_dev *dev;
+	int ret;
+
+	if (speed_fec_capa == NULL && num > 0)
+		return -EINVAL;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+	dev = &rte_eth_devices[port_id];
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->fec_get_capability, -ENOTSUP);
+	ret = (*dev->dev_ops->fec_get_capability)(dev, speed_fec_capa, num);
+
+	return ret;
+}
+
+int
+rte_eth_fec_get(uint16_t port_id, uint32_t *fec_capa)
+{
+	struct rte_eth_dev *dev;
+
+	if (fec_capa == NULL)
+		return -EINVAL;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+	dev = &rte_eth_devices[port_id];
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->fec_get, -ENOTSUP);
+	return eth_err(port_id, (*dev->dev_ops->fec_get)(dev, fec_capa));
+}
+
+int
+rte_eth_fec_set(uint16_t port_id, uint32_t fec_capa)
+{
+	struct rte_eth_dev *dev;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+	dev = &rte_eth_devices[port_id];
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->fec_set, -ENOTSUP);
+	return eth_err(port_id, (*dev->dev_ops->fec_set)(dev, fec_capa));
+}
+
 /*
  * Returns index into MAC address array of addr. Use 00:00:00:00:00:00 to find
  * an empty spot.
@@ -4694,7 +4732,8 @@ rte_eth_rx_queue_info_get(uint16_t port_id, uint16_t queue_id,
 		return -EINVAL;
 	}
 
-	if (dev->data->rx_queues[queue_id] == NULL) {
+	if (dev->data->rx_queues == NULL ||
+			dev->data->rx_queues[queue_id] == NULL) {
 		RTE_ETHDEV_LOG(ERR,
 			       "Rx queue %"PRIu16" of device with port_id=%"
 			       PRIu16" has not been setup\n",
@@ -4733,7 +4772,8 @@ rte_eth_tx_queue_info_get(uint16_t port_id, uint16_t queue_id,
 		return -EINVAL;
 	}
 
-	if (dev->data->tx_queues[queue_id] == NULL) {
+	if (dev->data->tx_queues == NULL ||
+			dev->data->tx_queues[queue_id] == NULL) {
 		RTE_ETHDEV_LOG(ERR,
 			       "Tx queue %"PRIu16" of device with port_id=%"
 			       PRIu16" has not been setup\n",

@@ -4,7 +4,6 @@
 
 #include <stddef.h>
 #include <errno.h>
-#include <stdbool.h>
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -97,19 +96,85 @@ mlx5_rxq_obj_modify_wq_vlan_strip(struct mlx5_rxq_obj *rxq_obj, int on)
  *
  * @param rxq_obj
  *   Verbs Rx queue object.
+ * @param type
+ *   Type of change queue state.
  *
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
-mlx5_ibv_modify_wq(struct mlx5_rxq_obj *rxq_obj, bool is_start)
+mlx5_ibv_modify_wq(struct mlx5_rxq_obj *rxq_obj, uint8_t type)
 {
 	struct ibv_wq_attr mod = {
 		.attr_mask = IBV_WQ_ATTR_STATE,
-		.wq_state = is_start ? IBV_WQS_RDY : IBV_WQS_RESET,
+		.wq_state = (enum ibv_wq_state)type,
 	};
 
 	return mlx5_glue->modify_wq(rxq_obj->wq, &mod);
+}
+
+/**
+ * Modify QP using Verbs API.
+ *
+ * @param txq_obj
+ *   Verbs Tx queue object.
+ * @param type
+ *   Type of change queue state.
+ * @param dev_port
+ *   IB device port number.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+static int
+mlx5_ibv_modify_qp(struct mlx5_txq_obj *obj, enum mlx5_txq_modify_type type,
+		   uint8_t dev_port)
+{
+	struct ibv_qp_attr mod = {
+		.qp_state = IBV_QPS_RESET,
+		.port_num = dev_port,
+	};
+	int attr_mask = (IBV_QP_STATE | IBV_QP_PORT);
+	int ret;
+
+	if (type != MLX5_TXQ_MOD_RST2RDY) {
+		ret = mlx5_glue->modify_qp(obj->qp, &mod, IBV_QP_STATE);
+		if (ret) {
+			DRV_LOG(ERR, "Cannot change Tx QP state to RESET %s",
+				strerror(errno));
+			rte_errno = errno;
+			return ret;
+		}
+		if (type == MLX5_TXQ_MOD_RDY2RST)
+			return 0;
+	}
+	if (type == MLX5_TXQ_MOD_ERR2RDY)
+		attr_mask = IBV_QP_STATE;
+	mod.qp_state = IBV_QPS_INIT;
+	ret = mlx5_glue->modify_qp(obj->qp, &mod, attr_mask);
+	if (ret) {
+		DRV_LOG(ERR, "Cannot change Tx QP state to INIT %s",
+			strerror(errno));
+		rte_errno = errno;
+		return ret;
+	}
+	mod.qp_state = IBV_QPS_RTR;
+	ret = mlx5_glue->modify_qp(obj->qp, &mod, IBV_QP_STATE);
+	if (ret) {
+		DRV_LOG(ERR, "Cannot change Tx QP state to RTR %s",
+			strerror(errno));
+		rte_errno = errno;
+		return ret;
+	}
+	mod.qp_state = IBV_QPS_RTS;
+	ret = mlx5_glue->modify_qp(obj->qp, &mod, IBV_QP_STATE);
+	if (ret) {
+		DRV_LOG(ERR, "Cannot change Tx QP state to RTS %s",
+			strerror(errno));
+		rte_errno = errno;
+		return ret;
+	}
+	return 0;
 }
 
 /**
@@ -303,7 +368,6 @@ mlx5_rxq_ibv_obj_new(struct rte_eth_dev *dev, uint16_t idx)
 	MLX5_ASSERT(tmpl);
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_RX_QUEUE;
 	priv->verbs_alloc_ctx.obj = rxq_ctrl;
-	tmpl->type = MLX5_RXQ_OBJ_TYPE_IBV;
 	tmpl->rxq_ctrl = rxq_ctrl;
 	if (rxq_ctrl->irq) {
 		tmpl->ibv_channel =
@@ -354,7 +418,7 @@ mlx5_rxq_ibv_obj_new(struct rte_eth_dev *dev, uint16_t idx)
 		goto error;
 	}
 	/* Change queue state to ready. */
-	ret = mlx5_ibv_modify_wq(tmpl, true);
+	ret = mlx5_ibv_modify_wq(tmpl, IBV_WQS_RDY);
 	if (ret) {
 		DRV_LOG(ERR,
 			"Port %u Rx queue %u WQ state to IBV_WQS_RDY failed.",
@@ -782,6 +846,225 @@ mlx5_ibv_drop_action_destroy(struct rte_eth_dev *dev)
 	mlx5_rxq_ibv_obj_drop_release(dev);
 }
 
+/**
+ * Create a QP Verbs object.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param idx
+ *   Queue index in DPDK Tx queue array.
+ *
+ * @return
+ *   The QP Verbs object, NULL otherwise and rte_errno is set.
+ */
+static struct ibv_qp *
+mlx5_txq_ibv_qp_create(struct rte_eth_dev *dev, uint16_t idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_txq_data *txq_data = (*priv->txqs)[idx];
+	struct mlx5_txq_ctrl *txq_ctrl =
+			container_of(txq_data, struct mlx5_txq_ctrl, txq);
+	struct ibv_qp *qp_obj = NULL;
+	struct ibv_qp_init_attr_ex qp_attr = { 0 };
+	const int desc = 1 << txq_data->elts_n;
+
+	MLX5_ASSERT(txq_ctrl->obj->cq);
+	/* CQ to be associated with the send queue. */
+	qp_attr.send_cq = txq_ctrl->obj->cq;
+	/* CQ to be associated with the receive queue. */
+	qp_attr.recv_cq = txq_ctrl->obj->cq;
+	/* Max number of outstanding WRs. */
+	qp_attr.cap.max_send_wr = ((priv->sh->device_attr.max_qp_wr < desc) ?
+				   priv->sh->device_attr.max_qp_wr : desc);
+	/*
+	 * Max number of scatter/gather elements in a WR, must be 1 to prevent
+	 * libmlx5 from trying to affect must be 1 to prevent libmlx5 from
+	 * trying to affect too much memory. TX gather is not impacted by the
+	 * device_attr.max_sge limit and will still work properly.
+	 */
+	qp_attr.cap.max_send_sge = 1;
+	qp_attr.qp_type = IBV_QPT_RAW_PACKET,
+	/* Do *NOT* enable this, completions events are managed per Tx burst. */
+	qp_attr.sq_sig_all = 0;
+	qp_attr.pd = priv->sh->pd;
+	qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD;
+	if (txq_data->inlen_send)
+		qp_attr.cap.max_inline_data = txq_ctrl->max_inline_data;
+	if (txq_data->tso_en) {
+		qp_attr.max_tso_header = txq_ctrl->max_tso_header;
+		qp_attr.comp_mask |= IBV_QP_INIT_ATTR_MAX_TSO_HEADER;
+	}
+	qp_obj = mlx5_glue->create_qp_ex(priv->sh->ctx, &qp_attr);
+	if (qp_obj == NULL) {
+		DRV_LOG(ERR, "Port %u Tx queue %u QP creation failure.",
+			dev->data->port_id, idx);
+		rte_errno = errno;
+	}
+	return qp_obj;
+}
+
+/**
+ * Create the Tx queue Verbs object.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param idx
+ *   Queue index in DPDK Tx queue array.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_txq_ibv_obj_new(struct rte_eth_dev *dev, uint16_t idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_txq_data *txq_data = (*priv->txqs)[idx];
+	struct mlx5_txq_ctrl *txq_ctrl =
+		container_of(txq_data, struct mlx5_txq_ctrl, txq);
+	struct mlx5_txq_obj *txq_obj = txq_ctrl->obj;
+	unsigned int cqe_n;
+	struct mlx5dv_qp qp;
+	struct mlx5dv_cq cq_info;
+	struct mlx5dv_obj obj;
+	const int desc = 1 << txq_data->elts_n;
+	int ret = 0;
+
+	MLX5_ASSERT(txq_data);
+	MLX5_ASSERT(txq_obj);
+	txq_obj->txq_ctrl = txq_ctrl;
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_TX_QUEUE;
+	priv->verbs_alloc_ctx.obj = txq_ctrl;
+	if (mlx5_getenv_int("MLX5_ENABLE_CQE_COMPRESSION")) {
+		DRV_LOG(ERR, "Port %u MLX5_ENABLE_CQE_COMPRESSION "
+			"must never be set.", dev->data->port_id);
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	cqe_n = desc / MLX5_TX_COMP_THRESH +
+		1 + MLX5_TX_COMP_THRESH_INLINE_DIV;
+	txq_obj->cq = mlx5_glue->create_cq(priv->sh->ctx, cqe_n, NULL, NULL, 0);
+	if (txq_obj->cq == NULL) {
+		DRV_LOG(ERR, "Port %u Tx queue %u CQ creation failure.",
+			dev->data->port_id, idx);
+		rte_errno = errno;
+		goto error;
+	}
+	txq_obj->qp = mlx5_txq_ibv_qp_create(dev, idx);
+	if (txq_obj->qp == NULL) {
+		rte_errno = errno;
+		goto error;
+	}
+	ret = mlx5_ibv_modify_qp(txq_obj, MLX5_TXQ_MOD_RST2RDY,
+				 (uint8_t)priv->dev_port);
+	if (ret) {
+		DRV_LOG(ERR, "Port %u Tx queue %u QP state modifying failed.",
+			dev->data->port_id, idx);
+		rte_errno = errno;
+		goto error;
+	}
+	qp.comp_mask = MLX5DV_QP_MASK_UAR_MMAP_OFFSET;
+#ifdef HAVE_IBV_FLOW_DV_SUPPORT
+	/* If using DevX, need additional mask to read tisn value. */
+	if (priv->sh->devx && !priv->sh->tdn)
+		qp.comp_mask |= MLX5DV_QP_MASK_RAW_QP_HANDLES;
+#endif
+	obj.cq.in = txq_obj->cq;
+	obj.cq.out = &cq_info;
+	obj.qp.in = txq_obj->qp;
+	obj.qp.out = &qp;
+	ret = mlx5_glue->dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_QP);
+	if (ret != 0) {
+		rte_errno = errno;
+		goto error;
+	}
+	if (cq_info.cqe_size != RTE_CACHE_LINE_SIZE) {
+		DRV_LOG(ERR,
+			"Port %u wrong MLX5_CQE_SIZE environment variable"
+			" value: it should be set to %u.",
+			dev->data->port_id, RTE_CACHE_LINE_SIZE);
+		rte_errno = EINVAL;
+		goto error;
+	}
+	txq_data->cqe_n = log2above(cq_info.cqe_cnt);
+	txq_data->cqe_s = 1 << txq_data->cqe_n;
+	txq_data->cqe_m = txq_data->cqe_s - 1;
+	txq_data->qp_num_8s = ((struct ibv_qp *)txq_obj->qp)->qp_num << 8;
+	txq_data->wqes = qp.sq.buf;
+	txq_data->wqe_n = log2above(qp.sq.wqe_cnt);
+	txq_data->wqe_s = 1 << txq_data->wqe_n;
+	txq_data->wqe_m = txq_data->wqe_s - 1;
+	txq_data->wqes_end = txq_data->wqes + txq_data->wqe_s;
+	txq_data->qp_db = &qp.dbrec[MLX5_SND_DBR];
+	txq_data->cq_db = cq_info.dbrec;
+	txq_data->cqes = (volatile struct mlx5_cqe *)cq_info.buf;
+	txq_data->cq_ci = 0;
+	txq_data->cq_pi = 0;
+	txq_data->wqe_ci = 0;
+	txq_data->wqe_pi = 0;
+	txq_data->wqe_comp = 0;
+	txq_data->wqe_thres = txq_data->wqe_s / MLX5_TX_COMP_THRESH_INLINE_DIV;
+#ifdef HAVE_IBV_FLOW_DV_SUPPORT
+	/*
+	 * If using DevX need to query and store TIS transport domain value.
+	 * This is done once per port.
+	 * Will use this value on Rx, when creating matching TIR.
+	 */
+	if (priv->sh->devx && !priv->sh->tdn) {
+		ret = mlx5_devx_cmd_qp_query_tis_td(txq_obj->qp, qp.tisn,
+						    &priv->sh->tdn);
+		if (ret) {
+			DRV_LOG(ERR, "Fail to query port %u Tx queue %u QP TIS "
+				"transport domain.", dev->data->port_id, idx);
+			rte_errno = EINVAL;
+			goto error;
+		} else {
+			DRV_LOG(DEBUG, "Port %u Tx queue %u TIS number %d "
+				"transport domain %d.", dev->data->port_id,
+				idx, qp.tisn, priv->sh->tdn);
+		}
+	}
+#endif
+	txq_ctrl->bf_reg = qp.bf.reg;
+	if (qp.comp_mask & MLX5DV_QP_MASK_UAR_MMAP_OFFSET) {
+		txq_ctrl->uar_mmap_offset = qp.uar_mmap_offset;
+		DRV_LOG(DEBUG, "Port %u: uar_mmap_offset 0x%" PRIx64 ".",
+			dev->data->port_id, txq_ctrl->uar_mmap_offset);
+	} else {
+		DRV_LOG(ERR,
+			"Port %u failed to retrieve UAR info, invalid"
+			" libmlx5.so",
+			dev->data->port_id);
+		rte_errno = EINVAL;
+		goto error;
+	}
+	txq_uar_init(txq_ctrl);
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
+	return 0;
+error:
+	ret = rte_errno; /* Save rte_errno before cleanup. */
+	if (txq_obj->cq)
+		claim_zero(mlx5_glue->destroy_cq(txq_obj->cq));
+	if (txq_obj->qp)
+		claim_zero(mlx5_glue->destroy_qp(txq_obj->qp));
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
+	rte_errno = ret; /* Restore rte_errno. */
+	return -rte_errno;
+}
+
+/**
+ * Release an Tx verbs queue object.
+ *
+ * @param txq_obj
+ *   Verbs Tx queue object..
+ */
+void
+mlx5_txq_ibv_obj_release(struct mlx5_txq_obj *txq_obj)
+{
+	MLX5_ASSERT(txq_obj);
+	claim_zero(mlx5_glue->destroy_qp(txq_obj->qp));
+	claim_zero(mlx5_glue->destroy_cq(txq_obj->cq));
+}
+
 struct mlx5_obj_ops ibv_obj_ops = {
 	.rxq_obj_modify_vlan_strip = mlx5_rxq_obj_modify_wq_vlan_strip,
 	.rxq_obj_new = mlx5_rxq_ibv_obj_new,
@@ -794,4 +1077,7 @@ struct mlx5_obj_ops ibv_obj_ops = {
 	.hrxq_destroy = mlx5_ibv_qp_destroy,
 	.drop_action_create = mlx5_ibv_drop_action_create,
 	.drop_action_destroy = mlx5_ibv_drop_action_destroy,
+	.txq_obj_new = mlx5_txq_ibv_obj_new,
+	.txq_obj_modify = mlx5_ibv_modify_qp,
+	.txq_obj_release = mlx5_txq_ibv_obj_release,
 };

@@ -9,7 +9,6 @@
 #define HNS3_CMDQ_RX_INVLD_B		0
 #define HNS3_CMDQ_RX_OUTVLD_B		1
 #define HNS3_CMD_DESC_ALIGNMENT		4096
-#define HNS3_QUEUE_ID_MASK		0x1ff
 #define HNS3_CMD_FLAG_NEXT		BIT(2)
 
 struct hns3_hw;
@@ -100,6 +99,7 @@ enum hns3_opcode_type {
 	HNS3_OPC_QUERY_LINK_STATUS      = 0x0307,
 	HNS3_OPC_CONFIG_MAX_FRM_SIZE    = 0x0308,
 	HNS3_OPC_CONFIG_SPEED_DUP       = 0x0309,
+	HNS3_OPC_CONFIG_FEC_MODE        = 0x031A,
 
 	/* PFC/Pause commands */
 	HNS3_OPC_CFG_MAC_PAUSE_EN       = 0x0701,
@@ -160,6 +160,7 @@ enum hns3_opcode_type {
 	HNS3_OPC_QUERY_RX_STATUS        = 0x0B13,
 	HNS3_OPC_CFG_COM_TQP_QUEUE      = 0x0B20,
 	HNS3_OPC_RESET_TQP_QUEUE        = 0x0B22,
+	HNS3_OPC_RESET_TQP_QUEUE_INDEP  = 0x0B23,
 
 	/* TSO command */
 	HNS3_OPC_TSO_GENERIC_CONFIG     = 0x0C01,
@@ -388,7 +389,8 @@ struct hns3_pf_res_cmd {
 	uint16_t pf_own_fun_number;
 	uint16_t tx_buf_size;
 	uint16_t dv_buf_size;
-	uint16_t tqp_num_ext;
+	/* number of queues that exceed 1024 */
+	uint16_t ext_tqp_num;
 	uint16_t roh_pf_intr_vector_number;
 	uint32_t rsv[1];
 };
@@ -441,6 +443,8 @@ struct hns3_umv_spc_alc_cmd {
 #define HNS3_CFG_SPEED_ABILITY_M	GENMASK(7, 0)
 #define HNS3_CFG_UMV_TBL_SPACE_S	16
 #define HNS3_CFG_UMV_TBL_SPACE_M	GENMASK(31, 16)
+#define HNS3_CFG_EXT_RSS_SIZE_S		0
+#define HNS3_CFG_EXT_RSS_SIZE_M		GENMASK(3, 0)
 
 #define HNS3_ACCEPT_TAG1_B		0
 #define HNS3_ACCEPT_UNTAG1_B		1
@@ -567,20 +571,25 @@ struct hns3_rss_input_tuple_cmd {
 	uint8_t rsv[16];
 };
 
-#define HNS3_RSS_CFG_TBL_SIZE	16
+#define HNS3_RSS_CFG_TBL_SIZE		16
+#define HNS3_RSS_CFG_TBL_SIZE_H		4
+#define HNS3_RSS_CFG_TBL_BW_H		2
+#define HNS3_RSS_CFG_TBL_BW_L		8
 
 /* Configure the indirection table, opcode:0x0D07 */
 struct hns3_rss_indirection_table_cmd {
 	uint16_t start_table_index;  /* Bit3~0 must be 0x0. */
 	uint16_t rss_set_bitmap;
-	uint8_t rsv[4];
-	uint8_t rss_result[HNS3_RSS_CFG_TBL_SIZE];
+	uint8_t rss_result_h[HNS3_RSS_CFG_TBL_SIZE_H];
+	uint8_t rss_result_l[HNS3_RSS_CFG_TBL_SIZE];
 };
 
 #define HNS3_RSS_TC_OFFSET_S		0
-#define HNS3_RSS_TC_OFFSET_M		(0x3ff << HNS3_RSS_TC_OFFSET_S)
+#define HNS3_RSS_TC_OFFSET_M		GENMASK(10, 0)
+#define HNS3_RSS_TC_SIZE_MSB_S		11
+#define HNS3_RSS_TC_SIZE_MSB_OFFSET	3
 #define HNS3_RSS_TC_SIZE_S		12
-#define HNS3_RSS_TC_SIZE_M		(0x7 << HNS3_RSS_TC_SIZE_S)
+#define HNS3_RSS_TC_SIZE_M		GENMASK(14, 12)
 #define HNS3_RSS_TC_VALID_B		15
 
 /* Configure the tc_size and tc_offset, opcode:0x0D08 */
@@ -664,7 +673,6 @@ struct hns3_config_mac_speed_dup_cmd {
 	uint8_t rsv[22];
 };
 
-#define HNS3_RING_ID_MASK		GENMASK(9, 0)
 #define HNS3_TQP_ENABLE_B		0
 
 #define HNS3_MAC_CFG_AN_EN_B		0
@@ -680,9 +688,25 @@ struct hns3_config_auto_neg_cmd {
 	uint8_t   rsv[20];
 };
 
+#define HNS3_MAC_CFG_FEC_AUTO_EN_B	0
+#define HNS3_MAC_CFG_FEC_MODE_S		1
+#define HNS3_MAC_CFG_FEC_MODE_M	GENMASK(3, 1)
+#define HNS3_MAC_FEC_OFF		0
+#define HNS3_MAC_FEC_BASER		1
+#define HNS3_MAC_FEC_RS			2
+
 struct hns3_sfp_speed_cmd {
 	uint32_t  sfp_speed;
-	uint32_t  rsv[5];
+	uint8_t   query_type; /* 0: sfp speed, 1: active fec */
+	uint8_t   active_fec; /* current FEC mode */
+	uint16_t  rsv1;
+	uint32_t  rsv2[4];
+};
+
+/* Configure FEC mode, opcode:0x031A */
+struct hns3_config_fec_cmd {
+	uint8_t fec_mode;
+	uint8_t rsv[23];
 };
 
 #define HNS3_MAC_MGR_MASK_VLAN_B		BIT(0)
@@ -804,7 +828,8 @@ struct hns3_reset_tqp_queue_cmd {
 	uint16_t tqp_id;
 	uint8_t reset_req;
 	uint8_t ready_to_reset;
-	uint8_t rsv[20];
+	uint8_t queue_direction;
+	uint8_t rsv[19];
 };
 
 #define HNS3_CFG_RESET_MAC_B		3
@@ -828,7 +853,7 @@ struct hns3_dev_specs_0_cmd {
 	uint32_t max_tm_rate;
 };
 
-#define HNS3_MAX_TQP_NUM_PER_FUNC	64
+#define HNS3_MAX_TQP_NUM_HIP08_PF	64
 #define HNS3_DEFAULT_TX_BUF		0x4000    /* 16k  bytes */
 #define HNS3_TOTAL_PKT_BUF		0x108000  /* 1.03125M bytes */
 #define HNS3_DEFAULT_DV			0xA000    /* 40k byte */

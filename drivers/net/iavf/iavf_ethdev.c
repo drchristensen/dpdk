@@ -40,6 +40,11 @@ static const uint32_t *iavf_dev_supported_ptypes_get(struct rte_eth_dev *dev);
 static int iavf_dev_stats_get(struct rte_eth_dev *dev,
 			     struct rte_eth_stats *stats);
 static int iavf_dev_stats_reset(struct rte_eth_dev *dev);
+static int iavf_dev_xstats_get(struct rte_eth_dev *dev,
+				 struct rte_eth_xstat *xstats, unsigned int n);
+static int iavf_dev_xstats_get_names(struct rte_eth_dev *dev,
+				       struct rte_eth_xstat_name *xstats_names,
+				       unsigned int limit);
 static int iavf_dev_promiscuous_enable(struct rte_eth_dev *dev);
 static int iavf_dev_promiscuous_disable(struct rte_eth_dev *dev);
 static int iavf_dev_allmulticast_enable(struct rte_eth_dev *dev);
@@ -82,6 +87,30 @@ static const struct rte_pci_id pci_id_iavf_map[] = {
 	{ .vendor_id = 0, /* sentinel */ },
 };
 
+struct rte_iavf_xstats_name_off {
+	char name[RTE_ETH_XSTATS_NAME_SIZE];
+	unsigned int offset;
+};
+
+static const struct rte_iavf_xstats_name_off rte_iavf_stats_strings[] = {
+	{"rx_bytes", offsetof(struct iavf_eth_stats, rx_bytes)},
+	{"rx_unicast_packets", offsetof(struct iavf_eth_stats, rx_unicast)},
+	{"rx_multicast_packets", offsetof(struct iavf_eth_stats, rx_multicast)},
+	{"rx_broadcast_packets", offsetof(struct iavf_eth_stats, rx_broadcast)},
+	{"rx_dropped_packets", offsetof(struct iavf_eth_stats, rx_discards)},
+	{"rx_unknown_protocol_packets", offsetof(struct iavf_eth_stats,
+		rx_unknown_protocol)},
+	{"tx_bytes", offsetof(struct iavf_eth_stats, tx_bytes)},
+	{"tx_unicast_packets", offsetof(struct iavf_eth_stats, tx_unicast)},
+	{"tx_multicast_packets", offsetof(struct iavf_eth_stats, tx_multicast)},
+	{"tx_broadcast_packets", offsetof(struct iavf_eth_stats, tx_broadcast)},
+	{"tx_dropped_packets", offsetof(struct iavf_eth_stats, tx_discards)},
+	{"tx_error_packets", offsetof(struct iavf_eth_stats, tx_errors)},
+};
+
+#define IAVF_NB_XSTATS (sizeof(rte_iavf_stats_strings) / \
+		sizeof(rte_iavf_stats_strings[0]))
+
 static const struct eth_dev_ops iavf_eth_dev_ops = {
 	.dev_configure              = iavf_dev_configure,
 	.dev_start                  = iavf_dev_start,
@@ -93,6 +122,9 @@ static const struct eth_dev_ops iavf_eth_dev_ops = {
 	.link_update                = iavf_dev_link_update,
 	.stats_get                  = iavf_dev_stats_get,
 	.stats_reset                = iavf_dev_stats_reset,
+	.xstats_get                 = iavf_dev_xstats_get,
+	.xstats_get_names           = iavf_dev_xstats_get_names,
+	.xstats_reset               = iavf_dev_stats_reset,
 	.promiscuous_enable         = iavf_dev_promiscuous_enable,
 	.promiscuous_disable        = iavf_dev_promiscuous_disable,
 	.allmulticast_enable        = iavf_dev_allmulticast_enable,
@@ -121,6 +153,7 @@ static const struct eth_dev_ops iavf_eth_dev_ops = {
 	.rx_queue_intr_enable       = iavf_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable      = iavf_dev_rx_queue_intr_disable,
 	.filter_ctrl                = iavf_dev_filter_ctrl,
+	.tx_done_cleanup	    = iavf_dev_tx_done_cleanup,
 };
 
 static int
@@ -540,6 +573,8 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_tx_queues = vf->vsi_res->num_queue_pairs;
 	dev_info->min_rx_bufsize = IAVF_BUF_SIZE_MIN;
 	dev_info->max_rx_pktlen = IAVF_FRAME_SIZE_MAX;
+	dev_info->max_mtu = dev_info->max_rx_pktlen - IAVF_ETH_OVERHEAD;
+	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
 	dev_info->hash_key_size = vf->vf_res->rss_key_size;
 	dev_info->reta_size = vf->vf_res->rss_lut_size;
 	dev_info->flow_type_rss_offloads = IAVF_RSS_OFFLOAD_ALL;
@@ -665,12 +700,7 @@ iavf_dev_link_update(struct rte_eth_dev *dev,
 	new_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
 				ETH_LINK_SPEED_FIXED);
 
-	if (rte_atomic64_cmpset((uint64_t *)&dev->data->dev_link,
-				*(uint64_t *)&dev->data->dev_link,
-				*(uint64_t *)&new_link) == 0)
-		return -1;
-
-	return 0;
+	return rte_eth_linkstatus_set(dev, &new_link);
 }
 
 static int
@@ -679,20 +709,9 @@ iavf_dev_promiscuous_enable(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	int ret;
 
-	if (vf->promisc_unicast_enabled)
-		return 0;
-
-	ret = iavf_config_promisc(adapter, true, vf->promisc_multicast_enabled);
-	if (!ret)
-		vf->promisc_unicast_enabled = true;
-	else if (ret == IAVF_NOT_SUPPORTED)
-		ret = -ENOTSUP;
-	else
-		ret = -EAGAIN;
-
-	return ret;
+	return iavf_config_promisc(adapter,
+				  true, vf->promisc_multicast_enabled);
 }
 
 static int
@@ -701,21 +720,9 @@ iavf_dev_promiscuous_disable(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	int ret;
 
-	if (!vf->promisc_unicast_enabled)
-		return 0;
-
-	ret = iavf_config_promisc(adapter, false,
-				  vf->promisc_multicast_enabled);
-	if (!ret)
-		vf->promisc_unicast_enabled = false;
-	else if (ret == IAVF_NOT_SUPPORTED)
-		ret = -ENOTSUP;
-	else
-		ret = -EAGAIN;
-
-	return ret;
+	return iavf_config_promisc(adapter,
+				  false, vf->promisc_multicast_enabled);
 }
 
 static int
@@ -724,20 +731,9 @@ iavf_dev_allmulticast_enable(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	int ret;
 
-	if (vf->promisc_multicast_enabled)
-		return 0;
-
-	ret = iavf_config_promisc(adapter, vf->promisc_unicast_enabled, true);
-	if (!ret)
-		vf->promisc_multicast_enabled = true;
-	else if (ret == IAVF_NOT_SUPPORTED)
-		ret = -ENOTSUP;
-	else
-		ret = -EAGAIN;
-
-	return ret;
+	return iavf_config_promisc(adapter,
+				  vf->promisc_unicast_enabled, true);
 }
 
 static int
@@ -746,20 +742,9 @@ iavf_dev_allmulticast_disable(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	int ret;
 
-	if (!vf->promisc_multicast_enabled)
-		return 0;
-
-	ret = iavf_config_promisc(adapter, vf->promisc_unicast_enabled, false);
-	if (!ret)
-		vf->promisc_multicast_enabled = false;
-	else if (ret == IAVF_NOT_SUPPORTED)
-		ret = -ENOTSUP;
-	else
-		ret = -EAGAIN;
-
-	return ret;
+	return iavf_config_promisc(adapter,
+				  vf->promisc_unicast_enabled, false);
 }
 
 static int
@@ -1139,6 +1124,55 @@ iavf_dev_stats_reset(struct rte_eth_dev *dev)
 	return 0;
 }
 
+static int iavf_dev_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
+				      struct rte_eth_xstat_name *xstats_names,
+				      __rte_unused unsigned int limit)
+{
+	unsigned int i;
+
+	if (xstats_names != NULL)
+		for (i = 0; i < IAVF_NB_XSTATS; i++) {
+			snprintf(xstats_names[i].name,
+				sizeof(xstats_names[i].name),
+				"%s", rte_iavf_stats_strings[i].name);
+		}
+	return IAVF_NB_XSTATS;
+}
+
+static int iavf_dev_xstats_get(struct rte_eth_dev *dev,
+				 struct rte_eth_xstat *xstats, unsigned int n)
+{
+	int ret;
+	unsigned int i;
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	struct iavf_vsi *vsi = &vf->vsi;
+	struct virtchnl_eth_stats *pstats = NULL;
+
+	if (n < IAVF_NB_XSTATS)
+		return IAVF_NB_XSTATS;
+
+	ret = iavf_query_stats(adapter, &pstats);
+	if (ret != 0)
+		return 0;
+
+	if (!xstats)
+		return 0;
+
+	iavf_update_stats(vsi, pstats);
+
+	/* loop over xstats array and values from pstats */
+	for (i = 0; i < IAVF_NB_XSTATS; i++) {
+		xstats[i].id = i;
+		xstats[i].value = *(uint64_t *)(((char *)pstats) +
+			rte_iavf_stats_strings[i].offset);
+	}
+
+	return IAVF_NB_XSTATS;
+}
+
+
 static int
 iavf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
@@ -1284,8 +1318,6 @@ iavf_init_vf(struct rte_eth_dev *dev)
 			goto err_rss;
 		}
 	}
-
-	vf->vf_reset = false;
 
 	return 0;
 err_rss:
@@ -1474,6 +1506,15 @@ iavf_dev_close(struct rte_eth_dev *dev)
 	iavf_dev_stop(dev);
 	iavf_flow_flush(dev, NULL);
 	iavf_flow_uninit(adapter);
+
+	/*
+	 * disable promiscuous mode before reset vf
+	 * it is a workaround solution when work with kernel driver
+	 * and it is not the normal way
+	 */
+	if (vf->promisc_unicast_enabled || vf->promisc_multicast_enabled)
+		iavf_config_promisc(adapter, false, false);
+
 	iavf_shutdown_adminq(hw);
 	/* disable uio intr before callback unregister */
 	rte_intr_disable(intr_handle);
@@ -1504,6 +1545,8 @@ iavf_dev_close(struct rte_eth_dev *dev)
 
 	rte_free(vf->aq_resp);
 	vf->aq_resp = NULL;
+
+	vf->vf_reset = false;
 
 	return 0;
 }

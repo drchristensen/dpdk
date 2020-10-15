@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright(c) 2017-2019 Intel Corporation
+# Copyright(c) 2017-2020 Intel Corporation
 
 # get binutils version for the workaround of Bug 97
 if not is_windows
@@ -21,9 +21,20 @@ foreach f:base_flags
 	compile_time_cpuflags += ['RTE_CPUFLAG_' + f]
 endforeach
 
-optional_flags = ['AES', 'PCLMUL',
-		'AVX', 'AVX2', 'AVX512F',
-		'RDRND', 'RDSEED']
+optional_flags = [
+	'AES',
+	'AVX',
+	'AVX2',
+	'AVX512BW',
+	'AVX512CD',
+	'AVX512DQ',
+	'AVX512F',
+	'AVX512VL',
+	'PCLMUL',
+	'RDRND',
+	'RDSEED',
+	'VPCLMULQDQ',
+]
 foreach f:optional_flags
 	if cc.get_define('__@0@__'.format(f), args: machine_args) == '1'
 		if f == 'PCLMUL' # special case flags with different defines

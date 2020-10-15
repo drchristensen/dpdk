@@ -168,7 +168,7 @@ print_stats(char *prgname)
 	struct rte_rawdev_xstats_name *names_xstats;
 	uint64_t *xstats;
 	unsigned int *ids_xstats, nb_xstats;
-	char status_string[120]; /* to print at the top of the output */
+	char status_string[255]; /* to print at the top of the output */
 	int status_strlen;
 	int ret;
 
@@ -194,7 +194,7 @@ print_stats(char *prgname)
 		"Rx Queues = %d, ", nb_queues);
 	status_strlen += snprintf(status_string + status_strlen,
 		sizeof(status_string) - status_strlen,
-		"Ring Size = %d\n", ring_size);
+		"Ring Size = %d", ring_size);
 
 	/* Allocate memory for xstats names and values */
 	ret = rte_rawdev_xstats_names_get(
@@ -251,7 +251,7 @@ print_stats(char *prgname)
 
 		memset(&delta_ts, 0, sizeof(struct total_statistics));
 
-		printf("%s", status_string);
+		printf("%s\n", status_string);
 
 		for (i = 0; i < cfg.nb_ports; i++) {
 			port_id = cfg.ports[i].rxtx_port;
@@ -361,15 +361,11 @@ ioat_enqueue_packets(struct rte_mbuf **pkts,
 	for (i = 0; i < nb_rx; i++) {
 		/* Perform data copy */
 		ret = rte_ioat_enqueue_copy(dev_id,
-			pkts[i]->buf_iova
-			- addr_offset,
-			pkts_copy[i]->buf_iova
-			- addr_offset,
-			rte_pktmbuf_data_len(pkts[i])
-			+ addr_offset,
+			pkts[i]->buf_iova - addr_offset,
+			pkts_copy[i]->buf_iova - addr_offset,
+			rte_pktmbuf_data_len(pkts[i]) + addr_offset,
 			(uintptr_t)pkts[i],
-			(uintptr_t)pkts_copy[i],
-			0 /* nofence */);
+			(uintptr_t)pkts_copy[i]);
 
 		if (ret != 1)
 			break;
@@ -406,7 +402,7 @@ ioat_rx_port(struct rxtx_port_config *rx_config)
 			nb_enq = ioat_enqueue_packets(pkts_burst,
 				nb_rx, rx_config->ioat_ids[i]);
 			if (nb_enq > 0)
-				rte_ioat_do_copies(rx_config->ioat_ids[i]);
+				rte_ioat_perform_ops(rx_config->ioat_ids[i]);
 		} else {
 			/* Perform packet software copy, free source packets */
 			int ret;
@@ -452,7 +448,7 @@ ioat_tx_port(struct rxtx_port_config *tx_config)
 	for (i = 0; i < tx_config->nb_queues; i++) {
 		if (copy_mode == COPY_MODE_IOAT_NUM) {
 			/* Deque the mbufs from IOAT device. */
-			nb_dq = rte_ioat_completed_copies(
+			nb_dq = rte_ioat_completed_ops(
 				tx_config->ioat_ids[i], MAX_PKT_BURST,
 				(void *)mbufs_src, (void *)mbufs_dst);
 		} else {

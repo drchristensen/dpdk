@@ -104,6 +104,7 @@ dpdk_conf.set_quoted('RTE_TOOLCHAIN', toolchain)
 dpdk_conf.set('RTE_TOOLCHAIN_' + toolchain.to_upper(), 1)
 
 dpdk_conf.set('RTE_ARCH_64', cc.sizeof('void *') == 8)
+dpdk_conf.set('RTE_ARCH_32', cc.sizeof('void *') == 4)
 
 if not is_windows
 	add_project_link_arguments('-Wl,--no-as-needed', language: 'c')
@@ -163,11 +164,9 @@ if libbsd.found()
 endif
 
 # check for pcap
-pcap_dep = dependency('pcap', required: false)
-if pcap_dep.found()
-	# pcap got a pkg-config file only in 1.9.0 and before that meson uses
-	# an internal pcap-config finder, which is not compatible with
-	# cross-compilation, so try to fallback to find_library
+pcap_dep = dependency('libpcap', required: false, method: 'pkg-config')
+if not pcap_dep.found()
+	# pcap got a pkg-config file only in 1.9.0
 	pcap_dep = cc.find_library('pcap', required: false)
 endif
 if pcap_dep.found() and cc.has_header('pcap.h', dependencies: pcap_dep)
@@ -275,6 +274,8 @@ if is_windows
 	if cc.get_id() == 'gcc'
 		add_project_arguments('-D__USE_MINGW_ANSI_STDIO', language: 'c')
 	endif
+
+	add_project_link_arguments('-lws2_32', language: 'c')
 
 	# Contrary to docs, VirtualAlloc2() is exported by mincore.lib
 	# in Windows SDK, while MinGW exports it by advapi32.a.

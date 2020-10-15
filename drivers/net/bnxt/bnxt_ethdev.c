@@ -920,7 +920,9 @@ static int bnxt_dev_info_get_op(struct rte_eth_dev *eth_dev,
 	dev_info->rx_offload_capa = BNXT_DEV_RX_OFFLOAD_SUPPORT;
 	if (bp->flags & BNXT_FLAG_PTP_SUPPORTED)
 		dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_TIMESTAMP;
-	dev_info->tx_offload_capa = BNXT_DEV_TX_OFFLOAD_SUPPORT;
+	dev_info->tx_queue_offload_capa = DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+	dev_info->tx_offload_capa = BNXT_DEV_TX_OFFLOAD_SUPPORT |
+				    dev_info->tx_queue_offload_capa;
 	dev_info->flow_type_rss_offloads = BNXT_ETH_RSS_SUPPORT;
 
 	dev_info->speed_capa = bnxt_get_speed_capabilities(bp);
@@ -1191,6 +1193,7 @@ bnxt_transmit_function(__rte_unused struct rte_eth_dev *eth_dev)
 {
 #if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
 #ifndef RTE_LIBRTE_IEEE1588
+	uint64_t offloads = eth_dev->data->dev_conf.txmode.offloads;
 	struct bnxt *bp = eth_dev->data->dev_private;
 
 	/*
@@ -1198,7 +1201,7 @@ bnxt_transmit_function(__rte_unused struct rte_eth_dev *eth_dev)
 	 * or tx offloads.
 	 */
 	if (!eth_dev->data->scattered_rx &&
-	    !eth_dev->data->dev_conf.txmode.offloads &&
+	    !(offloads & ~DEV_TX_OFFLOAD_MBUF_FAST_FREE) &&
 	    !BNXT_TRUFLOW_EN(bp)) {
 		PMD_DRV_LOG(INFO, "Using vector mode transmit for port %d\n",
 			    eth_dev->data->port_id);
@@ -1210,7 +1213,7 @@ bnxt_transmit_function(__rte_unused struct rte_eth_dev *eth_dev)
 		    "Port %d scatter: %d tx offload: %" PRIX64 "\n",
 		    eth_dev->data->port_id,
 		    eth_dev->data->scattered_rx,
-		    eth_dev->data->dev_conf.txmode.offloads);
+		    offloads);
 #endif
 #endif
 	return bnxt_xmit_pkts;
@@ -1279,7 +1282,7 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	eth_dev->data->scattered_rx = bnxt_scattered_rx(eth_dev);
 	eth_dev->data->dev_started = 1;
 
-	bnxt_link_update(eth_dev, 1, ETH_LINK_UP);
+	bnxt_link_update_op(eth_dev, 1);
 
 	if (rx_offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
 		vlan_mask |= ETH_VLAN_FILTER_MASK;
@@ -1347,6 +1350,7 @@ static void bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
 	struct bnxt *bp = eth_dev->data->dev_private;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_eth_link link;
 
 	eth_dev->data->dev_started = 0;
 	eth_dev->data->scattered_rx = 0;
@@ -1369,15 +1373,15 @@ static void bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
 	bnxt_cancel_fw_health_check(bp);
 
 	/* Do not bring link down during reset recovery */
-	if (!is_bnxt_in_error(bp))
+	if (!is_bnxt_in_error(bp)) {
 		bnxt_dev_set_link_down_op(eth_dev);
-
-	/* Wait for link to be reset and the async notification to process.
-	 * During reset recovery, there is no need to wait and
-	 * VF/NPAR functions do not have privilege to change PHY config.
-	 */
-	if (!is_bnxt_in_error(bp) && BNXT_SINGLE_PF(bp))
-		bnxt_link_update(eth_dev, 1, ETH_LINK_DOWN);
+		/* Wait for link to be reset */
+		if (BNXT_SINGLE_PF(bp))
+			rte_delay_ms(500);
+		/* clear the recorded link status */
+		memset(&link, 0, sizeof(link));
+		rte_eth_linkstatus_set(eth_dev, &link);
+	}
 
 	/* Clean queue intr-vector mapping */
 	rte_intr_efd_disable(intr_handle);
@@ -1557,14 +1561,13 @@ static int bnxt_mac_addr_add_op(struct rte_eth_dev *eth_dev,
 	return rc;
 }
 
-int bnxt_link_update(struct rte_eth_dev *eth_dev, int wait_to_complete,
-		     bool exp_link_status)
+int bnxt_link_update_op(struct rte_eth_dev *eth_dev, int wait_to_complete)
 {
 	int rc = 0;
 	struct bnxt *bp = eth_dev->data->dev_private;
 	struct rte_eth_link new;
-	int cnt = exp_link_status ? BNXT_LINK_UP_WAIT_CNT :
-		  BNXT_LINK_DOWN_WAIT_CNT;
+	int cnt = wait_to_complete ? BNXT_MAX_LINK_WAIT_CNT :
+			BNXT_MIN_LINK_WAIT_CNT;
 
 	rc = is_bnxt_in_error(bp);
 	if (rc)
@@ -1582,11 +1585,17 @@ int bnxt_link_update(struct rte_eth_dev *eth_dev, int wait_to_complete,
 			goto out;
 		}
 
-		if (!wait_to_complete || new.link_status == exp_link_status)
+		if (!wait_to_complete || new.link_status)
 			break;
 
 		rte_delay_ms(BNXT_LINK_WAIT_INTERVAL);
 	} while (cnt--);
+
+	/* Only single function PF can bring phy down.
+	 * When port is stopped, report link down for VF/MH/NPAR functions.
+	 */
+	if (!BNXT_SINGLE_PF(bp) && !eth_dev->data->dev_started)
+		memset(&new, 0, sizeof(new));
 
 out:
 	/* Timed out or success */
@@ -1602,12 +1611,6 @@ out:
 	}
 
 	return rc;
-}
-
-int bnxt_link_update_op(struct rte_eth_dev *eth_dev,
-			int wait_to_complete)
-{
-	return bnxt_link_update(eth_dev, wait_to_complete, ETH_LINK_UP);
 }
 
 static int bnxt_promiscuous_enable_op(struct rte_eth_dev *eth_dev)
@@ -1898,6 +1901,9 @@ static int bnxt_rss_hash_update_op(struct rte_eth_dev *eth_dev,
 	/* Update the default RSS VNIC(s) */
 	vnic = BNXT_GET_DEFAULT_VNIC(bp);
 	vnic->hash_type = bnxt_rte_to_hwrm_hash_types(rss_conf->rss_hf);
+	vnic->hash_mode =
+		bnxt_rte_to_hwrm_hash_level(bp, rss_conf->rss_hf,
+					    ETH_RSS_LEVEL(rss_conf->rss_hf));
 
 	/*
 	 * If hashkey is not specified, use the previously configured
@@ -1968,6 +1974,10 @@ static int bnxt_rss_hash_conf_get_op(struct rte_eth_dev *eth_dev,
 			hash_types &=
 				~HWRM_VNIC_RSS_CFG_INPUT_HASH_TYPE_UDP_IPV6;
 		}
+
+		rss_conf->rss_hf |=
+			bnxt_hwrm_to_rte_rss_level(bp, vnic->hash_mode);
+
 		if (hash_types) {
 			PMD_DRV_LOG(ERR,
 				"Unknown RSS config from firmware (%08x), RSS disabled",
@@ -2678,7 +2688,7 @@ bnxt_txq_info_get_op(struct rte_eth_dev *dev, uint16_t queue_id,
 	qinfo->conf.tx_free_thresh = txq->tx_free_thresh;
 	qinfo->conf.tx_rs_thresh = 0;
 	qinfo->conf.tx_deferred_start = txq->tx_deferred_start;
-	qinfo->conf.offloads = dev->data->dev_conf.txmode.offloads;
+	qinfo->conf.offloads = txq->offloads;
 }
 
 static const struct {

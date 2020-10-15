@@ -202,21 +202,11 @@ Deprecation Notices
   - https://patches.dpdk.org/patch/71457/
   - https://patches.dpdk.org/patch/71456/
 
-* acl: ``RTE_ACL_CLASSIFY_NUM`` enum value will be removed.
-  This enum value is not used inside DPDK, while it prevents to add new
-  classify algorithms without causing an ABI breakage.
-
 * sched: To allow more traffic classes, flexible mapping of pipe queues to
   traffic classes, and subport level configuration of pipes and queues
   changes will be made to macros, data structures and API functions defined
   in "rte_sched.h". These changes are aligned to improvements suggested in the
   RFC https://mails.dpdk.org/archives/dev/2018-November/120035.html.
-
-* sched: To allow dynamic configuration of the subport bandwidth profile,
-  changes will be made to data structures ``rte_sched_subport_params``,
-  ``rte_sched_port_params`` and new data structure, API functions will be
-  defined in ``rte_sched.h``. These changes are aligned as suggested in the
-  RFC https://mails.dpdk.org/archives/dev/2020-July/175161.html
 
 * metrics: The function ``rte_metrics_init`` will have a non-void return
   in order to notify errors instead of calling ``rte_exit``.
@@ -225,6 +215,10 @@ Deprecation Notices
   to set new power environment if power environment was already initialized.
   In this case the function will return -1 unless the environment is unset first
   (using ``rte_power_unset_env``). Other function usage scenarios will not change.
+
+* cmdline: ``cmdline`` structure will be made opaque to hide platform-specific
+  content. On Linux and FreeBSD, supported prior to DPDK 20.11,
+  original structure will be kept until DPDK 21.11.
 
 * dpdk-setup.sh: This old script relies on deprecated stuff, and especially
   ``make``. Given environments are too much variables for such a simple script,
