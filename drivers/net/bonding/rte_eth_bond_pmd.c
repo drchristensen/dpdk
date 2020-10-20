@@ -69,7 +69,7 @@ bond_ethdev_rx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	struct bond_rx_queue *bd_rx_q = (struct bond_rx_queue *)queue;
 	internals = bd_rx_q->dev_private;
 	slave_count = internals->active_slave_count;
-	active_slave = internals->active_slave;
+	active_slave = bd_rx_q->active_slave;
 
 	for (i = 0; i < slave_count && nb_pkts; i++) {
 		uint16_t num_rx_slave;
@@ -86,8 +86,8 @@ bond_ethdev_rx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			active_slave = 0;
 	}
 
-	if (++internals->active_slave >= slave_count)
-		internals->active_slave = 0;
+	if (++bd_rx_q->active_slave >= slave_count)
+		bd_rx_q->active_slave = 0;
 	return num_rx_total;
 }
 
@@ -303,9 +303,9 @@ rx_burst_8023ad(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts,
 	memcpy(slaves, internals->active_slaves,
 			sizeof(internals->active_slaves[0]) * slave_count);
 
-	idx = internals->active_slave;
+	idx = bd_rx_q->active_slave;
 	if (idx >= slave_count) {
-		internals->active_slave = 0;
+		bd_rx_q->active_slave = 0;
 		idx = 0;
 	}
 	for (i = 0; i < slave_count && num_rx_total < nb_pkts; i++) {
@@ -367,8 +367,8 @@ rx_burst_8023ad(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts,
 			idx = 0;
 	}
 
-	if (++internals->active_slave >= slave_count)
-		internals->active_slave = 0;
+	if (++bd_rx_q->active_slave >= slave_count)
+		bd_rx_q->active_slave = 0;
 
 	return num_rx_total;
 }
@@ -534,8 +534,8 @@ mode6_debug(const char __rte_unused *info,
 static uint16_t
 bond_ethdev_rx_burst_alb(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 {
-	struct bond_tx_queue *bd_tx_q = (struct bond_tx_queue *)queue;
-	struct bond_dev_private *internals = bd_tx_q->dev_private;
+	struct bond_rx_queue *bd_rx_q = (struct bond_rx_queue *)queue;
+	struct bond_dev_private *internals = bd_rx_q->dev_private;
 	struct rte_ether_hdr *eth_h;
 	uint16_t ether_type, offset;
 	uint16_t nb_recv_pkts;
@@ -1694,7 +1694,10 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 	struct bond_dev_private *internals = bonded_eth_dev->data->dev_private;
 
 	/* Stop slave */
-	rte_eth_dev_stop(slave_eth_dev->data->port_id);
+	errval = rte_eth_dev_stop(slave_eth_dev->data->port_id);
+	if (errval != 0)
+		RTE_BOND_LOG(ERR, "rte_eth_dev_stop: port %u, err (%d)",
+			     slave_eth_dev->data->port_id, errval);
 
 	/* Enable interrupts on slave device if supported */
 	if (slave_eth_dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC)
@@ -2046,11 +2049,12 @@ bond_ethdev_free_queues(struct rte_eth_dev *dev)
 	}
 }
 
-void
+int
 bond_ethdev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct bond_dev_private *internals = eth_dev->data->dev_private;
 	uint16_t i;
+	int ret;
 
 	if (internals->mode == BONDING_MODE_8023AD) {
 		struct port *port;
@@ -2089,10 +2093,17 @@ bond_ethdev_stop(struct rte_eth_dev *eth_dev)
 				internals->active_slave_count, slave_id) !=
 						internals->active_slave_count) {
 			internals->slaves[i].last_link_status = 0;
-			rte_eth_dev_stop(slave_id);
+			ret = rte_eth_dev_stop(slave_id);
+			if (ret != 0) {
+				RTE_BOND_LOG(ERR, "Failed to stop device on port %u",
+					     slave_id);
+				return ret;
+			}
 			deactivate_slave(eth_dev, slave_id);
 		}
 	}
+
+	return 0;
 }
 
 int
@@ -2110,7 +2121,11 @@ bond_ethdev_close(struct rte_eth_dev *dev)
 	while (internals->slave_count != skipped) {
 		uint16_t port_id = internals->slaves[skipped].port_id;
 
-		rte_eth_dev_stop(port_id);
+		if (rte_eth_dev_stop(port_id) != 0) {
+			RTE_BOND_LOG(ERR, "Failed to stop device on port %u",
+				     port_id);
+			skipped++;
+		}
 
 		if (rte_eth_bond_slave_remove(bond_port_id, port_id) != 0) {
 			RTE_BOND_LOG(ERR,
@@ -2129,10 +2144,6 @@ bond_ethdev_close(struct rte_eth_dev *dev)
 	 * device is not mode6, free the NULL is not problem.
 	 */
 	rte_mempool_free(internals->mode6.mempool);
-
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
 
 	return 0;
 }
@@ -3223,7 +3234,8 @@ bond_alloc(struct rte_vdev_device *dev, uint8_t mode)
 	}
 
 	eth_dev->dev_ops = &default_dev_ops;
-	eth_dev->data->dev_flags = RTE_ETH_DEV_INTR_LSC;
+	eth_dev->data->dev_flags = RTE_ETH_DEV_INTR_LSC |
+					RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	rte_spinlock_init(&internals->lock);
 	rte_spinlock_init(&internals->lsc_lock);
@@ -3421,6 +3433,7 @@ bond_remove(struct rte_vdev_device *dev)
 	struct rte_eth_dev *eth_dev;
 	struct bond_dev_private *internals;
 	const char *name;
+	int ret = 0;
 
 	if (!dev)
 		return -EINVAL;
@@ -3443,12 +3456,12 @@ bond_remove(struct rte_vdev_device *dev)
 		return -EBUSY;
 
 	if (eth_dev->data->dev_started == 1) {
-		bond_ethdev_stop(eth_dev);
+		ret = bond_ethdev_stop(eth_dev);
 		bond_ethdev_close(eth_dev);
 	}
 	rte_eth_dev_release_port(eth_dev);
 
-	return 0;
+	return ret;
 }
 
 /* this part will resolve the slave portids after all the other pdev and vdev

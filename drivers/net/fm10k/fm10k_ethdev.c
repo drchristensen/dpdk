@@ -10,6 +10,7 @@
 #include <rte_dev.h>
 #include <rte_spinlock.h>
 #include <rte_kvargs.h>
+#include <rte_vect.h>
 
 #include "fm10k.h"
 #include "base/fm10k_api.h"
@@ -1152,7 +1153,7 @@ fm10k_dev_start(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 fm10k_dev_stop(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1161,6 +1162,7 @@ fm10k_dev_stop(struct rte_eth_dev *dev)
 	int i;
 
 	PMD_INIT_FUNC_TRACE();
+	dev->data->dev_started = 0;
 
 	if (dev->data->tx_queues)
 		for (i = 0; i < dev->data->nb_tx_queues; i++)
@@ -1187,6 +1189,8 @@ fm10k_dev_stop(struct rte_eth_dev *dev)
 	rte_intr_efd_disable(intr_handle);
 	rte_free(intr_handle->intr_vec);
 	intr_handle->intr_vec = NULL;
+
+	return 0;
 }
 
 static void
@@ -2785,6 +2789,7 @@ fm10k_dev_close(struct rte_eth_dev *dev)
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pdev->intr_handle;
+	int ret;
 
 	PMD_INIT_FUNC_TRACE();
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
@@ -2800,13 +2805,11 @@ fm10k_dev_close(struct rte_eth_dev *dev)
 
 	/* Stop mailbox service first */
 	fm10k_close_mbx_service(hw);
-	fm10k_dev_stop(dev);
+
+	ret = fm10k_dev_stop(dev);
+
 	fm10k_dev_queue_release(dev);
 	fm10k_stop_hw(hw);
-
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
 
 	/* disable uio/vfio intr */
 	rte_intr_disable(intr_handle);
@@ -2827,7 +2830,7 @@ fm10k_dev_close(struct rte_eth_dev *dev)
 			fm10k_dev_interrupt_handler_vf, (void *)dev);
 	}
 
-	return 0;
+	return ret;
 }
 
 static const struct eth_dev_ops fm10k_eth_dev_ops = {
@@ -2937,7 +2940,8 @@ fm10k_set_tx_function(struct rte_eth_dev *dev)
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 		/* primary process has set the ftag flag and offloads */
 		txq = dev->data->tx_queues[0];
-		if (fm10k_tx_vec_condition_check(txq)) {
+		if (fm10k_tx_vec_condition_check(txq) ||
+				rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_128) {
 			dev->tx_pkt_burst = fm10k_xmit_pkts;
 			dev->tx_pkt_prepare = fm10k_prep_pkts;
 			PMD_INIT_LOG(DEBUG, "Use regular Tx func");
@@ -2956,7 +2960,8 @@ fm10k_set_tx_function(struct rte_eth_dev *dev)
 		txq = dev->data->tx_queues[i];
 		txq->tx_ftag_en = tx_ftag_en;
 		/* Check if Vector Tx is satisfied */
-		if (fm10k_tx_vec_condition_check(txq))
+		if (fm10k_tx_vec_condition_check(txq) ||
+				rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_128)
 			use_sse = 0;
 	}
 
@@ -2990,7 +2995,8 @@ fm10k_set_rx_function(struct rte_eth_dev *dev)
 	 * conditions to be met.
 	 */
 	if (!fm10k_rx_vec_condition_check(dev) &&
-			dev_info->rx_vec_allowed && !rx_ftag_en) {
+			dev_info->rx_vec_allowed && !rx_ftag_en &&
+			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
 		if (dev->data->scattered_rx)
 			dev->rx_pkt_burst = fm10k_recv_scattered_pkts_vec;
 		else
@@ -3074,6 +3080,7 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 	}
 
 	rte_eth_copy_pci_info(dev, pdev);
+	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	macvlan = FM10K_DEV_PRIVATE_TO_MACVLAN(dev->data->dev_private);
 	memset(macvlan, 0, sizeof(*macvlan));

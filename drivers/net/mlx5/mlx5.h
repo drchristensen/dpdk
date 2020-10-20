@@ -39,6 +39,8 @@ enum mlx5_ipool_index {
 	MLX5_IPOOL_TAG, /* Pool for tag resource. */
 	MLX5_IPOOL_PORT_ID, /* Pool for port id resource. */
 	MLX5_IPOOL_JUMP, /* Pool for jump resource. */
+	MLX5_IPOOL_SAMPLE, /* Pool for sample resource. */
+	MLX5_IPOOL_DEST_ARRAY, /* Pool for destination array resource. */
 #endif
 	MLX5_IPOOL_MTR, /* Pool for meter resource. */
 	MLX5_IPOOL_MCP, /* Pool for metadata resource. */
@@ -512,6 +514,7 @@ struct mlx5_flow_tbl_resource {
 #define MLX5_FLOW_TABLE_LEVEL_METER (MLX5_MAX_TABLES - 4)
 #define MLX5_FLOW_TABLE_LEVEL_SUFFIX (MLX5_MAX_TABLES - 3)
 #define MLX5_MAX_TABLES_FDB UINT16_MAX
+#define MLX5_FLOW_TABLE_FACTOR 10
 
 /* ID generation structure. */
 struct mlx5_flow_id_pool {
@@ -640,6 +643,8 @@ struct mlx5_dev_ctx_shared {
 	struct mlx5_hlist *tag_table;
 	uint32_t port_id_action_list; /* List of port ID actions. */
 	uint32_t push_vlan_action_list; /* List of push VLAN actions. */
+	uint32_t sample_action_list; /* List of sample actions. */
+	uint32_t dest_array_list; /* List of destination array actions. */
 	struct mlx5_flow_counter_mng cmng; /* Counters management structure. */
 	struct mlx5_flow_default_miss_resource default_miss;
 	/* Default miss action resource structure. */
@@ -813,6 +818,7 @@ struct mlx5_priv {
 	unsigned int counter_fallback:1; /* Use counter fallback management. */
 	unsigned int mtr_en:1; /* Whether support meter. */
 	unsigned int mtr_reg_share:1; /* Whether support meter REG_C share. */
+	unsigned int sampler_en:1; /* Whether support sampler. */
 	uint16_t domain_id; /* Switch domain identifier. */
 	uint16_t vport_id; /* Associated VF vport index (if any). */
 	uint32_t vport_meta_tag; /* Used for vport index match ove VF LAG. */
@@ -1024,7 +1030,7 @@ void *mlx5_vlan_vmwa_init(struct rte_eth_dev *dev, uint32_t ifindex);
 /* mlx5_trigger.c */
 
 int mlx5_dev_start(struct rte_eth_dev *dev);
-void mlx5_dev_stop(struct rte_eth_dev *dev);
+int mlx5_dev_stop(struct rte_eth_dev *dev);
 int mlx5_traffic_enable(struct rte_eth_dev *dev);
 void mlx5_traffic_disable(struct rte_eth_dev *dev);
 int mlx5_traffic_restart(struct rte_eth_dev *dev);

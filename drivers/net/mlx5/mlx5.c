@@ -241,6 +241,28 @@ static const struct mlx5_indexed_pool_config mlx5_ipool_cfg[] = {
 		.free = mlx5_free,
 		.type = "mlx5_jump_ipool",
 	},
+	{
+		.size = sizeof(struct mlx5_flow_dv_sample_resource),
+		.trunk_size = 64,
+		.grow_trunk = 3,
+		.grow_shift = 2,
+		.need_lock = 0,
+		.release_mem_en = 1,
+		.malloc = mlx5_malloc,
+		.free = mlx5_free,
+		.type = "mlx5_sample_ipool",
+	},
+	{
+		.size = sizeof(struct mlx5_flow_dv_dest_array_resource),
+		.trunk_size = 64,
+		.grow_trunk = 3,
+		.grow_shift = 2,
+		.need_lock = 0,
+		.release_mem_en = 1,
+		.malloc = mlx5_malloc,
+		.free = mlx5_free,
+		.type = "mlx5_dest_array_ipool",
+	},
 #endif
 	{
 		.size = sizeof(struct mlx5_flow_meter),
@@ -2020,6 +2042,7 @@ static int
 mlx5_pci_remove(struct rte_pci_device *pci_dev)
 {
 	uint16_t port_id;
+	int ret = 0;
 
 	RTE_ETH_FOREACH_DEV_OF(port_id, &pci_dev->device) {
 		/*
@@ -2027,11 +2050,11 @@ mlx5_pci_remove(struct rte_pci_device *pci_dev)
 		 * call the close function explicitly for secondary process.
 		 */
 		if (rte_eal_process_type() == RTE_PROC_SECONDARY)
-			mlx5_dev_close(&rte_eth_devices[port_id]);
+			ret |= mlx5_dev_close(&rte_eth_devices[port_id]);
 		else
-			rte_eth_dev_close(port_id);
+			ret |= rte_eth_dev_close(port_id);
 	}
-	return 0;
+	return ret == 0 ? 0 : -EIO;
 }
 
 static const struct rte_pci_id mlx5_pci_id_map[] = {

@@ -1099,6 +1099,20 @@ err_secondary:
 			}
 		}
 #endif
+#if defined(HAVE_MLX5DV_DR) && defined(HAVE_MLX5_DR_CREATE_ACTION_FLOW_SAMPLE)
+		if (config->hca_attr.log_max_ft_sampler_num > 0  &&
+		    config->dv_flow_en) {
+			priv->sampler_en = 1;
+			DRV_LOG(DEBUG, "The Sampler enabled!\n");
+		} else {
+			priv->sampler_en = 0;
+			if (!config->hca_attr.log_max_ft_sampler_num)
+				DRV_LOG(WARNING, "No available register for"
+						" Sampler.");
+			else
+				DRV_LOG(DEBUG, "DV flow is not supported!\n");
+		}
+#endif
 	}
 	if (config->tx_pp) {
 		DRV_LOG(DEBUG, "Timestamp counter frequency %u kHz",
@@ -1263,6 +1277,7 @@ err_secondary:
 	priv->dev_data = eth_dev->data;
 	eth_dev->data->mac_addrs = priv->mac;
 	eth_dev->device = dpdk_dev;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 	/* Configure the first MAC address by default. */
 	if (mlx5_get_mac(eth_dev, &mac.addr_bytes)) {
 		DRV_LOG(ERR,

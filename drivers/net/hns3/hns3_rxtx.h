@@ -630,6 +630,8 @@ uint16_t hns3_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 				  uint16_t nb_pkts);
 uint16_t hns3_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 			    uint16_t nb_pkts);
+uint16_t hns3_recv_pkts_vec_sve(void *rx_queue, struct rte_mbuf **rx_pkts,
+				uint16_t nb_pkts);
 int hns3_rx_burst_mode_get(struct rte_eth_dev *dev,
 			   __rte_unused uint16_t queue_id,
 			   struct rte_eth_burst_mode *mode);
@@ -642,6 +644,8 @@ uint16_t hns3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			uint16_t nb_pkts);
 uint16_t hns3_xmit_pkts_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 							uint16_t nb_pkts);
+uint16_t hns3_xmit_pkts_vec_sve(void *tx_queue, struct rte_mbuf **tx_pkts,
+				uint16_t nb_pkts);
 int hns3_tx_burst_mode_get(struct rte_eth_dev *dev,
 			   __rte_unused uint16_t queue_id,
 			   struct rte_eth_burst_mode *mode);

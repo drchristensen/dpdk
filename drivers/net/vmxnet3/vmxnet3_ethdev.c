@@ -63,7 +63,7 @@ static int eth_vmxnet3_dev_init(struct rte_eth_dev *eth_dev);
 static int eth_vmxnet3_dev_uninit(struct rte_eth_dev *eth_dev);
 static int vmxnet3_dev_configure(struct rte_eth_dev *dev);
 static int vmxnet3_dev_start(struct rte_eth_dev *dev);
-static void vmxnet3_dev_stop(struct rte_eth_dev *dev);
+static int vmxnet3_dev_stop(struct rte_eth_dev *dev);
 static int vmxnet3_dev_close(struct rte_eth_dev *dev);
 static void vmxnet3_dev_set_rxmode(struct vmxnet3_hw *hw, uint32_t feature, int set);
 static int vmxnet3_dev_promiscuous_enable(struct rte_eth_dev *dev);
@@ -250,6 +250,7 @@ eth_vmxnet3_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Vendor and Device ID need to be set before init of shared code */
 	hw->device_id = pci_dev->id.device_id;
@@ -367,11 +368,6 @@ eth_vmxnet3_dev_uninit(struct rte_eth_dev *eth_dev)
 		PMD_INIT_LOG(DEBUG, "Device has not been closed.");
 		return -EBUSY;
 	}
-
-	eth_dev->dev_ops = NULL;
-	eth_dev->rx_pkt_burst = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-	eth_dev->tx_pkt_prepare = NULL;
 
 	return 0;
 }
@@ -814,7 +810,7 @@ vmxnet3_dev_start(struct rte_eth_dev *dev)
 /*
  * Stop device: disable rx and tx functions to allow for reconfiguring.
  */
-static void
+static int
 vmxnet3_dev_stop(struct rte_eth_dev *dev)
 {
 	struct rte_eth_link link;
@@ -824,7 +820,7 @@ vmxnet3_dev_stop(struct rte_eth_dev *dev)
 
 	if (hw->adapter_stopped == 1) {
 		PMD_INIT_LOG(DEBUG, "Device already stopped.");
-		return;
+		return 0;
 	}
 
 	/* disable interrupts */
@@ -858,6 +854,9 @@ vmxnet3_dev_stop(struct rte_eth_dev *dev)
 	rte_eth_linkstatus_set(dev, &link);
 
 	hw->adapter_stopped = 1;
+	dev->data->dev_started = 0;
+
+	return 0;
 }
 
 static void
@@ -888,14 +887,15 @@ vmxnet3_free_queues(struct rte_eth_dev *dev)
 static int
 vmxnet3_dev_close(struct rte_eth_dev *dev)
 {
+	int ret;
 	PMD_INIT_FUNC_TRACE();
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
-	vmxnet3_dev_stop(dev);
+	ret = vmxnet3_dev_stop(dev);
 	vmxnet3_free_queues(dev);
 
-	return 0;
+	return ret;
 }
 
 static void

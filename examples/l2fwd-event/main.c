@@ -667,7 +667,7 @@ main(int argc, char **argv)
 
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, rsrc,
-				 SKIP_MASTER);
+				 SKIP_MAIN);
 	l2fwd_event_print_stats(rsrc);
 	if (rsrc->event_mode) {
 		struct l2fwd_event_resources *evt_rsrc =
@@ -683,7 +683,10 @@ main(int argc, char **argv)
 			if ((rsrc->enabled_port_mask &
 							(1 << port_id)) == 0)
 				continue;
-			rte_eth_dev_stop(port_id);
+			ret = rte_eth_dev_stop(port_id);
+			if (ret < 0)
+				printf("rte_eth_dev_stop:err=%d, port=%u\n",
+				       ret, port_id);
 		}
 
 		rte_eal_mp_wait_lcore();
@@ -705,7 +708,10 @@ main(int argc, char **argv)
 							(1 << port_id)) == 0)
 				continue;
 			printf("Closing port %d...", port_id);
-			rte_eth_dev_stop(port_id);
+			ret = rte_eth_dev_stop(port_id);
+			if (ret < 0)
+				printf("rte_eth_dev_stop:err=%d, port=%u\n",
+				       ret, port_id);
 			rte_eth_dev_close(port_id);
 			printf(" Done\n");
 		}

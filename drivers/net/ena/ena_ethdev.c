@@ -198,7 +198,7 @@ static void ena_init_rings(struct ena_adapter *adapter,
 			   bool disable_meta_caching);
 static int ena_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 static int ena_start(struct rte_eth_dev *dev);
-static void ena_stop(struct rte_eth_dev *dev);
+static int ena_stop(struct rte_eth_dev *dev);
 static int ena_close(struct rte_eth_dev *dev);
 static int ena_dev_reset(struct rte_eth_dev *dev);
 static int ena_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats);
@@ -505,12 +505,13 @@ static int ena_close(struct rte_eth_dev *dev)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ena_adapter *adapter = dev->data->dev_private;
+	int ret = 0;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
 	if (adapter->state == ENA_ADAPTER_STATE_RUNNING)
-		ena_stop(dev);
+		ret = ena_stop(dev);
 	adapter->state = ENA_ADAPTER_STATE_CLOSED;
 
 	ena_rx_queue_release_all(dev);
@@ -530,7 +531,7 @@ static int ena_close(struct rte_eth_dev *dev)
 	 */
 	dev->data->mac_addrs = NULL;
 
-	return 0;
+	return ret;
 }
 
 static int
@@ -1100,7 +1101,7 @@ err_start_tx:
 	return rc;
 }
 
-static void ena_stop(struct rte_eth_dev *dev)
+static int ena_stop(struct rte_eth_dev *dev)
 {
 	struct ena_adapter *adapter = dev->data->dev_private;
 	struct ena_com_dev *ena_dev = &adapter->ena_dev;
@@ -1118,6 +1119,9 @@ static void ena_stop(struct rte_eth_dev *dev)
 
 	++adapter->dev_stats.dev_stop;
 	adapter->state = ENA_ADAPTER_STATE_STOPPED;
+	dev->data->dev_started = 0;
+
+	return 0;
 }
 
 static int ena_create_io_queue(struct ena_ring *ring)
@@ -1775,6 +1779,8 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+
 	memset(adapter, 0, sizeof(struct ena_adapter));
 	ena_dev = &adapter->ena_dev;
 
@@ -1954,11 +1960,6 @@ static int eth_ena_dev_uninit(struct rte_eth_dev *eth_dev)
 		return 0;
 
 	ena_destroy_device(eth_dev);
-
-	eth_dev->dev_ops = NULL;
-	eth_dev->rx_pkt_burst = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-	eth_dev->tx_pkt_prepare = NULL;
 
 	return 0;
 }

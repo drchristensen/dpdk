@@ -17,6 +17,7 @@
  * The set of PCI devices this driver supports
  */
 #define BROADCOM_PCI_VENDOR_ID 0x14E4
+#define QLOGIC_PCI_VENDOR_ID 0x1077
 static const struct rte_pci_id pci_id_bnx2x_map[] = {
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57800) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57711) },
@@ -24,11 +25,13 @@ static const struct rte_pci_id pci_id_bnx2x_map[] = {
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57811) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_OBS) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_4_10) },
+	{ RTE_PCI_DEVICE(QLOGIC_PCI_VENDOR_ID, CHIP_NUM_57840_4_10) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_2_20) },
 #ifdef RTE_LIBRTE_BNX2X_MF_SUPPORT
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57810_MF) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57811_MF) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_MF) },
+	{ RTE_PCI_DEVICE(QLOGIC_PCI_VENDOR_ID, CHIP_NUM_57840_MF) },
 #endif
 	{ .vendor_id = 0, }
 };
@@ -38,6 +41,7 @@ static const struct rte_pci_id pci_id_bnx2xvf_map[] = {
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57810_VF) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57811_VF) },
 	{ RTE_PCI_DEVICE(BROADCOM_PCI_VENDOR_ID, CHIP_NUM_57840_VF) },
+	{ RTE_PCI_DEVICE(QLOGIC_PCI_VENDOR_ID, CHIP_NUM_57840_VF) },
 	{ .vendor_id = 0, }
 };
 
@@ -247,7 +251,7 @@ bnx2x_dev_start(struct rte_eth_dev *dev)
 	return ret;
 }
 
-static void
+static int
 bnx2x_dev_stop(struct rte_eth_dev *dev)
 {
 	struct bnx2x_softc *sc = dev->data->dev_private;
@@ -274,10 +278,10 @@ bnx2x_dev_stop(struct rte_eth_dev *dev)
 	ret = bnx2x_nic_unload(sc, UNLOAD_NORMAL, FALSE);
 	if (ret) {
 		PMD_DRV_LOG(DEBUG, sc, "bnx2x_nic_unload failed (%d)", ret);
-		return;
+		return ret;
 	}
 
-	return;
+	return 0;
 }
 
 static int
@@ -644,6 +648,7 @@ bnx2x_common_dev_init(struct rte_eth_dev *eth_dev, int is_vf)
 	}
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	sc->pcie_bus    = pci_dev->addr.bus;
 	sc->pcie_device = pci_dev->addr.devid;

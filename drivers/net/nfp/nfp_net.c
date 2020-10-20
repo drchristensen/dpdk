@@ -80,7 +80,7 @@ static int nfp_net_start(struct rte_eth_dev *dev);
 static int nfp_net_stats_get(struct rte_eth_dev *dev,
 			      struct rte_eth_stats *stats);
 static int nfp_net_stats_reset(struct rte_eth_dev *dev);
-static void nfp_net_stop(struct rte_eth_dev *dev);
+static int nfp_net_stop(struct rte_eth_dev *dev);
 static uint16_t nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 				  uint16_t nb_pkts);
 
@@ -788,7 +788,7 @@ error:
 }
 
 /* Stop device: disable rx and tx functions to allow for reconfiguring. */
-static void
+static int
 nfp_net_stop(struct rte_eth_dev *dev)
 {
 	int i;
@@ -819,6 +819,8 @@ nfp_net_stop(struct rte_eth_dev *dev)
 			nfp_eth_set_configured(dev->process_private,
 					       hw->pf_port_idx, 0);
 	}
+
+	return 0;
 }
 
 /* Set the link up. */
@@ -2989,6 +2991,8 @@ nfp_net_init(struct rte_eth_dev *eth_dev)
 
 	if (!(hw->cap & NFP_NET_CFG_CTRL_LIVE_ADDR))
 		eth_dev->data->dev_flags |= RTE_ETH_DEV_NOLIVE_MAC_ADDR;
+
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	PMD_INIT_LOG(INFO, "port %d VendorID=0x%x DeviceID=0x%x "
 		     "mac=%02x:%02x:%02x:%02x:%02x:%02x",

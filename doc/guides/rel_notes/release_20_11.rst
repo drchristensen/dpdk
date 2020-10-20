@@ -68,16 +68,76 @@ New Features
   which allow the programmer to prefetch a cache line and also indicate
   the intention to write.
 
+* **Added the rte_cldemote API.**
+
+  Added a hardware hint CLDEMOTE, which is similar to prefetch in reverse.
+  CLDEMOTE moves the cache line to the more remote cache, where it expects
+  sharing to be efficient. Moving the cache line to a level more distant from
+  the processor helps to accelerate core-to-core communication.
+  This API is specific to x86 and implemented as a stub for other
+  architectures.
+
+* **Added support for limiting maximum SIMD bitwidth.**
+
+  Added a new EAL config setting ``max_simd_bitwidth`` to limit the vector
+  path selection at runtime. This value can be set by apps using the
+  ``rte_vect_set_max_simd_bitwidth`` function, or by the user with EAL flag
+  ``--force-max-simd-bitwidth``.
+
 * **Updated CRC modules of the net library.**
 
   * Added runtime selection of the optimal architecture-specific CRC path.
   * Added optimized implementations of CRC32-Ethernet and CRC16-CCITT
     using the AVX512 and VPCLMULQDQ instruction sets.
 
+* **Introduced extended buffer description for receiving.**
+
+  Added the extended Rx buffer description for Rx queue setup routine
+  providing the individual settings for each Rx segment with maximal size,
+  buffer offset and memory pool to allocate data buffers from.
+
 * **Added the FEC API, for a generic FEC query and config.**
 
   Added the FEC API which provides functions for query FEC capabilities and
   current FEC mode from device. Also, API for configuring FEC mode is also provided.
+
+* **Added thread safety to rte_flow functions.**
+
+  Added ``RTE_ETH_DEV_FLOW_OPS_THREAD_SAFE`` device flag to indicate
+  whether PMD supports thread safe operations. If PMD doesn't set the flag,
+  rte_flow API level functions will protect the flow operations with mutex.
+
+* **Added flow-based traffic sampling support.**
+
+  Added new action: ``RTE_FLOW_ACTION_TYPE_SAMPLE`` to duplicate the matching
+  packets with specified ratio, and apply with own set of actions with a fate
+  action. When the ratio is set to 1 then the packets will be 100% mirrored.
+
+* **Added support of shared action in flow API.**
+
+  Added shared action support to utilize single flow action in multiple flow
+  rules. An update of shared action configuration alters the behavior of all
+  flow rules using it.
+
+  * Added new action: ``RTE_FLOW_ACTION_TYPE_SHARED`` to use shared action
+    as flow action.
+  * Added new flow APIs to create/update/destroy/query shared action.
+
+* **Flow rules allowed to use private PMD items / actions.**
+
+  * Flow rule verification was updated to accept private PMD
+    items and actions.
+
+* **Added generic API to offload tunneled traffic and restore missed packet.**
+
+  * Added a new hardware independent helper to flow API that
+    offloads tunneled traffic and restores missed packets.
+
+* **Updated the ethdev library to support hairpin between two ports.**
+
+  New APIs are introduced to support binding / unbinding 2 ports hairpin.
+  Hairpin Tx part flow rules can be inserted explicitly.
+  New API is added to get the hairpin peer ports list.
 
 * **Updated Broadcom bnxt driver.**
 
@@ -86,6 +146,7 @@ New Features
   * Added support for 200G PAM4 link speed.
   * Added support for RSS hash level selection.
   * Updated HWRM structures to 1.10.1.70 version.
+  * Added TRUFLOW support for Stingray devices.
 
 * **Updated Cisco enic driver.**
 
@@ -104,6 +165,7 @@ New Features
   Updated the Solarflare ``sfc_efx`` driver with changes including:
 
   * Added SR-IOV PF support
+  * Added Alveo SN1000 SmartNICs (EF100 architecture) support
 
 * **Updated Virtio driver.**
 
@@ -127,6 +189,11 @@ New Features
 
   Updated the Intel qat driver to use write combining stores.
 
+* **Updated Memif PMD.**
+
+  * Added support for abstract socket address.
+  * Changed default socket address type to abstract.
+
 * **Added Ice Lake (Gen4) support for Intel NTB.**
 
   Added NTB device support (4th generation) for Intel Ice Lake platform.
@@ -147,7 +214,7 @@ New Features
   * Added flag action.
   * Added raw encap/decap actions.
   * Added VXLAN encap/decap actions.
-  * Added ICMP and ICMP6 matching items.
+  * Added ICMP(code/type/identifier/sequence number) and ICMP6(code/type) matching items.
   * Added option to set port mask for insertion/deletion:
     ``--portmask=N``
     where N represents the hexadecimal bitmask of ports used.
@@ -214,6 +281,11 @@ New Features
 
   See the :doc:`../regexdevs/octeontx2` for more details.
 
+* **Updated Software Eventdev driver.**
+
+  Added performance tuning arguments to allow tuning the scheduler for
+  better throughtput in high core count use cases.
+
 * **Updated ioat rawdev driver**
 
   The ioat rawdev driver has been updated and enhanced. Changes include:
@@ -265,6 +337,14 @@ New Features
   * Added scatter gather support.
   * Added NIST GCMVS complaint GMAC test method support.
 
+* **Updated l3wfd-acl sample application.**
+
+  * Added new optional parameter ``--eth-dest`` for the ``l3fwd-acl`` to allow
+    the user to specify the destination mac address for each ethernet port
+    used.
+  * Replaced ``--scalar`` command-line option with ``--alg=<value>``, to allow
+    the user to select the desired classify method.
+
 
 Removed Items
 -------------
@@ -303,6 +383,13 @@ API Changes
 * build macros: The macros defining ``RTE_MACHINE_CPUFLAG_*`` are removed.
   The information provided by these macros is available through standard
   compiler macros.
+
+* eal: Replaced the function ``rte_get_master_lcore()`` to
+  ``rte_get_main_lcore()``. The old function is deprecated.
+
+  The iterator for worker lcores is also changed:
+  ``RTE_LCORE_FOREACH_SLAVE`` is replaced with
+  ``RTE_LCORE_FOREACH_WORKER``.
 
 * eal: The ``rte_logs`` struct and global symbol was made private
   and is no longer part of the API.
@@ -349,7 +436,20 @@ API Changes
 
 * ethdev: ``rte_eth_rx_descriptor_done()`` API has been deprecated.
 
-* Renamed internal ethdev APIs:
+* ethdev: Renamed basic statistics per queue. An underscore is inserted
+  between the queue number and the rest of the xstat name:
+
+  * ``rx_qN*`` -> ``rx_qN_*``
+  * ``tx_qN*`` -> ``tx_qN_*``
+
+* ethdev: Added capability to query age flow action.
+
+* ethdev: Changed ``rte_eth_dev_stop`` return value from ``void`` to
+  ``int`` to provide a way to report various error conditions.
+
+* ethdev: Added ``int`` return type to ``rte_eth_dev_close()``.
+
+* ethdev: Renamed internal functions:
 
   * ``_rte_eth_dev_callback_process()`` -> ``rte_eth_dev_callback_process()``
   * ``_rte_eth_dev_reset`` -> ``rte_eth_dev_internal_reset()``
@@ -360,6 +460,9 @@ API Changes
   a TC is greater than 256.
 
 * vhost: Moved vDPA APIs from experimental to stable.
+
+* vhost: Add a new function ``rte_vhost_crypto_driver_start`` to be called
+  instead of ``rte_vhost_driver_start`` by crypto applications.
 
 * cryptodev: The structure ``rte_crypto_sym_vec`` is updated to support both
   cpu_crypto synchrounous operation and asynchronous raw data-path APIs.
@@ -383,6 +486,12 @@ API Changes
 * security: ``hfn_ovrd`` field in ``rte_security_pdcp_xform`` is changed from
   ``uint32_t`` to ``uint8_t`` so that a new field ``sdap_enabled`` can be added
   to support SDAP.
+
+* security: The API ``rte_security_session_create`` is updated to take two
+  mempool objects one for session and other for session private data.
+  So the application need to create two mempools and get the size of session
+  private data using API ``rte_security_session_get_size`` for private session
+  mempool.
 
 * ipsec: ``RTE_SATP_LOG2_NUM`` has been dropped from ``enum`` and
   subsequently moved ``rte_ipsec`` lib from experimental to stable.
@@ -462,6 +571,34 @@ ABI Changes
     which was already internal data structure.
 
   * ``ethdev`` internal functions are marked with ``__rte_internal`` tag.
+
+  * Added extensions' attributes to struct ``rte_flow_item_ipv6``.
+    A set of additional values added to struct, indicating the existence of
+    every defined extension header type.
+    Applications should use the new values for identification of existing
+    extensions in the packet header.
+
+  * Added fields ``rx_seg`` and ``rx_nseg`` to ``rte_eth_rxconf`` structure
+    to provide extended description of the receiving buffer.
+
+  * ``struct rte_eth_hairpin_conf`` has two new members:
+
+    * ``uint32_t tx_explicit:1;``
+    * ``uint32_t manual_bind:1;``
+
+  * Added new field ``has_vlan`` to structure ``rte_flow_item_eth``,
+    indicating that packet header contains at least one VLAN.
+
+  * Added new field ``has_more_vlan`` to structure
+    ``rte_flow_item_vlan``, indicating that packet header contains
+    at least one more VLAN, after this VLAN.
+
+* eventdev: Following structures are modified to support DLB/DLB2 PMDs
+  and future extensions:
+
+  * ``rte_event_dev_info``
+  * ``rte_event_dev_config``
+  * ``rte_event_port_conf``
 
 * sched: Added new fields to ``struct rte_sched_subport_port_params``.
 

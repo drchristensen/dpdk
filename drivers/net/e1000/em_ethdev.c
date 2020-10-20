@@ -33,7 +33,7 @@
 
 static int eth_em_configure(struct rte_eth_dev *dev);
 static int eth_em_start(struct rte_eth_dev *dev);
-static void eth_em_stop(struct rte_eth_dev *dev);
+static int eth_em_stop(struct rte_eth_dev *dev);
 static int eth_em_close(struct rte_eth_dev *dev);
 static int eth_em_promiscuous_enable(struct rte_eth_dev *dev);
 static int eth_em_promiscuous_disable(struct rte_eth_dev *dev);
@@ -265,6 +265,7 @@ eth_em_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	hw->hw_addr = (void *)pci_dev->mem_resource[0].addr;
 	hw->device_id = pci_dev->id.device_id;
@@ -533,7 +534,9 @@ eth_em_start(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
-	eth_em_stop(dev);
+	ret = eth_em_stop(dev);
+	if (ret != 0)
+		return ret;
 
 	e1000_power_up_phy(hw);
 
@@ -709,13 +712,15 @@ error_invalid_config:
  *  global reset on the MAC.
  *
  **********************************************************************/
-static void
+static int
 eth_em_stop(struct rte_eth_dev *dev)
 {
 	struct rte_eth_link link;
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+
+	dev->data->dev_started = 0;
 
 	eth_em_rxtx_control(dev, false);
 	em_rxq_intr_disable(hw);
@@ -751,6 +756,8 @@ eth_em_stop(struct rte_eth_dev *dev)
 		rte_free(intr_handle->intr_vec);
 		intr_handle->intr_vec = NULL;
 	}
+
+	return 0;
 }
 
 static int
@@ -761,27 +768,24 @@ eth_em_close(struct rte_eth_dev *dev)
 		E1000_DEV_PRIVATE(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	int ret;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
-	eth_em_stop(dev);
+	ret = eth_em_stop(dev);
 	adapter->stopped = 1;
 	em_dev_free_queues(dev);
 	e1000_phy_hw_reset(hw);
 	em_release_manageability(hw);
 	em_hw_control_release(hw);
 
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
-
 	/* disable uio intr before callback unregister */
 	rte_intr_disable(intr_handle);
 	rte_intr_callback_unregister(intr_handle,
 				     eth_em_interrupt_handler, dev);
 
-	return 0;
+	return ret;
 }
 
 static int

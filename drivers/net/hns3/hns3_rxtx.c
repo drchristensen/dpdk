@@ -23,6 +23,9 @@
 #include <rte_net.h>
 #include <rte_malloc.h>
 #include <rte_pci.h>
+#if defined(RTE_ARCH_ARM64) && defined(CC_SVE_SUPPORT)
+#include <rte_cpuflags.h>
+#endif
 
 #include "hns3_ethdev.h"
 #include "hns3_rxtx.h"
@@ -1841,7 +1844,8 @@ hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 
 	if (dev->rx_pkt_burst == hns3_recv_pkts ||
 	    dev->rx_pkt_burst == hns3_recv_scattered_pkts ||
-	    dev->rx_pkt_burst == hns3_recv_pkts_vec)
+	    dev->rx_pkt_burst == hns3_recv_pkts_vec ||
+	    dev->rx_pkt_burst == hns3_recv_pkts_vec_sve)
 		return ptypes;
 
 	return NULL;
@@ -2341,8 +2345,16 @@ hns3_rx_check_vec_support(__rte_unused struct rte_eth_dev *dev)
 
 uint16_t __rte_weak
 hns3_recv_pkts_vec(__rte_unused void *tx_queue,
-		   __rte_unused struct rte_mbuf **tx_pkts,
+		   __rte_unused struct rte_mbuf **rx_pkts,
 		   __rte_unused uint16_t nb_pkts)
+{
+	return 0;
+}
+
+uint16_t __rte_weak
+hns3_recv_pkts_vec_sve(__rte_unused void *tx_queue,
+		       __rte_unused struct rte_mbuf **rx_pkts,
+		       __rte_unused uint16_t nb_pkts)
 {
 	return 0;
 }
@@ -2358,6 +2370,7 @@ hns3_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 		{ hns3_recv_pkts,		"Scalar" },
 		{ hns3_recv_scattered_pkts,	"Scalar Scattered" },
 		{ hns3_recv_pkts_vec,		"Vector Neon" },
+		{ hns3_recv_pkts_vec_sve,	"Vector Sve" },
 	};
 
 	eth_rx_burst_t pkt_burst = dev->rx_pkt_burst;
@@ -2376,6 +2389,16 @@ hns3_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 	return ret;
 }
 
+static bool
+hns3_check_sve_support(void)
+{
+#if defined(RTE_ARCH_ARM64) && defined(CC_SVE_SUPPORT)
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_SVE))
+		return true;
+#endif
+	return false;
+}
+
 static eth_rx_burst_t
 hns3_get_rx_function(struct rte_eth_dev *dev)
 {
@@ -2383,7 +2406,8 @@ hns3_get_rx_function(struct rte_eth_dev *dev)
 	uint64_t offloads = dev->data->dev_conf.rxmode.offloads;
 
 	if (hns->rx_vec_allowed && hns3_rx_check_vec_support(dev) == 0)
-		return hns3_recv_pkts_vec;
+		return hns3_check_sve_support() ? hns3_recv_pkts_vec_sve :
+		       hns3_recv_pkts_vec;
 
 	if (hns->rx_simple_allowed && !dev->data->scattered_rx &&
 	    (offloads & DEV_RX_OFFLOAD_TCP_LRO) == 0)
@@ -3591,6 +3615,14 @@ hns3_xmit_pkts_vec(__rte_unused void *tx_queue,
 	return 0;
 }
 
+uint16_t __rte_weak
+hns3_xmit_pkts_vec_sve(void __rte_unused * tx_queue,
+		       struct rte_mbuf __rte_unused **tx_pkts,
+		       uint16_t __rte_unused nb_pkts)
+{
+	return 0;
+}
+
 int
 hns3_tx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 		       struct rte_eth_burst_mode *mode)
@@ -3604,6 +3636,8 @@ hns3_tx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 		info = "Scalar";
 	else if (pkt_burst == hns3_xmit_pkts_vec)
 		info = "Vector Neon";
+	else if (pkt_burst == hns3_xmit_pkts_vec_sve)
+		info = "Vector Sve";
 
 	if (info == NULL)
 		return -EINVAL;
@@ -3621,7 +3655,8 @@ hns3_get_tx_function(struct rte_eth_dev *dev, eth_tx_prep_t *prep)
 
 	if (hns->tx_vec_allowed && hns3_tx_check_vec_support(dev) == 0) {
 		*prep = NULL;
-		return hns3_xmit_pkts_vec;
+		return hns3_check_sve_support() ? hns3_xmit_pkts_vec_sve :
+			hns3_xmit_pkts_vec;
 	}
 
 	if (hns->tx_simple_allowed &&

@@ -16,6 +16,7 @@
 #define ETH_RING_ACTION_CREATE		"CREATE"
 #define ETH_RING_ACTION_ATTACH		"ATTACH"
 #define ETH_RING_INTERNAL_ARG		"internal"
+#define ETH_RING_INTERNAL_ARG_MAX_LEN	19 /* "0x..16chars..\0" */
 
 static const char *valid_arguments[] = {
 	ETH_RING_NUMA_NODE_ACTION_ARG,
@@ -105,10 +106,12 @@ eth_dev_start(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 eth_dev_stop(struct rte_eth_dev *dev)
 {
+	dev->data->dev_started = 0;
 	dev->data->dev_link.link_status = ETH_LINK_DOWN;
+	return 0;
 }
 
 static int
@@ -234,11 +237,12 @@ eth_dev_close(struct rte_eth_dev *dev)
 	struct pmd_internals *internals = NULL;
 	struct ring_queue *r = NULL;
 	uint16_t i;
+	int ret;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
-	eth_dev_stop(dev);
+	ret = eth_dev_stop(dev);
 
 	internals = dev->data->dev_private;
 	if (internals->action == DEV_CREATE) {
@@ -255,7 +259,7 @@ eth_dev_close(struct rte_eth_dev *dev)
 	/* mac_addrs must not be freed alone because part of dev_private */
 	dev->data->mac_addrs = NULL;
 
-	return 0;
+	return ret;
 }
 
 static const struct eth_dev_ops ops = {
@@ -357,6 +361,7 @@ do_eth_dev_ring_create(const char *name,
 	data->mac_addrs = &internals->address;
 	data->promiscuous = 1;
 	data->all_multicast = 1;
+	data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	eth_dev->dev_ops = &ops;
 	data->numa_node = numa_node;
@@ -571,8 +576,21 @@ parse_internal_args(const char *key __rte_unused, const char *value,
 {
 	struct ring_internal_args **internal_args = data;
 	void *args;
+	int ret, n;
 
-	sscanf(value, "%p", &args);
+	/* make sure 'value' is valid pointer length */
+	if (strnlen(value, ETH_RING_INTERNAL_ARG_MAX_LEN) >=
+			ETH_RING_INTERNAL_ARG_MAX_LEN) {
+		PMD_LOG(ERR, "Error parsing internal args, argument is too long");
+		return -1;
+	}
+
+	ret = sscanf(value, "%p%n", &args, &n);
+	if (ret == 0 || (size_t)n != strlen(value)) {
+		PMD_LOG(ERR, "Error parsing internal args");
+
+		return -1;
+	}
 
 	*internal_args = args;
 

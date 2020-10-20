@@ -1153,13 +1153,16 @@ eth_dev_start(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
-static void
+static int
 eth_dev_stop(struct rte_eth_dev *dev)
 {
 	struct pmd_internal *internal = dev->data->dev_private;
 
+	dev->data->dev_started = 0;
 	rte_atomic32_set(&internal->started, 0);
 	update_queuing_status(dev);
+
+	return 0;
 }
 
 static int
@@ -1167,7 +1170,7 @@ eth_dev_close(struct rte_eth_dev *dev)
 {
 	struct pmd_internal *internal;
 	struct internal_list *list;
-	unsigned int i;
+	unsigned int i, ret;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
@@ -1176,7 +1179,7 @@ eth_dev_close(struct rte_eth_dev *dev)
 	if (!internal)
 		return 0;
 
-	eth_dev_stop(dev);
+	ret = eth_dev_stop(dev);
 
 	list = find_internal_resource(internal->iface_name);
 	if (list) {
@@ -1203,7 +1206,7 @@ eth_dev_close(struct rte_eth_dev *dev)
 	rte_free(vring_states[dev->data->port_id]);
 	vring_states[dev->data->port_id] = NULL;
 
-	return 0;
+	return ret;
 }
 
 static int
@@ -1444,7 +1447,8 @@ eth_dev_vhost_create(struct rte_vdev_device *dev, char *iface_name,
 	internal->flags = flags;
 	internal->disable_flags = disable_flags;
 	data->dev_link = pmd_link;
-	data->dev_flags = RTE_ETH_DEV_INTR_LSC;
+	data->dev_flags = RTE_ETH_DEV_INTR_LSC |
+				RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 	data->promiscuous = 1;
 	data->all_multicast = 1;
 

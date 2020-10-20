@@ -253,6 +253,7 @@ struct rte_eth_stats {
 	uint64_t ierrors;   /**< Total number of erroneous received packets. */
 	uint64_t oerrors;   /**< Total number of failed transmitted packets. */
 	uint64_t rx_nombuf; /**< Total number of RX mbuf allocation failures. */
+	/* Queue stats are limited to max 256 queues */
 	uint64_t q_ipackets[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 	/**< Total number of queue RX packets. */
 	uint64_t q_opackets[RTE_ETHDEV_QUEUE_STAT_CNTRS];
@@ -970,6 +971,61 @@ struct rte_eth_txmode {
 };
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice.
+ *
+ * A structure used to configure an Rx packet segment to split.
+ *
+ * If RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT flag is set in offloads field,
+ * the PMD will split the received packets into multiple segments
+ * according to the specification in the description array:
+ *
+ * - The first network buffer will be allocated from the memory pool,
+ *   specified in the first array element, the second buffer, from the
+ *   pool in the second element, and so on.
+ *
+ * - The offsets from the segment description elements specify
+ *   the data offset from the buffer beginning except the first mbuf.
+ *   The first segment offset is added with RTE_PKTMBUF_HEADROOM.
+ *
+ * - The lengths in the elements define the maximal data amount
+ *   being received to each segment. The receiving starts with filling
+ *   up the first mbuf data buffer up to specified length. If the
+ *   there are data remaining (packet is longer than buffer in the first
+ *   mbuf) the following data will be pushed to the next segment
+ *   up to its own length, and so on.
+ *
+ * - If the length in the segment description element is zero
+ *   the actual buffer size will be deduced from the appropriate
+ *   memory pool properties.
+ *
+ * - If there is not enough elements to describe the buffer for entire
+ *   packet of maximal length the following parameters will be used
+ *   for the all remaining segments:
+ *     - pool from the last valid element
+ *     - the buffer size from this pool
+ *     - zero offset
+ */
+struct rte_eth_rxseg_split {
+	struct rte_mempool *mp; /**< Memory pool to allocate segment from. */
+	uint16_t length; /**< Segment data length, configures split point. */
+	uint16_t offset; /**< Data offset from beginning of mbuf data buffer. */
+	uint32_t reserved; /**< Reserved field. */
+};
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice.
+ *
+ * A common structure used to describe Rx packet segment properties.
+ */
+union rte_eth_rxseg {
+	/* The settings for buffer split offload. */
+	struct rte_eth_rxseg_split split;
+	/* The other features settings should be added here. */
+};
+
+/**
  * A structure used to configure an RX ring of an Ethernet port.
  */
 struct rte_eth_rxconf {
@@ -977,12 +1033,21 @@ struct rte_eth_rxconf {
 	uint16_t rx_free_thresh; /**< Drives the freeing of RX descriptors. */
 	uint8_t rx_drop_en; /**< Drop packets if no descriptors are available. */
 	uint8_t rx_deferred_start; /**< Do not start queue with rte_eth_dev_start(). */
+	uint16_t rx_nseg; /**< Number of descriptions in rx_seg array. */
 	/**
 	 * Per-queue Rx offloads to be set using DEV_RX_OFFLOAD_* flags.
 	 * Only offloads set on rx_queue_offload_capa or rx_offload_capa
 	 * fields on rte_eth_dev_info structure are allowed to be set.
 	 */
 	uint64_t offloads;
+	/**
+	 * Points to the array of segment descriptions for an entire packet.
+	 * Array elements are properties for consecutive Rx segments.
+	 *
+	 * The supported capabilities of receiving segmentation is reported
+	 * in rte_eth_dev_info.rx_seg_capa field.
+	 */
+	union rte_eth_rxseg *rx_seg;
 
 	uint64_t reserved_64s[2]; /**< Reserved for future fields */
 	void *reserved_ptrs[2];   /**< Reserved for future fields */
@@ -1045,7 +1110,32 @@ struct rte_eth_hairpin_peer {
  * A structure used to configure hairpin binding.
  */
 struct rte_eth_hairpin_conf {
-	uint16_t peer_count; /**< The number of peers. */
+	uint32_t peer_count:16; /**< The number of peers. */
+
+	/**
+	 * Explicit Tx flow rule mode.
+	 * One hairpin pair of queues should have the same attribute.
+	 *
+	 * - When set, the user should be responsible for inserting the hairpin
+	 *   Tx part flows and removing them.
+	 * - When clear, the PMD will try to handle the Tx part of the flows,
+	 *   e.g., by splitting one flow into two parts.
+	 */
+	uint32_t tx_explicit:1;
+
+	/**
+	 * Manually bind hairpin queues.
+	 * One hairpin pair of queues should have the same attribute.
+	 *
+	 * - When set, to enable hairpin, the user should call the hairpin bind
+	 *   function after all the queues are set up properly and the ports are
+	 *   started. Also, the hairpin unbind function should be called
+	 *   accordingly before stopping a port that with hairpin configured.
+	 * - When clear, the PMD will try to enable the hairpin with the queues
+	 *   configured automatically during port start.
+	 */
+	uint32_t manual_bind:1;
+	uint32_t reserved:14; /**< Reserved bits. */
 	struct rte_eth_hairpin_peer peers[RTE_ETH_MAX_HAIRPIN_PEERS];
 };
 
@@ -1260,6 +1350,7 @@ struct rte_eth_conf {
 #define DEV_RX_OFFLOAD_SCTP_CKSUM	0x00020000
 #define DEV_RX_OFFLOAD_OUTER_UDP_CKSUM  0x00040000
 #define DEV_RX_OFFLOAD_RSS_HASH		0x00080000
+#define RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT 0x00100000
 
 #define DEV_RX_OFFLOAD_CHECKSUM (DEV_RX_OFFLOAD_IPV4_CKSUM | \
 				 DEV_RX_OFFLOAD_UDP_CKSUM | \
@@ -1376,6 +1467,21 @@ struct rte_eth_switch_info {
 };
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice.
+ *
+ * Ethernet device Rx buffer segmentation capabilities.
+ */
+struct rte_eth_rxseg_capa {
+	__extension__
+	uint32_t multi_pools:1; /**< Supports receiving to multiple pools.*/
+	uint32_t offset_allowed:1; /**< Supports buffer offsets. */
+	uint32_t offset_align_log2:4; /**< Required offset alignment. */
+	uint16_t max_nseg; /**< Maximum amount of segments to split. */
+	uint16_t reserved; /**< Reserved field. */
+};
+
+/**
  * Ethernet device information
  */
 
@@ -1403,6 +1509,7 @@ struct rte_eth_dev_info {
 	/** Maximum number of hash MAC addresses for MTA and UTA. */
 	uint16_t max_vfs; /**< Maximum number of VFs. */
 	uint16_t max_vmdq_pools; /**< Maximum number of VMDq pools. */
+	struct rte_eth_rxseg_capa rx_seg_capa; /**< Segmentation capability.*/
 	uint64_t rx_offload_capa;
 	/**< All RX offload capabilities including all per-queue ones */
 	uint64_t tx_offload_capa;
@@ -1507,6 +1614,13 @@ struct rte_eth_xstat {
  * An array of this structure is returned by rte_eth_xstats_get_names().
  * It lists the names of extended statistics for a PMD. The *rte_eth_xstat*
  * structure references these names by their array index.
+ *
+ * The xstats should follow a common naming scheme.
+ * Some names are standardized in rte_stats_strings.
+ * Examples:
+ *     - rx_missed_errors
+ *     - tx_q3_bytes
+ *     - tx_size_128_to_255_packets
  */
 struct rte_eth_xstat_name {
 	char name[RTE_ETH_XSTATS_NAME_SIZE]; /**< The statistic name. */
@@ -1677,6 +1791,8 @@ struct rte_eth_dev_owner {
 	char name[RTE_ETH_MAX_OWNER_NAME_LEN]; /**< The owner name. */
 };
 
+/** PMD supports thread-safe flow operations */
+#define RTE_ETH_DEV_FLOW_OPS_THREAD_SAFE  0x0001
 /** Device supports link state interrupt */
 #define RTE_ETH_DEV_INTR_LSC     0x0002
 /** Device is a bonded slave */
@@ -1687,6 +1803,11 @@ struct rte_eth_dev_owner {
 #define RTE_ETH_DEV_REPRESENTOR  0x0010
 /** Device does not support MAC change after started */
 #define RTE_ETH_DEV_NOLIVE_MAC_ADDR  0x0020
+/**
+ * Queue xstats filled automatically by ethdev layer.
+ * PMDs filling the queue xstats themselves should not set this flag
+ */
+#define RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS 0x0040
 
 /**
  * Iterates over valid ethdev ports owned by a specific owner.
@@ -2020,12 +2141,25 @@ rte_eth_dev_is_removed(uint16_t port_id);
  *   No need to repeat any bit in rx_conf->offloads which has already been
  *   enabled in rte_eth_dev_configure() at port level. An offloading enabled
  *   at port level can't be disabled at queue level.
+ *   The configuration structure also contains the pointer to the array
+ *   of the receiving buffer segment descriptions, see rx_seg and rx_nseg
+ *   fields, this extended configuration might be used by split offloads like
+ *   RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT. If mp_pool is not NULL,
+ *   the extended configuration fields must be set to NULL and zero.
  * @param mb_pool
  *   The pointer to the memory pool from which to allocate *rte_mbuf* network
- *   memory buffers to populate each descriptor of the receive ring.
+ *   memory buffers to populate each descriptor of the receive ring. There are
+ *   two options to provide Rx buffer configuration:
+ *   - single pool:
+ *     mb_pool is not NULL, rx_conf.rx_nseg is 0.
+ *   - multiple segments description:
+ *     mb_pool is NULL, rx_conf.rx_seg is not NULL, rx_conf.rx_nseg is not 0.
+ *     Taken only if flag RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT is set in offloads.
+ *
  * @return
  *   - 0: Success, receive queue correctly set up.
  *   - -EIO: if device is removed.
+ *   - -ENODEV: if *port_id* is invalid.
  *   - -EINVAL: The memory pool pointer is null or the size of network buffers
  *      which can be allocated from this memory pool does not fit the various
  *      buffer sizes allowed by the device controller.
@@ -2060,6 +2194,7 @@ int rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
  *
  * @return
  *   - (0) if successful.
+ *   - (-ENODEV) if *port_id* is invalid.
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  *   - (-ENOMEM) if unable to allocate the resources.
@@ -2141,6 +2276,7 @@ int rte_eth_tx_queue_setup(uint16_t port_id, uint16_t tx_queue_id,
  *
  * @return
  *   - (0) if successful.
+ *   - (-ENODEV) if *port_id* is invalid.
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  *   - (-ENOMEM) if unable to allocate the resources.
@@ -2149,6 +2285,88 @@ __rte_experimental
 int rte_eth_tx_hairpin_queue_setup
 	(uint16_t port_id, uint16_t tx_queue_id, uint16_t nb_tx_desc,
 	 const struct rte_eth_hairpin_conf *conf);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * Get all the hairpin peer Rx / Tx ports of the current port.
+ * The caller should ensure that the array is large enough to save the ports
+ * list.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param peer_ports
+ *   Pointer to the array to store the peer ports list.
+ * @param len
+ *   Length of the array to store the port identifiers.
+ * @param direction
+ *   Current port to peer port direction
+ *   positive - current used as Tx to get all peer Rx ports.
+ *   zero - current used as Rx to get all peer Tx ports.
+ *
+ * @return
+ *   - (0 or positive) actual peer ports number.
+ *   - (-EINVAL) if bad parameter.
+ *   - (-ENODEV) if *port_id* invalid
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - Others detailed errors from PMD drivers.
+ */
+__rte_experimental
+int rte_eth_hairpin_get_peer_ports(uint16_t port_id, uint16_t *peer_ports,
+				   size_t len, uint32_t direction);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * Bind all hairpin Tx queues of one port to the Rx queues of the peer port.
+ * It is only allowed to call this function after all hairpin queues are
+ * configured properly and the devices are in started state.
+ *
+ * @param tx_port
+ *   The identifier of the Tx port.
+ * @param rx_port
+ *   The identifier of peer Rx port.
+ *   RTE_MAX_ETHPORTS is allowed for the traversal of all devices.
+ *   Rx port ID could have the same value as Tx port ID.
+ *
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if Tx port ID is invalid.
+ *   - (-EBUSY) if device is not in started state.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - Others detailed errors from PMD drivers.
+ */
+__rte_experimental
+int rte_eth_hairpin_bind(uint16_t tx_port, uint16_t rx_port);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice
+ *
+ * Unbind all hairpin Tx queues of one port from the Rx queues of the peer port.
+ * This should be called before closing the Tx or Rx devices, if the bind
+ * function is called before.
+ * After unbinding the hairpin ports pair, it is allowed to bind them again.
+ * Changing queues configuration should be after stopping the device(s).
+ *
+ * @param tx_port
+ *   The identifier of the Tx port.
+ * @param rx_port
+ *   The identifier of peer Rx port.
+ *   RTE_MAX_ETHPORTS is allowed for traversal of all devices.
+ *   Rx port ID could have the same value as Tx port ID.
+ *
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if Tx port ID is invalid.
+ *   - (-EBUSY) if device is in stopped state.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - Others detailed errors from PMD drivers.
+ */
+__rte_experimental
+int rte_eth_hairpin_unbind(uint16_t tx_port, uint16_t rx_port);
 
 /**
  * Return the NUMA socket to which an Ethernet device is connected
@@ -2185,7 +2403,8 @@ int rte_eth_dev_is_valid_port(uint16_t port_id);
  *   to rte_eth_dev_configure().
  * @return
  *   - 0: Success, the receive queue is started.
- *   - -EINVAL: The port_id or the queue_id out of range or belong to hairpin.
+ *   - -ENODEV: if *port_id* is invalid.
+ *   - -EINVAL: The queue_id out of range or belong to hairpin.
  *   - -EIO: if device is removed.
  *   - -ENOTSUP: The function not supported in PMD driver.
  */
@@ -2202,7 +2421,8 @@ int rte_eth_dev_rx_queue_start(uint16_t port_id, uint16_t rx_queue_id);
  *   to rte_eth_dev_configure().
  * @return
  *   - 0: Success, the receive queue is stopped.
- *   - -EINVAL: The port_id or the queue_id out of range or belong to hairpin.
+ *   - -ENODEV: if *port_id* is invalid.
+ *   - -EINVAL: The queue_id out of range or belong to hairpin.
  *   - -EIO: if device is removed.
  *   - -ENOTSUP: The function not supported in PMD driver.
  */
@@ -2220,7 +2440,8 @@ int rte_eth_dev_rx_queue_stop(uint16_t port_id, uint16_t rx_queue_id);
  *   to rte_eth_dev_configure().
  * @return
  *   - 0: Success, the transmit queue is started.
- *   - -EINVAL: The port_id or the queue_id out of range or belong to hairpin.
+ *   - -ENODEV: if *port_id* is invalid.
+ *   - -EINVAL: The queue_id out of range or belong to hairpin.
  *   - -EIO: if device is removed.
  *   - -ENOTSUP: The function not supported in PMD driver.
  */
@@ -2237,7 +2458,8 @@ int rte_eth_dev_tx_queue_start(uint16_t port_id, uint16_t tx_queue_id);
  *   to rte_eth_dev_configure().
  * @return
  *   - 0: Success, the transmit queue is stopped.
- *   - -EINVAL: The port_id or the queue_id out of range or belong to hairpin.
+ *   - -ENODEV: if *port_id* is invalid.
+ *   - -EINVAL: The queue_id out of range or belong to hairpin.
  *   - -EIO: if device is removed.
  *   - -ENOTSUP: The function not supported in PMD driver.
  */
@@ -2270,8 +2492,11 @@ int rte_eth_dev_start(uint16_t port_id);
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
+ * @return
+ *   - 0: Success, Ethernet device stopped.
+ *   - <0: Error code of the driver device stop function.
  */
-void rte_eth_dev_stop(uint16_t port_id);
+int rte_eth_dev_stop(uint16_t port_id);
 
 /**
  * Link up an Ethernet device.
@@ -2304,8 +2529,11 @@ int rte_eth_dev_set_link_down(uint16_t port_id);
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
+ * @return
+ *   - Zero if the port is closed successfully.
+ *   - Negative if something went wrong.
  */
-void rte_eth_dev_close(uint16_t port_id);
+int rte_eth_dev_close(uint16_t port_id);
 
 /**
  * Reset a Ethernet device and keep its port id.
@@ -2337,7 +2565,7 @@ void rte_eth_dev_close(uint16_t port_id);
  *
  * @return
  *   - (0) if successful.
- *   - (-EINVAL) if port identifier is invalid.
+ *   - (-ENODEV) if *port_id* is invalid.
  *   - (-ENOTSUP) if hardware doesn't support this function.
  *   - (-EPERM) if not ran from the primary process.
  *   - (-EIO) if re-initialisation failed or device is removed.
@@ -2692,6 +2920,7 @@ int rte_eth_xstats_reset(uint16_t port_id);
  *   The per-queue packet statistics functionality number that the transmit
  *   queue is to be assigned.
  *   The value must be in the range [0, RTE_ETHDEV_QUEUE_STAT_CNTRS - 1].
+ *   Max RTE_ETHDEV_QUEUE_STAT_CNTRS being 256.
  * @return
  *   Zero if successful. Non-zero otherwise.
  */
@@ -2712,6 +2941,7 @@ int rte_eth_dev_set_tx_queue_stats_mapping(uint16_t port_id,
  *   The per-queue packet statistics functionality number that the receive
  *   queue is to be assigned.
  *   The value must be in the range [0, RTE_ETHDEV_QUEUE_STAT_CNTRS - 1].
+ *   Max RTE_ETHDEV_QUEUE_STAT_CNTRS being 256.
  * @return
  *   Zero if successful. Non-zero otherwise.
  */
@@ -3611,6 +3841,7 @@ int rte_eth_dev_default_mac_addr_set(uint16_t port_id,
  *   rte_eth_dev_info_get().
  * @return
  *   - (0) if successful.
+ *   - (-ENODEV) if *port_id* is invalid.
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  *   - (-EIO) if device is removed.
@@ -3632,6 +3863,7 @@ int rte_eth_dev_rss_reta_update(uint16_t port_id,
  *   rte_eth_dev_info_get().
  * @return
  *   - (0) if successful.
+ *   - (-ENODEV) if *port_id* is invalid.
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  *   - (-EIO) if device is removed.
@@ -3902,7 +4134,8 @@ struct rte_eth_rxtx_callback;
  *   The callback function
  * @param user_param
  *   A generic pointer parameter which will be passed to each invocation of the
- *   callback function on this port and queue.
+ *   callback function on this port and queue. Inter-thread synchronization
+ *   of any user data changes is the responsibility of the user.
  *
  * @return
  *   NULL on error.
@@ -3931,7 +4164,8 @@ rte_eth_add_rx_callback(uint16_t port_id, uint16_t queue_id,
  *   The callback function
  * @param user_param
  *   A generic pointer parameter which will be passed to each invocation of the
- *   callback function on this port and queue.
+ *   callback function on this port and queue. Inter-thread synchronization
+ *   of any user data changes is the responsibility of the user.
  *
  * @return
  *   NULL on error.
@@ -3959,7 +4193,8 @@ rte_eth_add_first_rx_callback(uint16_t port_id, uint16_t queue_id,
  *   The callback function
  * @param user_param
  *   A generic pointer parameter which will be passed to each invocation of the
- *   callback function on this port and queue.
+ *   callback function on this port and queue. Inter-thread synchronization
+ *   of any user data changes is the responsibility of the user.
  *
  * @return
  *   NULL on error.
@@ -3984,7 +4219,9 @@ rte_eth_add_tx_callback(uint16_t port_id, uint16_t queue_id,
  *   on that queue.
  *
  * - After a short delay - where the delay is sufficient to allow any
- *   in-flight callbacks to complete.
+ *   in-flight callbacks to complete. Alternately, the RCU mechanism can be
+ *   used to detect when data plane threads have ceased referencing the
+ *   callback memory.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
@@ -3995,8 +4232,9 @@ rte_eth_add_tx_callback(uint16_t port_id, uint16_t queue_id,
  *
  * @return
  *   - 0: Success. Callback was removed.
+ *   - -ENODEV:  If *port_id* is invalid.
  *   - -ENOTSUP: Callback support is not available.
- *   - -EINVAL:  The port_id or the queue_id is out of range, or the callback
+ *   - -EINVAL:  The queue_id is out of range, or the callback
  *               is NULL or not found for the port/queue.
  */
 int rte_eth_remove_rx_callback(uint16_t port_id, uint16_t queue_id,
@@ -4017,7 +4255,9 @@ int rte_eth_remove_rx_callback(uint16_t port_id, uint16_t queue_id,
  *   on that queue.
  *
  * - After a short delay - where the delay is sufficient to allow any
- *   in-flight callbacks to complete.
+ *   in-flight callbacks to complete. Alternately, the RCU mechanism can be
+ *   used to detect when data plane threads have ceased referencing the
+ *   callback memory.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
@@ -4028,8 +4268,9 @@ int rte_eth_remove_rx_callback(uint16_t port_id, uint16_t queue_id,
  *
  * @return
  *   - 0: Success. Callback was removed.
+ *   - -ENODEV:  If *port_id* is invalid.
  *   - -ENOTSUP: Callback support is not available.
- *   - -EINVAL:  The port_id or the queue_id is out of range, or the callback
+ *   - -EINVAL:  The queue_id is out of range, or the callback
  *               is NULL or not found for the port/queue.
  */
 int rte_eth_remove_tx_callback(uint16_t port_id, uint16_t queue_id,
@@ -4049,8 +4290,9 @@ int rte_eth_remove_tx_callback(uint16_t port_id, uint16_t queue_id,
  *
  * @return
  *   - 0: Success
+ *   - -ENODEV:  If *port_id* is invalid.
  *   - -ENOTSUP: routine is not supported by the device PMD.
- *   - -EINVAL:  The port_id or the queue_id is out of range, or the queue
+ *   - -EINVAL:  The queue_id is out of range, or the queue
  *               is hairpin queue.
  */
 int rte_eth_rx_queue_info_get(uint16_t port_id, uint16_t queue_id,
@@ -4070,8 +4312,9 @@ int rte_eth_rx_queue_info_get(uint16_t port_id, uint16_t queue_id,
  *
  * @return
  *   - 0: Success
+ *   - -ENODEV:  If *port_id* is invalid.
  *   - -ENOTSUP: routine is not supported by the device PMD.
- *   - -EINVAL:  The port_id or the queue_id is out of range, or the queue
+ *   - -EINVAL:  The queue_id is out of range, or the queue
  *               is hairpin queue.
  */
 int rte_eth_tx_queue_info_get(uint16_t port_id, uint16_t queue_id,
@@ -4091,8 +4334,9 @@ int rte_eth_tx_queue_info_get(uint16_t port_id, uint16_t queue_id,
  *
  * @return
  *   - 0: Success
+ *   - -ENODEV:  If *port_id* is invalid.
  *   - -ENOTSUP: routine is not supported by the device PMD.
- *   - -EINVAL:  The port_id or the queue_id is out of range.
+ *   - -EINVAL:  The queue_id is out of range.
  */
 __rte_experimental
 int rte_eth_rx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
@@ -4112,8 +4356,9 @@ int rte_eth_rx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
  *
  * @return
  *   - 0: Success
+ *   - -ENODEV:  If *port_id* is invalid.
  *   - -ENOTSUP: routine is not supported by the device PMD.
- *   - -EINVAL:  The port_id or the queue_id is out of range.
+ *   - -EINVAL:  The queue_id is out of range.
  */
 __rte_experimental
 int rte_eth_tx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
@@ -4502,6 +4747,7 @@ rte_eth_dev_get_port_by_name(const char *name, uint16_t *port_id);
 *   Buffer of size RTE_ETH_NAME_MAX_LEN to store the name.
 * @return
 *   - (0) if successful.
+*   - (-ENODEV) if *port_id* is invalid.
 *   - (-EINVAL) on failure.
 */
 int
@@ -4678,10 +4924,18 @@ rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
 				     rx_pkts, nb_pkts);
 
 #ifdef RTE_ETHDEV_RXTX_CALLBACKS
-	if (unlikely(dev->post_rx_burst_cbs[queue_id] != NULL)) {
-		struct rte_eth_rxtx_callback *cb =
-				dev->post_rx_burst_cbs[queue_id];
+	struct rte_eth_rxtx_callback *cb;
 
+	/* __ATOMIC_RELEASE memory order was used when the
+	 * call back was inserted into the list.
+	 * Since there is a clear dependency between loading
+	 * cb and cb->fn/cb->next, __ATOMIC_ACQUIRE memory order is
+	 * not required.
+	 */
+	cb = __atomic_load_n(&dev->post_rx_burst_cbs[queue_id],
+				__ATOMIC_RELAXED);
+
+	if (unlikely(cb != NULL)) {
 		do {
 			nb_rx = cb->fn.rx(port_id, queue_id, rx_pkts, nb_rx,
 						nb_pkts, cb->param);
@@ -4703,7 +4957,8 @@ rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
  *  The queue id on the specific port.
  * @return
  *  The number of used descriptors in the specific queue, or:
- *     (-EINVAL) if *port_id* or *queue_id* is invalid
+ *   - (-ENODEV) if *port_id* is invalid.
+ *     (-EINVAL) if *queue_id* is invalid
  *     (-ENOTSUP) if the device does not support this function
  */
 static inline int
@@ -4711,10 +4966,11 @@ rte_eth_rx_queue_count(uint16_t port_id, uint16_t queue_id)
 {
 	struct rte_eth_dev *dev;
 
-	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -EINVAL);
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 	RTE_FUNC_PTR_OR_ERR_RET(*dev->rx_queue_count, -ENOTSUP);
-	if (queue_id >= dev->data->nb_rx_queues)
+	if (queue_id >= dev->data->nb_rx_queues ||
+	    dev->data->rx_queues[queue_id] == NULL)
 		return -EINVAL;
 
 	return (int)(*dev->rx_queue_count)(dev, queue_id);
@@ -4943,7 +5199,16 @@ rte_eth_tx_burst(uint16_t port_id, uint16_t queue_id,
 #endif
 
 #ifdef RTE_ETHDEV_RXTX_CALLBACKS
-	struct rte_eth_rxtx_callback *cb = dev->pre_tx_burst_cbs[queue_id];
+	struct rte_eth_rxtx_callback *cb;
+
+	/* __ATOMIC_RELEASE memory order was used when the
+	 * call back was inserted into the list.
+	 * Since there is a clear dependency between loading
+	 * cb and cb->fn/cb->next, __ATOMIC_ACQUIRE memory order is
+	 * not required.
+	 */
+	cb = __atomic_load_n(&dev->pre_tx_burst_cbs[queue_id],
+				__ATOMIC_RELAXED);
 
 	if (unlikely(cb != NULL)) {
 		do {
@@ -5009,6 +5274,7 @@ rte_eth_tx_burst(uint16_t port_id, uint16_t queue_id,
  *   meet devices requirements with rte_errno set appropriately:
  *   - EINVAL: offload flags are not correctly set
  *   - ENOTSUP: the offload feature is not supported by the hardware
+ *   - ENODEV: if *port_id* is invalid (with debug enabled only)
  *
  */
 
@@ -5023,7 +5289,7 @@ rte_eth_tx_prepare(uint16_t port_id, uint16_t queue_id,
 #ifdef RTE_LIBRTE_ETHDEV_DEBUG
 	if (!rte_eth_dev_is_valid_port(port_id)) {
 		RTE_ETHDEV_LOG(ERR, "Invalid TX port_id=%u\n", port_id);
-		rte_errno = EINVAL;
+		rte_errno = ENODEV;
 		return 0;
 	}
 #endif

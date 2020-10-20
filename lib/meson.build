@@ -74,7 +74,7 @@ foreach l:libraries
 	ext_deps = []
 	deps = []
 	# eal is standard dependency once built
-	if dpdk_conf.has('RTE_LIBRTE_EAL')
+	if dpdk_conf.has('RTE_LIB_EAL')
 		deps += ['eal']
 	endif
 
@@ -99,7 +99,8 @@ foreach l:libraries
 		set_variable(name.underscorify() + '_disable_reason', reason)
 	else
 		enabled_libs += name
-		dpdk_conf.set('RTE_LIBRTE_' + name.to_upper(), 1)
+		dpdk_conf.set('RTE_LIBRTE_' + name.to_upper(), 1) #old macro
+		dpdk_conf.set('RTE_LIB_' + name.to_upper(), 1) # new macro
 		install_headers(headers)
 
 		libname = 'rte_' + name
@@ -140,8 +141,8 @@ foreach l:libraries
 				# RTE_BUILD_SHARED_LIB defined
 				cflags += '-DRTE_BUILD_SHARED_LIB'
 			endif
-			version_map = '@0@/@1@/rte_@2@_version.map'.format(
-					meson.current_source_dir(), dir_name, name)
+			version_map = '@0@/@1@/version.map'.format(
+					meson.current_source_dir(), dir_name)
 			implib = dir_name + '.dll.a'
 
 			def_file = custom_target(libname + '_def',

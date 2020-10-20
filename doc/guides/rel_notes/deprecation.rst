@@ -11,6 +11,14 @@ here.
 Deprecation Notices
 -------------------
 
+* build: The macros defined to indicate which DPDK libraries and drivers
+  are included in the meson build are changing to a standardized format of
+  ``RTE_LIB_<NAME>`` and ``RTE_<CLASS>_<NAME>``, where ``NAME`` is the
+  upper-case component name, e.g. EAL, ETHDEV, IXGBE, and ``CLASS`` is the
+  upper-case name of the device class to which a driver belongs e.g.
+  ``NET``, ``CRYPTO``, ``VDPA``. The old macros are deprecated and will be
+  removed in a future release.
+
 * meson: The minimum supported version of meson for configuring and building
   DPDK will be increased to v0.47.1 (from 0.41) from DPDK 19.05 onwards. For
   those users with a version earlier than 0.47.1, an updated copy of meson
@@ -19,25 +27,6 @@ Deprecation Notices
 
 * kvargs: The function ``rte_kvargs_process`` will get a new parameter
   for returning key match count. It will ease handling of no-match case.
-
-* eal: To be more inclusive in choice of naming, the DPDK project
-  will replace uses of master/slave in the API's and command line arguments.
-
-  References to master/slave in relation to lcore will be renamed
-  to initial/worker.  The function ``rte_get_master_lcore()``
-  will be renamed to ``rte_get_initial_lcore()``.
-  For the 20.11 release, both names will be present and the
-  old function will be marked with the deprecated tag.
-  The old function will be removed in a future version.
-
-  The iterator for worker lcores will also change:
-  ``RTE_LCORE_FOREACH_SLAVE`` will be replaced with
-  ``RTE_LCORE_FOREACH_WORKER``.
-
-  The ``master-lcore`` argument to testpmd will be replaced
-  with ``initial-lcore``. The old ``master-lcore`` argument
-  will produce a runtime notification in 20.11 release, and
-  be removed completely in a future release.
 
 * eal: The terms blacklist and whitelist to describe devices used
   by DPDK will be replaced in the 20.11 relase.
@@ -123,13 +112,6 @@ Deprecation Notices
   ``rte_eth_dev_l2_tunnel_offload_set`` which were not marked as deprecated,
   will be removed in DPDK 20.11.
 
-* ethdev: Update API functions returning ``void`` to return ``int`` with
-  negative errno values to indicate various error conditions (e.g.
-  invalid port ID, unsupported operation, failed operation):
-
-  - ``rte_eth_dev_stop``
-  - ``rte_eth_dev_close``
-
 * ethdev: New offload flags ``DEV_RX_OFFLOAD_FLOW_MARK`` will be added in 19.11.
   This will allow application to enable or disable PMDs from updating
   ``rte_mbuf::hash::fdir``.
@@ -137,11 +119,6 @@ Deprecation Notices
   thereby improve Rx performance if application wishes do so.
   In 19.11 PMDs will still update the field even when the offload is not
   enabled.
-
-* ethdev: Add new fields to ``rte_eth_rxconf`` to configure the receiving
-  queues to split ingress packets into multiple segments according to the
-  specified lengths into the buffers allocated from the specified
-  memory pools. The backward compatibility to existing API is preserved.
 
 * ethdev: ``rx_descriptor_done`` dev_ops and ``rte_eth_rx_descriptor_done``
   will be removed in 21.11.
@@ -154,41 +131,18 @@ Deprecation Notices
   as deprecated in DPDK 20.11, along with the associated macros ``ETH_MIRROR_*``.
   This API will be fully removed in DPDK 21.11.
 
-* ethdev: The ``struct rte_flow_item_eth`` and ``struct rte_flow_item_vlan``
-  structs will be modified, to include an additional value, indicating existence
-  or absence of a VLAN header following the current header, as proposed in RFC
-  https://mails.dpdk.org/archives/dev/2020-August/177536.html.
-
-* ethdev: The ``struct rte_flow_item_ipv6`` struct will be modified to include
-  additional values, indicating existence or absence of IPv6 extension headers
-  following the IPv6 header, as proposed in RFC
-  https://mails.dpdk.org/archives/dev/2020-August/177257.html.
-
-* security: The API ``rte_security_session_create`` takes only single mempool
-  for session and session private data. So the application need to create
-  mempool for twice the number of sessions needed and will also lead to
-  wastage of memory as session private data need more memory compared to session.
-  Hence the API will be modified to take two mempool pointers - one for session
-  and one for private data.
+* ethdev: Queue specific stats fields will be removed from ``struct rte_eth_stats``.
+  Mentioned fields are: ``q_ipackets``, ``q_opackets``, ``q_ibytes``, ``q_obytes``,
+  ``q_errors``.
+  Instead queue stats will be received via xstats API. Current method support
+  will be limited to maximum 256 queues.
+  Also compile time flag ``RTE_ETHDEV_QUEUE_STAT_CNTRS`` will be removed.
 
 * cryptodev: support for using IV with all sizes is added, J0 still can
   be used but only when IV length in following structs ``rte_crypto_auth_xform``,
   ``rte_crypto_aead_xform`` is set to zero. When IV length is greater or equal
   to one it means it represents IV, when is set to zero it means J0 is used
   directly, in this case 16 bytes of J0 need to be passed.
-
-* eventdev: Following structures will be modified to support DLB PMD
-  and future extensions:
-
-  - ``rte_event_dev_info``
-  - ``rte_event_dev_config``
-  - ``rte_event_port_conf``
-
-  Patches containing justification, documentation, and proposed modifications
-  can be found at:
-
-  - https://patches.dpdk.org/patch/71457/
-  - https://patches.dpdk.org/patch/71456/
 
 * sched: To allow more traffic classes, flexible mapping of pipe queues to
   traffic classes, and subport level configuration of pipes and queues

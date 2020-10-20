@@ -428,19 +428,21 @@ static int enicpmd_dev_start(struct rte_eth_dev *eth_dev)
 /*
  * Stop device: disable rx and tx functions to allow for reconfiguring.
  */
-static void enicpmd_dev_stop(struct rte_eth_dev *eth_dev)
+static int enicpmd_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct rte_eth_link link;
 	struct enic *enic = pmd_priv(eth_dev);
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return;
+		return 0;
 
 	ENICPMD_FUNC_TRACE();
 	enic_disable(enic);
 
 	memset(&link, 0, sizeof(link));
 	rte_eth_linkstatus_set(eth_dev, &link);
+
+	return 0;
 }
 
 /*
@@ -1298,6 +1300,7 @@ static int eth_enic_dev_init(struct rte_eth_dev *eth_dev,
 
 	pdev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	rte_eth_copy_pci_info(eth_dev, pdev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 	enic->pdev = pdev;
 	addr = &pdev->addr;
 

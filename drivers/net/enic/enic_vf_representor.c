@@ -242,7 +242,7 @@ static int enic_vf_dev_start(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
-static void enic_vf_dev_stop(struct rte_eth_dev *eth_dev)
+static int enic_vf_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct enic_vf_representor *vf;
 	struct vnic_rq *rq;
@@ -250,7 +250,7 @@ static void enic_vf_dev_stop(struct rte_eth_dev *eth_dev)
 
 	ENICPMD_FUNC_TRACE();
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return;
+		return 0;
 	/* Undo dev_start. Disable/clean WQ */
 	vf = eth_dev->data->dev_private;
 	pf = vf->pf;
@@ -271,6 +271,8 @@ static void enic_vf_dev_stop(struct rte_eth_dev *eth_dev)
 	eth_dev->data->rx_queue_state[0] = RTE_ETH_QUEUE_STATE_STOPPED;
 	/* Clean up representor flowman */
 	enic_fm_destroy(&vf->enic);
+
+	return 0;
 }
 
 /*
@@ -670,7 +672,8 @@ int enic_vf_representor_init(struct rte_eth_dev *eth_dev, void *init_params)
 
 	eth_dev->device->driver = pf->rte_dev->device->driver;
 	eth_dev->dev_ops = &enic_vf_representor_dev_ops;
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR |
+					RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 	eth_dev->data->representor_id = vf->vf_id;
 	eth_dev->data->mac_addrs = rte_zmalloc("enic_mac_addr_vf",
 		sizeof(struct rte_ether_addr) *

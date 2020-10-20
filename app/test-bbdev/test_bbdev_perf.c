@@ -26,7 +26,7 @@
 #define MAX_QUEUES RTE_MAX_LCORE
 #define TEST_REPETITIONS 1000
 
-#ifdef RTE_LIBRTE_PMD_BBDEV_FPGA_LTE_FEC
+#ifdef RTE_BASEBAND_FPGA_LTE_FEC
 #include <fpga_lte_fec.h>
 #define FPGA_LTE_PF_DRIVER_NAME ("intel_fpga_lte_fec_pf")
 #define FPGA_LTE_VF_DRIVER_NAME ("intel_fpga_lte_fec_vf")
@@ -39,7 +39,7 @@
 #define FLR_4G_TIMEOUT 610
 #endif
 
-#ifdef RTE_LIBRTE_PMD_BBDEV_FPGA_5GNR_FEC
+#ifdef RTE_BASEBAND_FPGA_5GNR_FEC
 #include <rte_pmd_fpga_5gnr_fec.h>
 #define FPGA_5GNR_PF_DRIVER_NAME ("intel_fpga_5gnr_fec_pf")
 #define FPGA_5GNR_VF_DRIVER_NAME ("intel_fpga_5gnr_fec_vf")
@@ -52,7 +52,7 @@
 #define FLR_5G_TIMEOUT 610
 #endif
 
-#ifdef RTE_LIBRTE_PMD_BBDEV_ACC100
+#ifdef RTE_BASEBAND_ACC100
 #include <rte_acc100_cfg.h>
 #define ACC100PF_DRIVER_NAME   ("intel_acc100_pf")
 #define ACC100VF_DRIVER_NAME   ("intel_acc100_vf")
@@ -577,7 +577,7 @@ add_bbdev_dev(uint8_t dev_id, struct rte_bbdev_info *info,
 /* Configure fpga lte fec with PF & VF values
  * if '-i' flag is set and using fpga device
  */
-#ifdef RTE_LIBRTE_PMD_BBDEV_FPGA_LTE_FEC
+#ifdef RTE_BASEBAND_FPGA_LTE_FEC
 	if ((get_init_device() == true) &&
 		(!strcmp(info->drv.driver_name, FPGA_LTE_PF_DRIVER_NAME))) {
 		struct rte_fpga_lte_fec_conf conf;
@@ -621,7 +621,7 @@ add_bbdev_dev(uint8_t dev_id, struct rte_bbdev_info *info,
 				info->dev_name);
 	}
 #endif
-#ifdef RTE_LIBRTE_PMD_BBDEV_FPGA_5GNR_FEC
+#ifdef RTE_BASEBAND_FPGA_5GNR_FEC
 	if ((get_init_device() == true) &&
 		(!strcmp(info->drv.driver_name, FPGA_5GNR_PF_DRIVER_NAME))) {
 		struct rte_fpga_5gnr_fec_conf conf;
@@ -665,7 +665,7 @@ add_bbdev_dev(uint8_t dev_id, struct rte_bbdev_info *info,
 				info->dev_name);
 	}
 #endif
-#ifdef RTE_LIBRTE_PMD_BBDEV_ACC100
+#ifdef RTE_BASEBAND_ACC100
 	if ((get_init_device() == true) &&
 		(!strcmp(info->drv.driver_name, ACC100PF_DRIVER_NAME))) {
 		struct rte_acc100_conf conf;
@@ -3722,14 +3722,14 @@ bler_test(struct active_device *ad,
 
 	rte_atomic16_set(&op_params->sync, SYNC_WAIT);
 
-	/* Master core is set at first entry */
+	/* Main core is set at first entry */
 	t_params[0].dev_id = ad->dev_id;
 	t_params[0].lcore_id = rte_lcore_id();
 	t_params[0].op_params = op_params;
 	t_params[0].queue_id = ad->queue_ids[used_cores++];
 	t_params[0].iter_count = 0;
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (used_cores >= num_lcores)
 			break;
 
@@ -3746,7 +3746,7 @@ bler_test(struct active_device *ad,
 	rte_atomic16_set(&op_params->sync, SYNC_START);
 	ret = bler_function(&t_params[0]);
 
-	/* Master core is always used */
+	/* Main core is always used */
 	for (used_cores = 1; used_cores < num_lcores; used_cores++)
 		ret |= rte_eal_wait_lcore(t_params[used_cores].lcore_id);
 
@@ -3840,14 +3840,14 @@ throughput_test(struct active_device *ad,
 
 	rte_atomic16_set(&op_params->sync, SYNC_WAIT);
 
-	/* Master core is set at first entry */
+	/* Main core is set at first entry */
 	t_params[0].dev_id = ad->dev_id;
 	t_params[0].lcore_id = rte_lcore_id();
 	t_params[0].op_params = op_params;
 	t_params[0].queue_id = ad->queue_ids[used_cores++];
 	t_params[0].iter_count = 0;
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (used_cores >= num_lcores)
 			break;
 
@@ -3864,7 +3864,7 @@ throughput_test(struct active_device *ad,
 	rte_atomic16_set(&op_params->sync, SYNC_START);
 	ret = throughput_function(&t_params[0]);
 
-	/* Master core is always used */
+	/* Main core is always used */
 	for (used_cores = 1; used_cores < num_lcores; used_cores++)
 		ret |= rte_eal_wait_lcore(t_params[used_cores].lcore_id);
 
@@ -3888,7 +3888,7 @@ throughput_test(struct active_device *ad,
 	/* In interrupt TC we need to wait for the interrupt callback to deqeue
 	 * all pending operations. Skip waiting for queues which reported an
 	 * error using processing_status variable.
-	 * Wait for master lcore operations.
+	 * Wait for main lcore operations.
 	 */
 	tp = &t_params[0];
 	while ((rte_atomic16_read(&tp->nb_dequeued) <
@@ -3901,7 +3901,7 @@ throughput_test(struct active_device *ad,
 	tp->mbps /= TEST_REPETITIONS;
 	ret |= (int)rte_atomic16_read(&tp->processing_status);
 
-	/* Wait for slave lcores operations */
+	/* Wait for worker lcores operations */
 	for (used_cores = 1; used_cores < num_lcores; used_cores++) {
 		tp = &t_params[used_cores];
 

@@ -607,7 +607,7 @@ status_up:
  * Is the only place for us to close all the tx streams dumpers.
  * If not called the dumpers will be flushed within each tx burst.
  */
-static void
+static int
 eth_dev_stop(struct rte_eth_dev *dev)
 {
 	unsigned int i;
@@ -649,6 +649,8 @@ status_down:
 		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	dev->data->dev_link.link_status = ETH_LINK_DOWN;
+
+	return 0;
 }
 
 static int
@@ -747,6 +749,13 @@ eth_dev_close(struct rte_eth_dev *dev)
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
 			struct pcap_rx_queue *pcap_q = &internals->rx_queue[i];
 			struct rte_mbuf *pcap_buf;
+
+			/*
+			 * 'pcap_q->pkts' can be NULL if 'eth_dev_close()'
+			 * called before 'eth_rx_queue_setup()' has been called
+			 */
+			if (pcap_q->pkts == NULL)
+				continue;
 
 			while (!rte_ring_dequeue(pcap_q->pkts,
 					(void **)&pcap_buf))
@@ -1149,6 +1158,7 @@ pmd_init_internals(struct rte_vdev_device *vdev,
 	data->mac_addrs = &(*internals)->eth_addr;
 	data->promiscuous = 1;
 	data->all_multicast = 1;
+	data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/*
 	 * NOTE: we'll replace the data element, of originally allocated
@@ -1416,7 +1426,8 @@ pmd_pcap_probe(struct rte_vdev_device *dev)
 	devargs_all.is_rx_pcap =
 		rte_kvargs_count(kvlist, ETH_PCAP_RX_PCAP_ARG) ? 1 : 0;
 	devargs_all.is_rx_iface =
-		rte_kvargs_count(kvlist, ETH_PCAP_RX_IFACE_ARG) ? 1 : 0;
+		(rte_kvargs_count(kvlist, ETH_PCAP_RX_IFACE_ARG) +
+		 rte_kvargs_count(kvlist, ETH_PCAP_RX_IFACE_IN_ARG)) ? 1 : 0;
 	pcaps.num_of_queue = 0;
 
 	devargs_all.is_tx_pcap =

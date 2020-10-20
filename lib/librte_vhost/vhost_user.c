@@ -341,7 +341,9 @@ vhost_user_set_features(struct virtio_net **pdev, struct VhostUserMsg *msg,
 
 	dev->features = features;
 	if (dev->features &
-		((1 << VIRTIO_NET_F_MRG_RXBUF) | (1ULL << VIRTIO_F_VERSION_1))) {
+		((1ULL << VIRTIO_NET_F_MRG_RXBUF) |
+		 (1ULL << VIRTIO_F_VERSION_1) |
+		 (1ULL << VIRTIO_F_RING_PACKED))) {
 		dev->vhost_hlen = sizeof(struct virtio_net_hdr_mrg_rxbuf);
 	} else {
 		dev->vhost_hlen = sizeof(struct virtio_net_hdr);
@@ -1941,10 +1943,10 @@ vhost_user_get_vring_base(struct virtio_net **pdev,
 		vq->shadow_used_split = NULL;
 		if (vq->async_pkts_pending)
 			rte_free(vq->async_pkts_pending);
-		if (vq->async_pending_info)
-			rte_free(vq->async_pending_info);
+		if (vq->async_pkts_info)
+			rte_free(vq->async_pkts_info);
 		vq->async_pkts_pending = NULL;
-		vq->async_pending_info = NULL;
+		vq->async_pkts_info = NULL;
 	}
 
 	rte_free(vq->batch_copy_elems);
@@ -1978,9 +1980,9 @@ vhost_user_set_vring_enable(struct virtio_net **pdev,
 		"set queue enable: %d to qp idx: %d\n",
 		enable, index);
 
-	if (!enable && dev->virtqueue[index]->async_registered) {
+	if (enable && dev->virtqueue[index]->async_registered) {
 		if (dev->virtqueue[index]->async_pkts_inflight_n) {
-			VHOST_LOG_CONFIG(ERR, "failed to disable vring. "
+			VHOST_LOG_CONFIG(ERR, "failed to enable vring. "
 			"async inflight packets must be completed first\n");
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}

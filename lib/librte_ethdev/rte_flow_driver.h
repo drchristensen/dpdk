@@ -108,6 +108,61 @@ struct rte_flow_ops {
 		 void **context,
 		 uint32_t nb_contexts,
 		 struct rte_flow_error *err);
+	/** See rte_flow_shared_action_create() */
+	struct rte_flow_shared_action *(*shared_action_create)
+		(struct rte_eth_dev *dev,
+		 const struct rte_flow_shared_action_conf *conf,
+		 const struct rte_flow_action *action,
+		 struct rte_flow_error *error);
+	/** See rte_flow_shared_action_destroy() */
+	int (*shared_action_destroy)
+		(struct rte_eth_dev *dev,
+		 struct rte_flow_shared_action *shared_action,
+		 struct rte_flow_error *error);
+	/** See rte_flow_shared_action_update() */
+	int (*shared_action_update)
+		(struct rte_eth_dev *dev,
+		 struct rte_flow_shared_action *shared_action,
+		 const struct rte_flow_action *update,
+		 struct rte_flow_error *error);
+	/** See rte_flow_shared_action_query() */
+	int (*shared_action_query)
+		(struct rte_eth_dev *dev,
+		 const struct rte_flow_shared_action *shared_action,
+		 void *data,
+		 struct rte_flow_error *error);
+	/** See rte_flow_tunnel_decap_set() */
+	int (*tunnel_decap_set)
+		(struct rte_eth_dev *dev,
+		 struct rte_flow_tunnel *tunnel,
+		 struct rte_flow_action **pmd_actions,
+		 uint32_t *num_of_actions,
+		 struct rte_flow_error *err);
+	/** See rte_flow_tunnel_match() */
+	int (*tunnel_match)
+		(struct rte_eth_dev *dev,
+		 struct rte_flow_tunnel *tunnel,
+		 struct rte_flow_item **pmd_items,
+		 uint32_t *num_of_items,
+		 struct rte_flow_error *err);
+	/** See rte_flow_get_rte_flow_restore_info() */
+	int (*get_restore_info)
+		(struct rte_eth_dev *dev,
+		 struct rte_mbuf *m,
+		 struct rte_flow_restore_info *info,
+		 struct rte_flow_error *err);
+	/** See rte_flow_action_tunnel_decap_release() */
+	int (*tunnel_action_decap_release)
+		(struct rte_eth_dev *dev,
+		 struct rte_flow_action *pmd_actions,
+		 uint32_t num_of_actions,
+		 struct rte_flow_error *err);
+	/** See rte_flow_item_release() */
+	int (*tunnel_item_release)
+		(struct rte_eth_dev *dev,
+		 struct rte_flow_item *pmd_items,
+		 uint32_t num_of_items,
+		 struct rte_flow_error *err);
 };
 
 /**

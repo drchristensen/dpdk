@@ -151,18 +151,22 @@ err_rx:
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-static void
+static int
 nfb_eth_dev_stop(struct rte_eth_dev *dev)
 {
 	uint16_t i;
 	uint16_t nb_rx = dev->data->nb_rx_queues;
 	uint16_t nb_tx = dev->data->nb_tx_queues;
 
+	dev->data->dev_started = 0;
+
 	for (i = 0; i < nb_tx; i++)
 		nfb_eth_tx_queue_stop(dev, i);
 
 	for (i = 0; i < nb_rx; i++)
 		nfb_eth_rx_queue_stop(dev, i);
+
+	return 0;
 }
 
 /**
@@ -216,11 +220,12 @@ nfb_eth_dev_close(struct rte_eth_dev *dev)
 	uint16_t i;
 	uint16_t nb_rx = dev->data->nb_rx_queues;
 	uint16_t nb_tx = dev->data->nb_tx_queues;
+	int ret;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
-	nfb_eth_dev_stop(dev);
+	ret = nfb_eth_dev_stop(dev);
 
 	nfb_nc_rxmac_deinit(internals->rxmac, internals->max_rxmac);
 	nfb_nc_txmac_deinit(internals->txmac, internals->max_txmac);
@@ -236,7 +241,7 @@ nfb_eth_dev_close(struct rte_eth_dev *dev)
 	}
 	dev->data->nb_tx_queues = 0;
 
-	return 0;
+	return ret;
 }
 
 /**
@@ -510,6 +515,8 @@ nfb_eth_dev_init(struct rte_eth_dev *dev)
 	data->promiscuous = nfb_eth_promiscuous_get(dev);
 	data->all_multicast = nfb_eth_allmulticast_get(dev);
 	internals->rx_filter_original = data->promiscuous;
+
+	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	RTE_LOG(INFO, PMD, "NFB device ("
 		PCI_PRI_FMT ") successfully initialized\n",

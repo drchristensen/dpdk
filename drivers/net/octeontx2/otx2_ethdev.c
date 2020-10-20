@@ -1383,10 +1383,8 @@ nix_store_queue_cfg_and_then_release(struct rte_eth_dev *eth_dev)
 	return 0;
 
 fail:
-	if (tx_qconf)
-		free(tx_qconf);
-	if (rx_qconf)
-		free(rx_qconf);
+	free(tx_qconf);
+	free(rx_qconf);
 
 	return -ENOMEM;
 }
@@ -2141,7 +2139,7 @@ done:
 	return rc;
 }
 
-static void
+static int
 otx2_nix_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct otx2_eth_dev *dev = otx2_eth_pmd_priv(eth_dev);
@@ -2171,6 +2169,8 @@ otx2_nix_dev_stop(struct rte_eth_dev *eth_dev)
 	/* Stop tx queues  */
 	for (i = 0; i < eth_dev->data->nb_tx_queues; i++)
 		otx2_nix_tx_queue_stop(eth_dev, i);
+
+	return 0;
 }
 
 static int
@@ -2424,6 +2424,7 @@ otx2_eth_dev_init(struct rte_eth_dev *eth_dev)
 	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Zero out everything after OTX2_DEV to allow proper dev_reset() */
 	memset(&dev->otx2_eth_dev_data_start, 0, sizeof(*dev) -

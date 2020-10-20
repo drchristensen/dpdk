@@ -814,7 +814,7 @@ mrvl_flush_bpool(struct rte_eth_dev *dev)
 	unsigned int core_id = rte_lcore_id();
 
 	if (core_id == LCORE_ID_ANY)
-		core_id = rte_get_master_lcore();
+		core_id = rte_get_main_lcore();
 
 	hif = mrvl_get_hif(priv, core_id);
 
@@ -843,10 +843,10 @@ mrvl_flush_bpool(struct rte_eth_dev *dev)
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-static void
+static int
 mrvl_dev_stop(struct rte_eth_dev *dev)
 {
-	mrvl_dev_set_link_down(dev);
+	return mrvl_dev_set_link_down(dev);
 }
 
 /**
@@ -1623,7 +1623,7 @@ mrvl_fill_bpool(struct mrvl_rxq *rxq, int num)
 
 	core_id = rte_lcore_id();
 	if (core_id == LCORE_ID_ANY)
-		core_id = rte_get_master_lcore();
+		core_id = rte_get_main_lcore();
 
 	hif = mrvl_get_hif(rxq->priv, core_id);
 	if (!hif)
@@ -1773,7 +1773,7 @@ mrvl_rx_queue_release(void *rxq)
 	unsigned int core_id = rte_lcore_id();
 
 	if (core_id == LCORE_ID_ANY)
-		core_id = rte_get_master_lcore();
+		core_id = rte_get_main_lcore();
 
 	if (!q)
 		return;
@@ -2865,6 +2865,7 @@ mrvl_eth_dev_create(struct rte_vdev_device *vdev, const char *name)
 	eth_dev->rx_pkt_burst = mrvl_rx_pkt_burst;
 	mrvl_set_tx_function(eth_dev);
 	eth_dev->dev_ops = &mrvl_ops;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	rte_eth_dev_probing_finish(eth_dev);
 	return 0;
@@ -3022,14 +3023,15 @@ static int
 rte_pmd_mrvl_remove(struct rte_vdev_device *vdev)
 {
 	uint16_t port_id;
+	int ret = 0;
 
 	RTE_ETH_FOREACH_DEV(port_id) {
 		if (rte_eth_devices[port_id].device != &vdev->device)
 			continue;
-		rte_eth_dev_close(port_id);
+		ret |= rte_eth_dev_close(port_id);
 	}
 
-	return 0;
+	return ret == 0 ? 0 : -EIO;
 }
 
 static struct rte_vdev_driver pmd_mrvl_drv = {

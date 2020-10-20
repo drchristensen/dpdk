@@ -316,8 +316,7 @@ tap_verify_csum(struct rte_mbuf *mbuf)
 	if (l3 == RTE_PTYPE_L3_IPV4 || l3 == RTE_PTYPE_L3_IPV4_EXT) {
 		struct rte_ipv4_hdr *iph = l3_hdr;
 
-		/* ihl contains the number of 4-byte words in the header */
-		l3_len = 4 * (iph->version_ihl & 0xf);
+		l3_len = rte_ipv4_hdr_len(iph);
 		if (unlikely(l2_len + l3_len > rte_pktmbuf_data_len(mbuf)))
 			return;
 		/* check that the total length reported by header is not
@@ -901,7 +900,7 @@ tap_dev_start(struct rte_eth_dev *dev)
 
 /* This function gets called when the current port gets stopped.
  */
-static void
+static int
 tap_dev_stop(struct rte_eth_dev *dev)
 {
 	int i;
@@ -913,6 +912,8 @@ tap_dev_stop(struct rte_eth_dev *dev)
 
 	tap_intr_handle_set(dev, 0);
 	tap_link_set_down(dev);
+
+	return 0;
 }
 
 static int
@@ -1134,7 +1135,6 @@ tap_dev_close(struct rte_eth_dev *dev)
 		internals->ioctl_sock = -1;
 	}
 	rte_free(dev->process_private);
-	dev->process_private = NULL;
 	if (tap_devices_count == 1)
 		rte_mp_action_unregister(TAP_MP_KEY);
 	tap_devices_count--;
@@ -1922,7 +1922,8 @@ eth_dev_tap_create(struct rte_vdev_device *vdev, const char *tap_name,
 	/* Setup some default values */
 	data = dev->data;
 	data->dev_private = pmd;
-	data->dev_flags = RTE_ETH_DEV_INTR_LSC;
+	data->dev_flags = RTE_ETH_DEV_INTR_LSC |
+				RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 	data->numa_node = numa_node;
 
 	data->dev_link = pmd_link;

@@ -416,7 +416,7 @@ out:
 /*
  * Stop device: disable rx and tx functions to allow for reconfiguring.
  */
-void cxgbe_dev_stop(struct rte_eth_dev *eth_dev)
+int cxgbe_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct port_info *pi = eth_dev->data->dev_private;
 	struct adapter *adapter = pi->adapter;
@@ -424,7 +424,7 @@ void cxgbe_dev_stop(struct rte_eth_dev *eth_dev)
 	CXGBE_FUNC_TRACE();
 
 	if (!(adapter->flags & FULL_INIT_DONE))
-		return;
+		return 0;
 
 	cxgbe_down(pi);
 
@@ -434,6 +434,8 @@ void cxgbe_dev_stop(struct rte_eth_dev *eth_dev)
 	 */
 	t4_sge_eth_clear_queues(pi);
 	eth_dev->data->scattered_rx = 0;
+
+	return 0;
 }
 
 int cxgbe_dev_configure(struct rte_eth_dev *eth_dev)
@@ -1260,6 +1262,8 @@ static int eth_cxgbe_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 	}
 
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+
 	snprintf(name, sizeof(name), "cxgbeadapter%d", eth_dev->data->port_id);
 	adapter = rte_zmalloc(name, sizeof(*adapter), 0);
 	if (!adapter)
@@ -1296,12 +1300,13 @@ static int eth_cxgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	uint16_t port_id;
+	int err = 0;
 
 	/* Free up other ports and all resources */
 	RTE_ETH_FOREACH_DEV_OF(port_id, &pci_dev->device)
-		rte_eth_dev_close(port_id);
+		err |= rte_eth_dev_close(port_id);
 
-	return 0;
+	return err == 0 ? 0 : -EIO;
 }
 
 static int eth_cxgbe_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,

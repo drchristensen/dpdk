@@ -73,7 +73,7 @@ DPDK_21 {
 	rte_free;
 	rte_get_hpet_cycles;
 	rte_get_hpet_hz;
-	rte_get_master_lcore;
+	rte_get_main_lcore;
 	rte_get_next_lcore;
 	rte_get_tsc_hz;
 	rte_hexdump;
@@ -398,7 +398,10 @@ EXPERIMENTAL {
 
 	# added in 20.11
 	__rte_eal_trace_generic_size_t;
+	rte_epoll_wait_interruptible;
 	rte_service_lcore_may_be_active;
+	rte_vect_get_max_simd_bitwidth;
+	rte_vect_set_max_simd_bitwidth;
 };
 
 INTERNAL {

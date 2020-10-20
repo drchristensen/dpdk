@@ -276,7 +276,7 @@ sfc_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	return ret;
 }
 
-static void
+static int
 sfc_dev_stop(struct rte_eth_dev *dev)
 {
 	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
@@ -288,6 +288,8 @@ sfc_dev_stop(struct rte_eth_dev *dev)
 	sfc_adapter_unlock(sa);
 
 	sfc_log_init(sa, "done");
+
+	return 0;
 }
 
 static int
@@ -324,11 +326,7 @@ static void
 sfc_eth_dev_secondary_clear_ops(struct rte_eth_dev *dev)
 {
 	free(dev->process_private);
-	dev->process_private = NULL;
-	dev->dev_ops = NULL;
-	dev->tx_pkt_prepare = NULL;
-	dev->tx_pkt_burst = NULL;
-	dev->rx_pkt_burst = NULL;
+	rte_eth_dev_release_port(dev);
 }
 
 static int
@@ -380,7 +378,6 @@ sfc_dev_close(struct rte_eth_dev *dev)
 	/* Required for logging, so cleanup last */
 	sa->eth_dev = NULL;
 
-	dev->process_private = NULL;
 	free(sa);
 
 	return 0;
@@ -954,7 +951,8 @@ sfc_check_scatter_on_all_rx_queues(struct sfc_adapter *sa, size_t pdu)
 
 		if (!sfc_rx_check_scatter(pdu, sa->rxq_ctrl[i].buf_size,
 					  encp->enc_rx_prefix_size,
-					  scatter_enabled, &error)) {
+					  scatter_enabled,
+					  encp->enc_rx_scatter_max, &error)) {
 			sfc_err(sa, "MTU check for RxQ %u failed: %s", i,
 				error);
 			return EINVAL;
@@ -1923,6 +1921,11 @@ sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
 	case EFX_FAMILY_MEDFORD:
 	case EFX_FAMILY_MEDFORD2:
 		avail_caps |= SFC_DP_HW_FW_CAP_EF10;
+		avail_caps |= SFC_DP_HW_FW_CAP_RX_EFX;
+		avail_caps |= SFC_DP_HW_FW_CAP_TX_EFX;
+		break;
+	case EFX_FAMILY_RIVERHEAD:
+		avail_caps |= SFC_DP_HW_FW_CAP_EF100;
 		break;
 	default:
 		break;
@@ -2145,10 +2148,12 @@ sfc_register_dp(void)
 	/* Register once */
 	if (TAILQ_EMPTY(&sfc_dp_head)) {
 		/* Prefer EF10 datapath */
+		sfc_dp_register(&sfc_dp_head, &sfc_ef100_rx.dp);
 		sfc_dp_register(&sfc_dp_head, &sfc_ef10_essb_rx.dp);
 		sfc_dp_register(&sfc_dp_head, &sfc_ef10_rx.dp);
 		sfc_dp_register(&sfc_dp_head, &sfc_efx_rx.dp);
 
+		sfc_dp_register(&sfc_dp_head, &sfc_ef100_tx.dp);
 		sfc_dp_register(&sfc_dp_head, &sfc_ef10_tx.dp);
 		sfc_dp_register(&sfc_dp_head, &sfc_efx_tx.dp);
 		sfc_dp_register(&sfc_dp_head, &sfc_ef10_simple_tx.dp);
@@ -2212,6 +2217,7 @@ sfc_eth_dev_init(struct rte_eth_dev *dev)
 
 	/* Copy PCI device info to the dev->data */
 	rte_eth_copy_pci_info(dev, pci_dev);
+	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	rc = sfc_kvargs_parse(sa);
 	if (rc != 0)
@@ -2299,6 +2305,7 @@ static const struct rte_pci_id pci_id_sfc_efx_map[] = {
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD_VF) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD2) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD2_VF) },
+	{ RTE_PCI_DEVICE(EFX_PCI_VENID_XILINX, EFX_PCI_DEVID_RIVERHEAD) },
 	{ .vendor_id = 0 /* sentinel */ }
 };
 

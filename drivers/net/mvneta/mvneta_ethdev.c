@@ -408,19 +408,23 @@ out:
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-static void
+static int
 mvneta_dev_stop(struct rte_eth_dev *dev)
 {
 	struct mvneta_priv *priv = dev->data->dev_private;
 
+	dev->data->dev_started = 0;
+
 	if (!priv->ppio)
-		return;
+		return 0;
 
 	mvneta_dev_set_link_down(dev);
 	mvneta_flush_queues(dev);
 	neta_ppio_deinit(priv->ppio);
 
 	priv->ppio = NULL;
+
+	return 0;
 }
 
 /**
@@ -433,13 +437,13 @@ static int
 mvneta_dev_close(struct rte_eth_dev *dev)
 {
 	struct mvneta_priv *priv = dev->data->dev_private;
-	int i;
+	int i, ret = 0;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
 	if (priv->ppio)
-		mvneta_dev_stop(dev);
+		ret = mvneta_dev_stop(dev);
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		mvneta_rx_queue_release(dev->data->rx_queues[i]);
@@ -459,7 +463,7 @@ mvneta_dev_close(struct rte_eth_dev *dev)
 		rte_mvep_deinit(MVEP_MOD_T_NETA);
 	}
 
-	return 0;
+	return ret;
 }
 
 /**
@@ -836,6 +840,7 @@ mvneta_eth_dev_create(struct rte_vdev_device *vdev, const char *name)
 	eth_dev->rx_pkt_burst = mvneta_rx_pkt_burst;
 	mvneta_set_tx_function(eth_dev);
 	eth_dev->dev_ops = &mvneta_ops;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	rte_eth_dev_probing_finish(eth_dev);
 	return 0;
@@ -964,14 +969,15 @@ static int
 rte_pmd_mvneta_remove(struct rte_vdev_device *vdev)
 {
 	uint16_t port_id;
+	int ret = 0;
 
 	RTE_ETH_FOREACH_DEV(port_id) {
 		if (rte_eth_devices[port_id].device != &vdev->device)
 			continue;
-		rte_eth_dev_close(port_id);
+		ret |= rte_eth_dev_close(port_id);
 	}
 
-	return 0;
+	return ret == 0 ? 0 : -EIO;
 }
 
 static struct rte_vdev_driver pmd_mvneta_drv = {

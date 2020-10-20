@@ -13,6 +13,7 @@
 #include <rte_cycles.h>
 #include <rte_alarm.h>
 #include <rte_kvargs.h>
+#include <rte_vect.h>
 
 #include "bnxt.h"
 #include "bnxt_filter.h"
@@ -1169,7 +1170,8 @@ bnxt_receive_function(struct rte_eth_dev *eth_dev)
 		DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_RSS_HASH |
 		DEV_RX_OFFLOAD_VLAN_FILTER)) &&
-	    !BNXT_TRUFLOW_EN(bp) && BNXT_NUM_ASYNC_CPR(bp)) {
+	    !BNXT_TRUFLOW_EN(bp) && BNXT_NUM_ASYNC_CPR(bp) &&
+	    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
 		PMD_DRV_LOG(INFO, "Using vector mode receive for port %d\n",
 			    eth_dev->data->port_id);
 		bp->flags |= BNXT_FLAG_RX_VECTOR_PKT_MODE;
@@ -1202,7 +1204,8 @@ bnxt_transmit_function(__rte_unused struct rte_eth_dev *eth_dev)
 	 */
 	if (!eth_dev->data->scattered_rx &&
 	    !(offloads & ~DEV_TX_OFFLOAD_MBUF_FAST_FREE) &&
-	    !BNXT_TRUFLOW_EN(bp)) {
+	    !BNXT_TRUFLOW_EN(bp) &&
+	    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
 		PMD_DRV_LOG(INFO, "Using vector mode transmit for port %d\n",
 			    eth_dev->data->port_id);
 		return bnxt_xmit_pkts_vec;
@@ -1345,12 +1348,13 @@ static void bnxt_free_switch_domain(struct bnxt *bp)
 }
 
 /* Unload the driver, release resources */
-static void bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
+static int bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
 {
 	struct bnxt *bp = eth_dev->data->dev_private;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct rte_eth_link link;
+	int ret;
 
 	eth_dev->data->dev_started = 0;
 	eth_dev->data->scattered_rx = 0;
@@ -1365,7 +1369,9 @@ static void bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
 	rte_intr_disable(intr_handle);
 
 	/* Stop the child representors for this device */
-	bnxt_rep_stop_all(bp);
+	ret = bnxt_rep_stop_all(bp);
+	if (ret != 0)
+		return ret;
 
 	/* delete the bnxt ULP port details */
 	bnxt_ulp_port_deinit(bp);
@@ -1406,11 +1412,14 @@ static void bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
 	/* All filters are deleted on a port stop. */
 	if (BNXT_FLOW_XSTATS_EN(bp))
 		bp->flow_stat->flow_count = 0;
+
+	return 0;
 }
 
 static int bnxt_dev_close_op(struct rte_eth_dev *eth_dev)
 {
 	struct bnxt *bp = eth_dev->data->dev_private;
+	int ret = 0;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
@@ -1421,7 +1430,7 @@ static int bnxt_dev_close_op(struct rte_eth_dev *eth_dev)
 	bnxt_cancel_fc_thread(bp);
 
 	if (eth_dev->data->dev_started)
-		bnxt_dev_stop_op(eth_dev);
+		ret = bnxt_dev_stop_op(eth_dev);
 
 	bnxt_free_switch_domain(bp);
 
@@ -1433,10 +1442,6 @@ static int bnxt_dev_close_op(struct rte_eth_dev *eth_dev)
 	bnxt_free_pf_info(bp);
 	bnxt_free_parent_info(bp);
 
-	eth_dev->dev_ops = NULL;
-	eth_dev->rx_pkt_burst = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-
 	rte_memzone_free((const struct rte_memzone *)bp->tx_mem_zone);
 	bp->tx_mem_zone = NULL;
 	rte_memzone_free((const struct rte_memzone *)bp->rx_mem_zone);
@@ -1447,7 +1452,7 @@ static int bnxt_dev_close_op(struct rte_eth_dev *eth_dev)
 	rte_free(bp->grp_info);
 	bp->grp_info = NULL;
 
-	return 0;
+	return ret;
 }
 
 static void bnxt_mac_addr_remove_op(struct rte_eth_dev *eth_dev,
@@ -2192,14 +2197,6 @@ bnxt_udp_tunnel_port_del_op(struct rte_eth_dev *eth_dev,
 	}
 
 	rc = bnxt_hwrm_tunnel_dst_port_free(bp, port, tunnel_type);
-	if (!rc) {
-		if (tunnel_type ==
-		    HWRM_TUNNEL_DST_PORT_FREE_INPUT_TUNNEL_TYPE_VXLAN)
-			bp->vxlan_port = 0;
-		if (tunnel_type ==
-		    HWRM_TUNNEL_DST_PORT_FREE_INPUT_TUNNEL_TYPE_GENEVE)
-			bp->geneve_port = 0;
-	}
 	return rc;
 }
 
@@ -5208,37 +5205,14 @@ static void bnxt_config_vf_req_fwd(struct bnxt *bp)
 	if (!BNXT_PF(bp))
 		return;
 
-#define ALLOW_FUNC(x)	\
-	{ \
-		uint32_t arg = (x); \
-		bp->pf->vf_req_fwd[((arg) >> 5)] &= \
-		~rte_cpu_to_le_32(1 << ((arg) & 0x1f)); \
-	}
+	memset(bp->pf->vf_req_fwd, 0, sizeof(bp->pf->vf_req_fwd));
 
-	/* Forward all requests if firmware is new enough */
-	if (((bp->fw_ver >= ((20 << 24) | (6 << 16) | (100 << 8))) &&
-	     (bp->fw_ver < ((20 << 24) | (7 << 16)))) ||
-	    ((bp->fw_ver >= ((20 << 24) | (8 << 16))))) {
-		memset(bp->pf->vf_req_fwd, 0xff, sizeof(bp->pf->vf_req_fwd));
-	} else {
-		PMD_DRV_LOG(WARNING,
-			    "Firmware too old for VF mailbox functionality\n");
-		memset(bp->pf->vf_req_fwd, 0, sizeof(bp->pf->vf_req_fwd));
-	}
-
-	/*
-	 * The following are used for driver cleanup. If we disallow these,
-	 * VF drivers can't clean up cleanly.
-	 */
-	ALLOW_FUNC(HWRM_FUNC_DRV_UNRGTR);
-	ALLOW_FUNC(HWRM_VNIC_FREE);
-	ALLOW_FUNC(HWRM_RING_FREE);
-	ALLOW_FUNC(HWRM_RING_GRP_FREE);
-	ALLOW_FUNC(HWRM_VNIC_RSS_COS_LB_CTX_FREE);
-	ALLOW_FUNC(HWRM_CFA_L2_FILTER_FREE);
-	ALLOW_FUNC(HWRM_STAT_CTX_FREE);
-	ALLOW_FUNC(HWRM_PORT_PHY_QCFG);
-	ALLOW_FUNC(HWRM_VNIC_TPA_CFG);
+	if (!(bp->fw_cap & BNXT_FW_CAP_LINK_ADMIN))
+		BNXT_HWRM_CMD_TO_FORWARD(HWRM_PORT_PHY_QCFG);
+	BNXT_HWRM_CMD_TO_FORWARD(HWRM_FUNC_CFG);
+	BNXT_HWRM_CMD_TO_FORWARD(HWRM_FUNC_VF_CFG);
+	BNXT_HWRM_CMD_TO_FORWARD(HWRM_CFA_L2_FILTER_ALLOC);
+	BNXT_HWRM_CMD_TO_FORWARD(HWRM_OEM_CMD);
 }
 
 uint16_t
@@ -6026,6 +6000,7 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev, void *params __rte_unused)
 		return 0;
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	bp = eth_dev->data->dev_private;
 
@@ -6189,7 +6164,10 @@ bnxt_uninit_resources(struct bnxt *bp, bool reconfig_dev)
 
 	bnxt_free_int(bp);
 	bnxt_free_mem(bp, reconfig_dev);
+
 	bnxt_hwrm_func_buf_unrgtr(bp);
+	rte_free(bp->pf->vf_req_buf);
+
 	rc = bnxt_hwrm_func_driver_unregister(bp, 0);
 	bp->flags &= ~BNXT_FLAG_REGISTERED;
 	bnxt_free_ctx_mem(bp);

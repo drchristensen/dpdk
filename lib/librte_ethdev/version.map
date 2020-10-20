@@ -227,11 +227,23 @@ EXPERIMENTAL {
 	rte_tm_wred_profile_delete;
 
 	# added in 20.11
+	rte_eth_hairpin_bind;
+	rte_eth_hairpin_get_peer_ports;
+	rte_eth_hairpin_unbind;
 	rte_eth_link_speed_to_str;
 	rte_eth_link_to_str;
 	rte_eth_fec_get_capability;
 	rte_eth_fec_get;
 	rte_eth_fec_set;
+	rte_flow_shared_action_create;
+	rte_flow_shared_action_destroy;
+	rte_flow_shared_action_query;
+	rte_flow_shared_action_update;
+	rte_flow_tunnel_decap_set;
+	rte_flow_tunnel_match;
+	rte_flow_get_restore_info;
+	rte_flow_tunnel_action_decap_release;
+	rte_flow_tunnel_item_release;
 };
 
 INTERNAL {
@@ -251,6 +263,9 @@ INTERNAL {
 	rte_eth_devargs_parse;
 	rte_eth_dma_zone_free;
 	rte_eth_dma_zone_reserve;
+	rte_eth_hairpin_queue_peer_bind;
+	rte_eth_hairpin_queue_peer_unbind;
+	rte_eth_hairpin_queue_peer_update;
 	rte_eth_switch_domain_alloc;
 	rte_eth_switch_domain_free;
 };

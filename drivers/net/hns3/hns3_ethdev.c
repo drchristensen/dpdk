@@ -4990,13 +4990,14 @@ hns3_unmap_rx_interrupt(struct rte_eth_dev *dev)
 	}
 }
 
-static void
+static int
 hns3_dev_stop(struct rte_eth_dev *dev)
 {
 	struct hns3_adapter *hns = dev->data->dev_private;
 	struct hns3_hw *hw = &hns->hw;
 
 	PMD_INIT_FUNC_TRACE();
+	dev->data->dev_started = 0;
 
 	hw->adapter_state = HNS3_NIC_STOPPING;
 	hns3_set_rxtx_function(dev);
@@ -5017,6 +5018,8 @@ hns3_dev_stop(struct rte_eth_dev *dev)
 	hns3_rx_scattered_reset(dev);
 	rte_eal_alarm_cancel(hns3_service_handler, dev);
 	rte_spinlock_unlock(&hw->lock);
+
+	return 0;
 }
 
 static int
@@ -5024,6 +5027,7 @@ hns3_dev_close(struct rte_eth_dev *eth_dev)
 {
 	struct hns3_adapter *hns = eth_dev->data->dev_private;
 	struct hns3_hw *hw = &hns->hw;
+	int ret = 0;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 		rte_free(eth_dev->process_private);
@@ -5032,7 +5036,7 @@ hns3_dev_close(struct rte_eth_dev *eth_dev)
 	}
 
 	if (hw->adapter_state == HNS3_NIC_STARTED)
-		hns3_dev_stop(eth_dev);
+		ret = hns3_dev_stop(eth_dev);
 
 	hw->adapter_state = HNS3_NIC_CLOSING;
 	hns3_reset_abort(hns);
@@ -5049,7 +5053,7 @@ hns3_dev_close(struct rte_eth_dev *eth_dev)
 	hns3_mp_uninit_primary();
 	hns3_warn(hw, "Close port %d finished", hw->data->port_id);
 
-	return 0;
+	return ret;
 }
 
 static int
@@ -6102,6 +6106,8 @@ hns3_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 	}
 
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+
 	ret = hns3_mp_init_primary();
 	if (ret) {
 		PMD_INIT_LOG(ERR,
@@ -6200,10 +6206,6 @@ hns3_dev_uninit(struct rte_eth_dev *eth_dev)
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return -EPERM;
 
-	eth_dev->dev_ops = NULL;
-	eth_dev->rx_pkt_burst = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-	eth_dev->tx_pkt_prepare = NULL;
 	if (hw->adapter_state < HNS3_NIC_CLOSING)
 		hns3_dev_close(eth_dev);
 

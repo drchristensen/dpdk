@@ -513,9 +513,6 @@ octeontx_dev_close(struct rte_eth_dev *dev)
 
 	octeontx_port_close(nic);
 
-	dev->tx_pkt_burst = NULL;
-	dev->rx_pkt_burst = NULL;
-
 	return 0;
 }
 
@@ -676,7 +673,7 @@ error:
 	return ret;
 }
 
-static void
+static int
 octeontx_dev_stop(struct rte_eth_dev *dev)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
@@ -690,14 +687,14 @@ octeontx_dev_stop(struct rte_eth_dev *dev)
 	if (ret < 0) {
 		octeontx_log_err("failed to req stop port %d res=%d",
 					nic->port_id, ret);
-		return;
+		return ret;
 	}
 
 	ret = octeontx_pki_port_stop(nic->port_id);
 	if (ret < 0) {
 		octeontx_log_err("failed to stop pki port %d res=%d",
 					nic->port_id, ret);
-		return;
+		return ret;
 	}
 
 	ret = octeontx_pko_channel_stop(nic->base_ochan);
@@ -705,8 +702,10 @@ octeontx_dev_stop(struct rte_eth_dev *dev)
 		octeontx_log_err("failed to stop channel %d VF%d %d %d",
 			     nic->base_ochan, nic->port_id, nic->num_tx_queues,
 			     ret);
-		return;
+		return ret;
 	}
+
+	return 0;
 }
 
 static int
@@ -1376,6 +1375,7 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	data->promiscuous = 0;
 	data->all_multicast = 0;
 	data->scattered_rx = 0;
+	data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Get maximum number of supported MAC entries */
 	max_entries = octeontx_bgx_port_mac_entries_get(nic->port_id);
