@@ -358,6 +358,10 @@ Removed Items
    Also, make sure to start the actual text at the margin.
    =======================================================
 
+* build: Support for the Make build system was removed for compiling DPDK,
+  Meson is now the primary build system.
+  Sample applications can still be built with Make standalone, using pkg-config.
+
 * vhost: Dequeue zero-copy support has been removed.
 
 * kernel: The module ``igb_uio`` has been moved to the git repository
@@ -601,6 +605,9 @@ ABI Changes
   * ``rte_event_port_conf``
 
 * sched: Added new fields to ``struct rte_sched_subport_port_params``.
+
+* lpm: Removed fields other than ``tbl24`` and ``tbl8`` from the struct
+  ``rte_lpm``. The removed fields were made internal.
 
 
 Known Issues
