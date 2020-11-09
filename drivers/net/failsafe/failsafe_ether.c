@@ -282,12 +282,18 @@ fs_dev_remove(struct sub_device *sdev)
 	switch (sdev->state) {
 	case DEV_STARTED:
 		failsafe_rx_intr_uninstall_subdevice(sdev);
-		rte_eth_dev_stop(PORT_ID(sdev));
+		ret = rte_eth_dev_stop(PORT_ID(sdev));
+		if (ret < 0)
+			ERROR("Failed to stop sub-device %u", SUB_ID(sdev));
 		sdev->state = DEV_ACTIVE;
 		/* fallthrough */
 	case DEV_ACTIVE:
 		failsafe_eth_dev_unregister_callbacks(sdev);
-		rte_eth_dev_close(PORT_ID(sdev));
+		ret = rte_eth_dev_close(PORT_ID(sdev));
+		if (ret < 0) {
+			ERROR("Port close failed for sub-device %u",
+			      PORT_ID(sdev));
+		}
 		sdev->state = DEV_PROBED;
 		/* fallthrough */
 	case DEV_PROBED:
@@ -383,14 +389,23 @@ failsafe_dev_remove(struct rte_eth_dev *dev)
 	struct sub_device *sdev;
 	uint8_t i;
 
-	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE)
-		if (sdev->remove && fs_rxtx_clean(sdev)) {
-			if (fs_lock(dev, 1) != 0)
-				return;
+	FOREACH_SUBDEV(sdev, i, dev) {
+		if (!sdev->remove)
+			continue;
+
+		/* Active devices must have finished their burst and
+		 * their stats must be saved.
+		 */
+		if (sdev->state >= DEV_ACTIVE &&
+		    fs_rxtx_clean(sdev) == 0)
+			continue;
+		if (fs_lock(dev, 1) != 0)
+			return;
+		if (sdev->state >= DEV_ACTIVE)
 			fs_dev_stats_save(sdev);
-			fs_dev_remove(sdev);
-			fs_unlock(dev, 1);
-		}
+		fs_dev_remove(sdev);
+		fs_unlock(dev, 1);
+	}
 }
 
 static int

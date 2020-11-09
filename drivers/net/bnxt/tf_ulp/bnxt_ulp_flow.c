@@ -147,6 +147,7 @@ bnxt_ulp_flow_create(struct rte_eth_dev *dev,
 	mapper_cparms.act_prop = &params.act_prop;
 	mapper_cparms.class_tid = class_id;
 	mapper_cparms.act_tid = act_tmpl;
+	mapper_cparms.flow_type = BNXT_ULP_FDB_TYPE_REGULAR;
 
 	/* Get the function id */
 	if (ulp_port_db_port_func_id_get(ulp_ctx,
@@ -280,8 +281,8 @@ bnxt_ulp_flow_destroy(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
-	ret = ulp_mapper_flow_destroy(ulp_ctx, flow_id,
-				      BNXT_ULP_REGULAR_FLOW_TABLE);
+	ret = ulp_mapper_flow_destroy(ulp_ctx, BNXT_ULP_FDB_TYPE_REGULAR,
+				      flow_id);
 	if (ret) {
 		BNXT_TF_DBG(ERR, "Failed to destroy flow.\n");
 		if (error)

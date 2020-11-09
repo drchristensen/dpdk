@@ -167,6 +167,9 @@
 #define	BNXT_DEFAULT_VNIC_CHANGE_VF_ID_SFT		\
 	HWRM_ASYNC_EVENT_CMPL_DEFAULT_VNIC_CHANGE_EVENT_DATA1_VF_ID_SFT
 
+#define BNXT_HWRM_CMD_TO_FORWARD(cmd)	\
+		(bp->pf->vf_req_fwd[(cmd) / 32] |= (1 << ((cmd) % 32)))
+
 struct bnxt_led_info {
 	uint8_t	     num_leds;
 	uint8_t      led_id;
@@ -268,8 +271,8 @@ struct bnxt_pf_info {
 };
 
 /* Max wait time for link up is 10s and link down is 500ms */
-#define BNXT_LINK_UP_WAIT_CNT	200
-#define BNXT_LINK_DOWN_WAIT_CNT	10
+#define BNXT_MAX_LINK_WAIT_CNT	200
+#define BNXT_MIN_LINK_WAIT_CNT	10
 #define BNXT_LINK_WAIT_INTERVAL	50
 struct bnxt_link_info {
 	uint32_t		phy_flags;
@@ -558,7 +561,8 @@ struct bnxt_rep_info {
 	ETH_RSS_NONFRAG_IPV4_UDP |	\
 	ETH_RSS_IPV6 |		\
 	ETH_RSS_NONFRAG_IPV6_TCP |	\
-	ETH_RSS_NONFRAG_IPV6_UDP)
+	ETH_RSS_NONFRAG_IPV6_UDP |	\
+	ETH_RSS_LEVEL_MASK)
 
 #define BNXT_DEV_TX_OFFLOAD_SUPPORT (DEV_TX_OFFLOAD_VLAN_INSERT | \
 				     DEV_TX_OFFLOAD_IPV4_CKSUM | \
@@ -663,14 +667,16 @@ struct bnxt {
 #define BNXT_FW_CAP_IF_CHANGE		BIT(1)
 #define BNXT_FW_CAP_ERROR_RECOVERY	BIT(2)
 #define BNXT_FW_CAP_ERR_RECOVER_RELOAD	BIT(3)
+#define BNXT_FW_CAP_HCOMM_FW_STATUS	BIT(4)
 #define BNXT_FW_CAP_ADV_FLOW_MGMT	BIT(5)
 #define BNXT_FW_CAP_ADV_FLOW_COUNTERS	BIT(6)
-#define BNXT_FW_CAP_HCOMM_FW_STATUS	BIT(7)
+#define BNXT_FW_CAP_LINK_ADMIN		BIT(7)
 
 	pthread_mutex_t         flow_lock;
 
 	uint32_t		vnic_cap_flags;
 #define BNXT_VNIC_CAP_COS_CLASSIFY	BIT(0)
+#define BNXT_VNIC_CAP_OUTER_RSS		BIT(1)
 	unsigned int		rx_nr_rings;
 	unsigned int		rx_cp_nr_rings;
 	unsigned int		rx_num_qs_per_vnic;

@@ -1177,7 +1177,7 @@ static void hinic_free_all_sq(struct hinic_nic_dev *nic_dev)
  * @param dev
  *   Pointer to Ethernet device structure.
  */
-static void hinic_dev_stop(struct rte_eth_dev *dev)
+static int hinic_dev_stop(struct rte_eth_dev *dev)
 {
 	int rc;
 	char *name;
@@ -1189,10 +1189,12 @@ static void hinic_dev_stop(struct rte_eth_dev *dev)
 	name = dev->data->name;
 	port_id = dev->data->port_id;
 
+	dev->data->dev_started = 0;
+
 	if (!rte_bit_relaxed_test_and_clear32(HINIC_DEV_START,
 					      &nic_dev->dev_status)) {
 		PMD_DRV_LOG(INFO, "Device %s already stopped", name);
-		return;
+		return 0;
 	}
 
 	/* just stop phy port and vport */
@@ -1227,6 +1229,8 @@ static void hinic_dev_stop(struct rte_eth_dev *dev)
 	/* free mbuf */
 	hinic_free_all_rx_mbuf(dev);
 	hinic_free_all_tx_mbuf(dev);
+
+	return 0;
 }
 
 static void hinic_disable_interrupt(struct rte_eth_dev *dev)
@@ -2968,6 +2972,7 @@ static void hinic_nic_dev_destroy(struct rte_eth_dev *eth_dev)
 static int hinic_dev_close(struct rte_eth_dev *dev)
 {
 	struct hinic_nic_dev *nic_dev = HINIC_ETH_DEV_TO_PRIVATE_NIC_DEV(dev);
+	int ret;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
@@ -2980,7 +2985,7 @@ static int hinic_dev_close(struct rte_eth_dev *dev)
 	}
 
 	/* stop device first */
-	hinic_dev_stop(dev);
+	ret = hinic_dev_stop(dev);
 
 	/* rx_cqe, rx_info */
 	hinic_free_all_rx_resources(dev);
@@ -3004,7 +3009,7 @@ static int hinic_dev_close(struct rte_eth_dev *dev)
 	/* deinit nic hardware device */
 	hinic_nic_dev_destroy(dev);
 
-	return 0;
+	return ret;
 }
 
 static const struct eth_dev_ops hinic_pmd_ops = {
@@ -3102,6 +3107,8 @@ static int hinic_func_init(struct rte_eth_dev *eth_dev)
 
 		return 0;
 	}
+
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	nic_dev = HINIC_ETH_DEV_TO_PRIVATE_NIC_DEV(eth_dev);
 	memset(nic_dev, 0, sizeof(*nic_dev));
@@ -3250,10 +3257,6 @@ static int hinic_dev_uninit(struct rte_eth_dev *dev)
 	hinic_mutex_destroy(&nic_dev->rx_mode_mutex);
 
 	hinic_dev_close(dev);
-
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
 
 	rte_free(nic_dev->mc_list);
 

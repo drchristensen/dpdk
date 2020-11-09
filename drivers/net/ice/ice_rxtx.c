@@ -4,6 +4,7 @@
 
 #include <rte_ethdev_driver.h>
 #include <rte_net.h>
+#include <rte_vect.h>
 
 #include "rte_pmd_ice.h"
 #include "ice_rxtx.h"
@@ -1841,7 +1842,7 @@ ice_recv_scattered_pkts(void *rx_queue,
 		rx_id = (uint16_t)(rx_id == 0 ?
 				   (rxq->nb_rx_desc - 1) : (rx_id - 1));
 		/* write TAIL register */
-		ICE_PCI_REG_WRITE(rxq->qrx_tail, rx_id);
+		ICE_PCI_REG_WC_WRITE(rxq->qrx_tail, rx_id);
 		nb_hold = 0;
 	}
 	rxq->nb_rx_hold = nb_hold;
@@ -2231,7 +2232,7 @@ ice_recv_pkts(void *rx_queue,
 		rx_id = (uint16_t)(rx_id == 0 ?
 				   (rxq->nb_rx_desc - 1) : (rx_id - 1));
 		/* write TAIL register */
-		ICE_PCI_REG_WRITE(rxq->qrx_tail, rx_id);
+		ICE_PCI_REG_WC_WRITE(rxq->qrx_tail, rx_id);
 		nb_hold = 0;
 	}
 	rxq->nb_rx_hold = nb_hold;
@@ -2946,7 +2947,7 @@ tx_xmit_pkts(struct ice_tx_queue *txq,
 		txq->tx_tail = 0;
 
 	/* Update the tx tail register */
-	ICE_PCI_REG_WRITE(txq->qtx_tail, txq->tx_tail);
+	ICE_PCI_REG_WC_WRITE(txq->qtx_tail, txq->tx_tail);
 
 	return nb_pkts;
 }
@@ -2989,7 +2990,8 @@ ice_set_rx_function(struct rte_eth_dev *dev)
 	bool use_avx2 = false;
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		if (!ice_rx_vec_dev_check(dev) && ad->rx_bulk_alloc_allowed) {
+		if (!ice_rx_vec_dev_check(dev) && ad->rx_bulk_alloc_allowed &&
+				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
 			ad->rx_vec_allowed = true;
 			for (i = 0; i < dev->data->nb_rx_queues; i++) {
 				rxq = dev->data->rx_queues[i];
@@ -2999,8 +3001,9 @@ ice_set_rx_function(struct rte_eth_dev *dev)
 				}
 			}
 
-			if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 ||
-			rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1)
+			if ((rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 ||
+			     rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1) &&
+					rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
 				use_avx2 = true;
 
 		} else {
@@ -3167,7 +3170,8 @@ ice_set_tx_function(struct rte_eth_dev *dev)
 	bool use_avx2 = false;
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		if (!ice_tx_vec_dev_check(dev)) {
+		if (!ice_tx_vec_dev_check(dev) &&
+				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
 			ad->tx_vec_allowed = true;
 			for (i = 0; i < dev->data->nb_tx_queues; i++) {
 				txq = dev->data->tx_queues[i];
@@ -3177,8 +3181,9 @@ ice_set_tx_function(struct rte_eth_dev *dev)
 				}
 			}
 
-			if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 ||
-			rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1)
+			if ((rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 ||
+			     rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1) &&
+					rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
 				use_avx2 = true;
 
 		} else {

@@ -185,6 +185,20 @@ Supports receiving segmented mbufs.
 * **[related]    eth_dev_ops**: ``rx_pkt_burst``.
 
 
+.. _nic_features_buffer_split:
+
+Buffer Split on Rx
+------------------
+
+Scatters the packets being received on specified boundaries to segmented mbufs.
+
+* **[uses]       rte_eth_rxconf,rte_eth_rxmode**: ``offloads:RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT``.
+* **[uses]       rte_eth_rxconf**: ``rx_conf.rx_seg, rx_conf.rx_nseg``.
+* **[implements] datapath**: ``Buffer Split functionality``.
+* **[provides]   rte_eth_dev_info**: ``rx_offload_capa:RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT``.
+* **[related] API**: ``rte_eth_rx_queue_setup()``.
+
+
 .. _nic_features_lro:
 
 LRO
@@ -812,8 +826,6 @@ ARMv7
 
 Support armv7 architecture.
 
-Use ``defconfig_arm-armv7a-*-*``.
-
 
 .. _nic_features_armv8:
 
@@ -821,8 +833,6 @@ ARMv8
 -----
 
 Support armv8a (64bit) architecture.
-
-Use ``defconfig_arm64-armv8a-*-*``
 
 
 .. _nic_features_power8:
@@ -832,7 +842,6 @@ Power8
 
 Support PowerPC architecture.
 
-Use ``defconfig_ppc_64-power8-*-*``
 
 .. _nic_features_x86-32:
 
@@ -841,8 +850,6 @@ x86-32
 
 Support 32bits x86 architecture.
 
-Use ``defconfig_x86_x32-native-*-*`` and ``defconfig_i686-native-*-*``.
-
 
 .. _nic_features_x86-64:
 
@@ -850,8 +857,6 @@ x86-64
 ------
 
 Support 64bits x86 architecture.
-
-Use ``defconfig_x86_64-native-*-*``.
 
 
 .. _nic_features_usage_doc:

@@ -13,6 +13,7 @@
 #define _RTE_CONFIG_H_
 
 #include <rte_build_config.h>
+#include "rte_compatibility_defines.h"
 
 /* legacy defines */
 #ifdef RTE_EXEC_ENV_LINUX
@@ -55,7 +56,7 @@
 
 /* ether defines */
 #define RTE_MAX_QUEUES_PER_PORT 1024
-#define RTE_ETHDEV_QUEUE_STAT_CNTRS 16
+#define RTE_ETHDEV_QUEUE_STAT_CNTRS 16 /* max 256 */
 #define RTE_ETHDEV_RXTX_CALLBACKS 1
 
 /* cryptodev defines */
@@ -116,6 +117,9 @@
 
 /* fm10k defines */
 #define RTE_LIBRTE_FM10K_RX_OLFLAGS_ENABLE 1
+
+/* hns3 defines */
+#define RTE_LIBRTE_HNS3_MAX_TQP_NUM_PER_PF 256
 
 /* i40e defines */
 #define RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC 1

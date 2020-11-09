@@ -44,7 +44,7 @@
 #include "nicvf_svf.h"
 #include "nicvf_logs.h"
 
-static void nicvf_dev_stop(struct rte_eth_dev *dev);
+static int nicvf_dev_stop(struct rte_eth_dev *dev);
 static void nicvf_dev_stop_cleanup(struct rte_eth_dev *dev, bool cleanup);
 static void nicvf_vf_stop(struct rte_eth_dev *dev, struct nicvf *nic,
 			  bool cleanup);
@@ -1766,6 +1766,7 @@ nicvf_dev_stop_cleanup(struct rte_eth_dev *dev, bool cleanup)
 	struct nicvf *nic = nicvf_pmd_priv(dev);
 
 	PMD_INIT_FUNC_TRACE();
+	dev->data->dev_started = 0;
 
 	/* Teardown secondary vf first */
 	for (i = 0; i < nic->sqs_count; i++) {
@@ -1789,12 +1790,14 @@ nicvf_dev_stop_cleanup(struct rte_eth_dev *dev, bool cleanup)
 		PMD_INIT_LOG(ERR, "Failed to reclaim CPI config %d", ret);
 }
 
-static void
+static int
 nicvf_dev_stop(struct rte_eth_dev *dev)
 {
 	PMD_INIT_FUNC_TRACE();
 
 	nicvf_dev_stop_cleanup(dev, false);
+
+	return 0;
 }
 
 static void
@@ -2152,6 +2155,7 @@ nicvf_eth_dev_init(struct rte_eth_dev *eth_dev)
 
 	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	nic->device_id = pci_dev->id.device_id;
 	nic->vendor_id = pci_dev->id.vendor_id;

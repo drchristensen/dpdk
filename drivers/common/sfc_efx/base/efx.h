@@ -1004,8 +1004,6 @@ extern	__checkReturn	efx_rc_t
 efx_phy_verify(
 	__in		efx_nic_t *enp);
 
-#if EFSYS_OPT_PHY_LED_CONTROL
-
 typedef enum efx_phy_led_mode_e {
 	EFX_PHY_LED_DEFAULT = 0,
 	EFX_PHY_LED_OFF,
@@ -1013,6 +1011,8 @@ typedef enum efx_phy_led_mode_e {
 	EFX_PHY_LED_FLASH,
 	EFX_PHY_LED_NMODES
 } efx_phy_led_mode_t;
+
+#if EFSYS_OPT_PHY_LED_CONTROL
 
 LIBEFX_API
 extern	__checkReturn	efx_rc_t
@@ -1555,6 +1555,8 @@ typedef struct efx_nic_cfg_s {
 	/* Datapath firmware vport reconfigure support */
 	boolean_t		enc_vport_reconfigure_supported;
 	boolean_t		enc_rx_disable_scatter_supported;
+	/* Maximum number of Rx scatter segments supported by HW */
+	uint32_t		enc_rx_scatter_max;
 	boolean_t		enc_allow_set_mac_with_installed_filters;
 	boolean_t		enc_enhanced_set_mac_supported;
 	boolean_t		enc_init_evq_v2_supported;
@@ -2918,6 +2920,18 @@ typedef struct efx_rx_prefix_layout_s {
 	efx_rx_prefix_field_info_t	erpl_fields[EFX_RX_PREFIX_NFIELDS];
 } efx_rx_prefix_layout_t;
 
+/*
+ * Helper function to find out a bit mask of wanted but not available
+ * Rx prefix fields.
+ *
+ * A field is considered as not available if any parameter mismatch.
+ */
+LIBEFX_API
+extern	__checkReturn	uint32_t
+efx_rx_prefix_layout_check(
+	__in		const efx_rx_prefix_layout_t *available,
+	__in		const efx_rx_prefix_layout_t *wanted);
+
 LIBEFX_API
 extern	__checkReturn	efx_rc_t
 efx_rx_prefix_get_layout(
@@ -2946,6 +2960,11 @@ typedef enum efx_rxq_type_e {
  * Rx checksum offload results.
  */
 #define	EFX_RXQ_FLAG_INNER_CLASSES	0x2
+/*
+ * Request delivery of the RSS hash calculated by HW to be used by
+ * the driver.
+ */
+#define	EFX_RXQ_FLAG_RSS_HASH		0x4
 
 LIBEFX_API
 extern	__checkReturn	efx_rc_t

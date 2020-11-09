@@ -4658,7 +4658,7 @@ instr_jmp_invalid_translate(struct rte_swx_pipeline *p,
 {
 	struct header *h;
 
-	CHECK(n_tokens == 2, EINVAL);
+	CHECK(n_tokens == 3, EINVAL);
 
 	strcpy(data->jmp_label, tokens[1]);
 
@@ -5647,7 +5647,7 @@ instr_jmp_resolve(struct instruction *instructions,
 				   data->jmp_label);
 		CHECK(found, EINVAL);
 
-		instr->jmp.ip = &instr[found - instruction_data];
+		instr->jmp.ip = &instructions[found - instruction_data];
 	}
 
 	return 0;
@@ -5671,7 +5671,7 @@ instr_verify(struct rte_swx_pipeline *p __rte_unused,
 		for (i = 0; i < n_instructions; i++) {
 			type = instr[i].type;
 
-			if (instr[i].type == INSTR_TX)
+			if (type == INSTR_TX)
 				break;
 		}
 		CHECK(i < n_instructions, EINVAL);
@@ -5932,7 +5932,6 @@ instruction_config(struct rte_swx_pipeline *p,
 {
 	struct instruction *instr = NULL;
 	struct instruction_data *data = NULL;
-	char *string = NULL;
 	int err = 0;
 	uint32_t i;
 
@@ -5955,15 +5954,17 @@ instruction_config(struct rte_swx_pipeline *p,
 	}
 
 	for (i = 0; i < n_instructions; i++) {
-		string = strdup(instructions[i]);
+		char *string = strdup(instructions[i]);
 		if (!string) {
 			err = ENOMEM;
 			goto error;
 		}
 
 		err = instr_translate(p, a, string, &instr[i], &data[i]);
-		if (err)
+		if (err) {
+			free(string);
 			goto error;
+		}
 
 		free(string);
 	}
@@ -5982,8 +5983,6 @@ instruction_config(struct rte_swx_pipeline *p,
 	if (err)
 		goto error;
 
-	free(data);
-
 	if (a) {
 		a->instructions = instr;
 		a->n_instructions = n_instructions;
@@ -5992,10 +5991,10 @@ instruction_config(struct rte_swx_pipeline *p,
 		p->n_instructions = n_instructions;
 	}
 
+	free(data);
 	return 0;
 
 error:
-	free(string);
 	free(data);
 	free(instr);
 	return err;

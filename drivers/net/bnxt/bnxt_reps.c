@@ -184,7 +184,8 @@ int bnxt_representor_init(struct rte_eth_dev *eth_dev, void *params)
 	vf_rep_bp->rep_fc_r2f = rep_params->rep_fc_r2f;
 	vf_rep_bp->rep_fc_f2r = rep_params->rep_fc_f2r;
 
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR |
+					RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 	eth_dev->data->representor_id = rep_params->vf_id;
 
 	rte_eth_random_addr(vf_rep_bp->dflt_mac_addr);
@@ -255,7 +256,6 @@ int bnxt_representor_uninit(struct rte_eth_dev *eth_dev)
 
 	PMD_DRV_LOG(DEBUG, "BNXT Port:%d VFR uninit\n", eth_dev->data->port_id);
 	eth_dev->data->mac_addrs = NULL;
-	eth_dev->dev_ops = NULL;
 
 	parent_bp = rep->parent_dev->data->dev_private;
 	if (!parent_bp) {
@@ -476,7 +476,7 @@ static int bnxt_vfr_free(struct bnxt_representor *vfr)
 	return rc;
 }
 
-void bnxt_rep_dev_stop_op(struct rte_eth_dev *eth_dev)
+int bnxt_rep_dev_stop_op(struct rte_eth_dev *eth_dev)
 {
 	struct bnxt_representor *vfr_bp = eth_dev->data->dev_private;
 
@@ -492,6 +492,8 @@ void bnxt_rep_dev_stop_op(struct rte_eth_dev *eth_dev)
 		eth_dev->data->dev_link.link_status = 0;
 
 	bnxt_rep_free_rx_mbufs(vfr_bp);
+
+	return 0;
 }
 
 int bnxt_rep_dev_close_op(struct rte_eth_dev *eth_dev)
@@ -808,19 +810,24 @@ int bnxt_rep_stats_reset_op(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
-void bnxt_rep_stop_all(struct bnxt *bp)
+int bnxt_rep_stop_all(struct bnxt *bp)
 {
 	uint16_t vf_id;
 	struct rte_eth_dev *rep_eth_dev;
+	int ret;
 
 	/* No vfrep ports just exit */
 	if (!bp->rep_info)
-		return;
+		return 0;
 
 	for (vf_id = 0; vf_id < BNXT_MAX_VF_REPS; vf_id++) {
 		rep_eth_dev = bp->rep_info[vf_id].vfr_eth_dev;
 		if (!rep_eth_dev)
 			continue;
-		bnxt_rep_dev_stop_op(rep_eth_dev);
+		ret = bnxt_rep_dev_stop_op(rep_eth_dev);
+		if (ret != 0)
+			return ret;
 	}
+
+	return 0;
 }

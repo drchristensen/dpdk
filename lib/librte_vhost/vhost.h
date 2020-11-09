@@ -46,10 +46,8 @@
 
 #define MAX_PKT_BURST 32
 
-#define ASYNC_MAX_POLL_SEG 255
-
 #define VHOST_MAX_ASYNC_IT (MAX_PKT_BURST * 2)
-#define VHOST_MAX_ASYNC_VEC (BUF_VECTOR_MAX * 2)
+#define VHOST_MAX_ASYNC_VEC (BUF_VECTOR_MAX * 4)
 
 #define PACKED_DESC_ENQUEUE_USED_FLAG(w)	\
 	((w) ? (VRING_DESC_F_AVAIL | VRING_DESC_F_USED | VRING_DESC_F_WRITE) : \
@@ -200,17 +198,15 @@ struct vhost_virtqueue {
 	/* operation callbacks for async dma */
 	struct rte_vhost_async_channel_ops	async_ops;
 
-	struct rte_vhost_iov_iter it_pool[VHOST_MAX_ASYNC_IT];
-	struct iovec vec_pool[VHOST_MAX_ASYNC_VEC];
+	struct rte_vhost_iov_iter *it_pool;
+	struct iovec *vec_pool;
 
 	/* async data transfer status */
 	uintptr_t	**async_pkts_pending;
-	#define		ASYNC_PENDING_INFO_N_MSK 0xFFFF
-	#define		ASYNC_PENDING_INFO_N_SFT 16
-	uint64_t	*async_pending_info;
+	struct async_inflight_info *async_pkts_info;
 	uint16_t	async_pkts_idx;
 	uint16_t	async_pkts_inflight_n;
-	uint16_t	async_last_seg_n;
+	uint16_t	async_last_pkts_n;
 
 	/* vq async features */
 	bool		async_inorder;

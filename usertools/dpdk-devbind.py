@@ -41,12 +41,16 @@ octeontx2_npa = {'Class': '08', 'Vendor': '177d', 'Device': 'a0fb,a0fc',
               'SVendor': None, 'SDevice': None}
 octeontx2_dma = {'Class': '08', 'Vendor': '177d', 'Device': 'a081',
               'SVendor': None, 'SDevice': None}
+octeontx2_ree = {'Class': '08', 'Vendor': '177d', 'Device': 'a0f4',
+              'SVendor': None, 'SDevice': None}
 
 intel_ioat_bdw = {'Class': '08', 'Vendor': '8086', 'Device': '6f20,6f21,6f22,6f23,6f24,6f25,6f26,6f27,6f2e,6f2f',
               'SVendor': None, 'SDevice': None}
 intel_ioat_skx = {'Class': '08', 'Vendor': '8086', 'Device': '2021',
               'SVendor': None, 'SDevice': None}
 intel_ioat_icx = {'Class': '08', 'Vendor': '8086', 'Device': '0b00',
+              'SVendor': None, 'SDevice': None}
+intel_idxd_spr = {'Class': '08', 'Vendor': '8086', 'Device': '0b25',
               'SVendor': None, 'SDevice': None}
 intel_ntb_skx = {'Class': '06', 'Vendor': '8086', 'Device': '201c',
               'SVendor': None, 'SDevice': None}
@@ -59,7 +63,10 @@ crypto_devices = [encryption_class, intel_processor_class]
 eventdev_devices = [cavium_sso, cavium_tim, octeontx2_sso]
 mempool_devices = [cavium_fpa, octeontx2_npa]
 compress_devices = [cavium_zip]
-misc_devices = [intel_ioat_bdw, intel_ioat_skx, intel_ioat_icx, intel_ntb_skx, intel_ntb_icx, octeontx2_dma]
+regex_devices = [octeontx2_ree]
+misc_devices = [intel_ioat_bdw, intel_ioat_skx, intel_ioat_icx, intel_idxd_spr,
+                intel_ntb_skx, intel_ntb_icx,
+                octeontx2_dma]
 
 # global dict ethernet devices present. Dictionary indexed by PCI address.
 # Each device within this is itself a dictionary of device properties
@@ -646,6 +653,9 @@ def show_status():
     if status_dev == "misc" or status_dev == "all":
         show_device_status(misc_devices, "Misc (rawdev)")
 
+    if status_dev == "regex" or status_dev == "all":
+        show_device_status(regex_devices, "Regex")
+
 
 def pci_glob(arg):
     '''Returns a list containing either:
@@ -738,6 +748,7 @@ def do_arg_actions():
             get_device_details(eventdev_devices)
             get_device_details(mempool_devices)
             get_device_details(compress_devices)
+            get_device_details(regex_devices)
             get_device_details(misc_devices)
         show_status()
 
@@ -759,6 +770,7 @@ def main():
     get_device_details(eventdev_devices)
     get_device_details(mempool_devices)
     get_device_details(compress_devices)
+    get_device_details(regex_devices)
     get_device_details(misc_devices)
     do_arg_actions()
 

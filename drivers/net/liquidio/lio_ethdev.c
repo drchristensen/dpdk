@@ -1465,12 +1465,13 @@ dev_lsc_handle_error:
 }
 
 /* Stop device and disable input/output functions */
-static void
+static int
 lio_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct lio_device *lio_dev = LIO_DEV(eth_dev);
 
 	lio_dev_info(lio_dev, "Stopping port %d\n", eth_dev->data->port_id);
+	eth_dev->data->dev_started = 0;
 	lio_dev->intf_open = 0;
 	rte_mb();
 
@@ -1483,6 +1484,8 @@ lio_dev_stop(struct rte_eth_dev *eth_dev)
 
 	/* Clear recorded link status */
 	lio_dev->linfo.link.link_status64 = 0;
+
+	return 0;
 }
 
 static int
@@ -1554,6 +1557,7 @@ static int
 lio_dev_close(struct rte_eth_dev *eth_dev)
 {
 	struct lio_device *lio_dev = LIO_DEV(eth_dev);
+	int ret = 0;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
@@ -1561,7 +1565,7 @@ lio_dev_close(struct rte_eth_dev *eth_dev)
 	lio_dev_info(lio_dev, "closing port %d\n", eth_dev->data->port_id);
 
 	if (lio_dev->intf_open)
-		lio_dev_stop(eth_dev);
+		ret = lio_dev_stop(eth_dev);
 
 	/* Reset ioq regs */
 	lio_dev->fn_list.setup_device_regs(lio_dev);
@@ -1585,7 +1589,7 @@ lio_dev_close(struct rte_eth_dev *eth_dev)
 	 /* Delete all queues */
 	lio_dev_clear_queues(eth_dev);
 
-	return 0;
+	return ret;
 }
 
 /**
@@ -1703,6 +1707,7 @@ static int
 lio_reconf_queues(struct rte_eth_dev *eth_dev, int num_txq, int num_rxq)
 {
 	struct lio_device *lio_dev = LIO_DEV(eth_dev);
+	int ret;
 
 	if (lio_dev->nb_rx_queues != num_rxq ||
 	    lio_dev->nb_tx_queues != num_txq) {
@@ -1712,8 +1717,11 @@ lio_reconf_queues(struct rte_eth_dev *eth_dev, int num_txq, int num_rxq)
 		lio_dev->nb_tx_queues = num_txq;
 	}
 
-	if (lio_dev->intf_open)
-		lio_dev_stop(eth_dev);
+	if (lio_dev->intf_open) {
+		ret = lio_dev_stop(eth_dev);
+		if (ret != 0)
+			return ret;
+	}
 
 	/* Reset ioq registers */
 	if (lio_dev->fn_list.setup_device_regs(lio_dev)) {
@@ -2067,10 +2075,6 @@ lio_eth_dev_uninit(struct rte_eth_dev *eth_dev)
 	/* lio_free_sc_buffer_pool */
 	lio_free_sc_buffer_pool(lio_dev);
 
-	eth_dev->dev_ops = NULL;
-	eth_dev->rx_pkt_burst = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-
 	return 0;
 }
 
@@ -2090,6 +2094,7 @@ lio_eth_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 
 	rte_eth_copy_pci_info(eth_dev, pdev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	if (pdev->mem_resource[0].addr) {
 		lio_dev->hw_addr = pdev->mem_resource[0].addr;

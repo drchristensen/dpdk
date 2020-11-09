@@ -594,6 +594,7 @@ rhead_rx_qcreate(
 	const efx_nic_cfg_t *encp = efx_nic_cfg_get(enp);
 	efx_mcdi_init_rxq_params_t params;
 	efx_rx_prefix_layout_t erpl;
+	uint32_t fields_mask = 0;
 	efx_rc_t rc;
 
 	_NOTE(ARGUNUSED(id))
@@ -623,16 +624,17 @@ rhead_rx_qcreate(
 	else
 		params.disable_scatter = encp->enc_rx_disable_scatter_supported;
 
+	if (flags & EFX_RXQ_FLAG_RSS_HASH) {
+		fields_mask |= 1U << EFX_RX_PREFIX_FIELD_RSS_HASH;
+		fields_mask |= 1U << EFX_RX_PREFIX_FIELD_RSS_HASH_VALID;
+	}
+
 	/*
 	 * LENGTH is required in EF100 host interface, as receive events
 	 * do not include the packet length.
-	 * NOTE: Required fields are hard-wired now. Future designs will
-	 * want to allow the client (driver) code to have control over
-	 * which fields are required or may be allow to request so-called
-	 * default Rx prefix (which ID is equal to 0).
 	 */
-	if ((rc = rhead_rx_choose_prefix_id(enp,
-	    (1U << EFX_RX_PREFIX_FIELD_LENGTH), &erpl)) != 0)
+	fields_mask |= 1U << EFX_RX_PREFIX_FIELD_LENGTH;
+	if ((rc = rhead_rx_choose_prefix_id(enp, fields_mask, &erpl)) != 0)
 		goto fail3;
 
 	params.prefix_id = erpl.erpl_id;

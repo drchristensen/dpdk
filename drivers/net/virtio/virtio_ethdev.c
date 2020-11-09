@@ -23,6 +23,7 @@
 #include <rte_common.h>
 #include <rte_errno.h>
 #include <rte_cpuflags.h>
+#include <rte_vect.h>
 
 #include <rte_memory.h>
 #include <rte_eal.h>
@@ -40,7 +41,7 @@
 static int eth_virtio_dev_uninit(struct rte_eth_dev *eth_dev);
 static int  virtio_dev_configure(struct rte_eth_dev *dev);
 static int  virtio_dev_start(struct rte_eth_dev *dev);
-static void virtio_dev_stop(struct rte_eth_dev *dev);
+static int  virtio_dev_stop(struct rte_eth_dev *dev);
 static int virtio_dev_promiscuous_enable(struct rte_eth_dev *dev);
 static int virtio_dev_promiscuous_disable(struct rte_eth_dev *dev);
 static int virtio_dev_allmulticast_enable(struct rte_eth_dev *dev);
@@ -1718,6 +1719,8 @@ virtio_init_device(struct rte_eth_dev *eth_dev, uint64_t req_features)
 	else
 		eth_dev->data->dev_flags &= ~RTE_ETH_DEV_INTR_LSC;
 
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+
 	/* Setting up rx_header size for the device */
 	if (vtpci_with_feature(hw, VIRTIO_NET_F_MRG_RXBUF) ||
 	    vtpci_with_feature(hw, VIRTIO_F_VERSION_1) ||
@@ -1993,21 +1996,18 @@ err_vtpci_init:
 static int
 eth_virtio_dev_uninit(struct rte_eth_dev *eth_dev)
 {
+	int ret;
 	PMD_INIT_FUNC_TRACE();
 
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY)
 		return 0;
 
-	virtio_dev_stop(eth_dev);
+	ret = virtio_dev_stop(eth_dev);
 	virtio_dev_close(eth_dev);
-
-	eth_dev->dev_ops = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-	eth_dev->rx_pkt_burst = NULL;
 
 	PMD_INIT_LOG(DEBUG, "dev_uninit completed");
 
-	return 0;
+	return ret;
 }
 
 
@@ -2313,7 +2313,8 @@ virtio_dev_configure(struct rte_eth_dev *dev)
 		if ((hw->use_vec_rx || hw->use_vec_tx) &&
 		    (!rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) ||
 		     !vtpci_with_feature(hw, VIRTIO_F_IN_ORDER) ||
-		     !vtpci_with_feature(hw, VIRTIO_F_VERSION_1))) {
+		     !vtpci_with_feature(hw, VIRTIO_F_VERSION_1) ||
+		     rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_512)) {
 			PMD_DRV_LOG(INFO,
 				"disabled packed ring vectorized path for requirements not met");
 			hw->use_vec_rx = 0;
@@ -2345,7 +2346,7 @@ virtio_dev_configure(struct rte_eth_dev *dev)
 		}
 
 		if (hw->use_vec_rx) {
-#if defined RTE_ARCH_ARM64 || defined RTE_ARCH_ARM
+#if defined RTE_ARCH_ARM
 			if (!rte_cpu_get_flag_enabled(RTE_CPUFLAG_NEON)) {
 				PMD_DRV_LOG(INFO,
 					"disabled split ring vectorized path for requirement not met");
@@ -2364,6 +2365,12 @@ virtio_dev_configure(struct rte_eth_dev *dev)
 					   DEV_RX_OFFLOAD_VLAN_STRIP)) {
 				PMD_DRV_LOG(INFO,
 					"disabled split ring vectorized rx for offloading enabled");
+				hw->use_vec_rx = 0;
+			}
+
+			if (rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_128) {
+				PMD_DRV_LOG(INFO,
+					"disabled split ring vectorized rx, max SIMD bitwidth too low");
 				hw->use_vec_rx = 0;
 			}
 		}
@@ -2515,7 +2522,7 @@ static void virtio_dev_free_mbufs(struct rte_eth_dev *dev)
 /*
  * Stop device: disable interrupt and mark link down
  */
-static void
+static int
 virtio_dev_stop(struct rte_eth_dev *dev)
 {
 	struct virtio_hw *hw = dev->data->dev_private;
@@ -2523,6 +2530,7 @@ virtio_dev_stop(struct rte_eth_dev *dev)
 	struct rte_intr_conf *intr_conf = &dev->data->dev_conf.intr_conf;
 
 	PMD_INIT_LOG(DEBUG, "stop");
+	dev->data->dev_started = 0;
 
 	rte_spinlock_lock(&hw->state_lock);
 	if (!hw->started)
@@ -2544,6 +2552,8 @@ virtio_dev_stop(struct rte_eth_dev *dev)
 	rte_eth_linkstatus_set(dev, &link);
 out_unlock:
 	rte_spinlock_unlock(&hw->state_lock);
+
+	return 0;
 }
 
 static int

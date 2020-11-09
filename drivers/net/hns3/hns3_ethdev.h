@@ -64,6 +64,8 @@
 #define HNS3_HIP08_MIN_TX_PKT_LEN	33
 #define HNS3_HIP09_MIN_TX_PKT_LEN	9
 
+#define HNS3_BITS_PER_BYTE	8
+
 #define HNS3_4_TCS			4
 #define HNS3_8_TCS			8
 
@@ -132,9 +134,9 @@ enum hns3_fc_status {
 };
 
 struct hns3_tc_queue_info {
-	uint8_t	tqp_offset;     /* TQP offset from base TQP */
-	uint8_t	tqp_count;      /* Total TQPs */
-	uint8_t	tc;             /* TC index */
+	uint16_t tqp_offset;    /* TQP offset from base TQP */
+	uint16_t tqp_count;     /* Total TQPs */
+	uint8_t tc;             /* TC index */
 	bool enable;            /* If this TC is enable or not */
 };
 
@@ -659,10 +661,34 @@ struct hns3_ptype_table {
 	uint32_t ol4table[HNS3_OL4TBL_NUM];
 };
 
+#define HNS3_FIXED_MAX_TQP_NUM_MODE		0
+#define HNS3_FLEX_MAX_TQP_NUM_MODE		1
+
 struct hns3_pf {
 	struct hns3_adapter *adapter;
 	bool is_main_pf;
 	uint16_t func_num; /* num functions of this pf, include pf and vfs */
+
+	/*
+	 * tqp_config mode
+	 * tqp_config_mode value range:
+	 *	HNS3_FIXED_MAX_TQP_NUM_MODE,
+	 *	HNS3_FLEX_MAX_TQP_NUM_MODE
+	 *
+	 * - HNS3_FIXED_MAX_TQP_NUM_MODE
+	 *   There is a limitation on the number of pf interrupts available for
+	 *   on some versions of network engines. In this case, the maximum
+	 *   queue number of pf can not be greater than the interrupt number,
+	 *   such as pf of network engine with revision_id 0x21. So the maximum
+	 *   number of queues must be fixed.
+	 *
+	 * - HNS3_FLEX_MAX_TQP_NUM_MODE
+	 *   In this mode, the maximum queue number of pf has not any constraint
+	 *   and comes from the macro RTE_LIBRTE_HNS3_MAX_TQP_NUM_PER_PF
+	 *   in the config file. Users can modify the macro according to their
+	 *   own application scenarios, which is more flexible to use.
+	 */
+	uint8_t tqp_config_mode;
 
 	uint32_t pkt_buf_size; /* Total pf buf size for tx/rx */
 	uint32_t tx_buf_size; /* Tx buffer size for each TC */
@@ -686,6 +712,7 @@ struct hns3_pf {
 	struct hns3_err_msix_intr_stats abn_int_stats;
 
 	bool support_sfp_query;
+	uint32_t fec_mode; /* current FEC mode for ethdev */
 
 	struct hns3_vtag_cfg vtag_config;
 	LIST_HEAD(vlan_tbl, hns3_user_vlan_table) vlan_list;

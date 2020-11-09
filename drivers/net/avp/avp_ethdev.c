@@ -37,7 +37,7 @@ static int avp_dev_create(struct rte_pci_device *pci_dev,
 
 static int avp_dev_configure(struct rte_eth_dev *dev);
 static int avp_dev_start(struct rte_eth_dev *dev);
-static void avp_dev_stop(struct rte_eth_dev *dev);
+static int avp_dev_stop(struct rte_eth_dev *dev);
 static int avp_dev_close(struct rte_eth_dev *dev);
 static int avp_dev_info_get(struct rte_eth_dev *dev,
 			    struct rte_eth_dev_info *dev_info);
@@ -974,6 +974,7 @@ eth_avp_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Check current migration status */
 	if (avp_dev_migration_pending(eth_dev)) {
@@ -2075,7 +2076,7 @@ unlock:
 	return ret;
 }
 
-static void
+static int
 avp_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
@@ -2084,6 +2085,7 @@ avp_dev_stop(struct rte_eth_dev *eth_dev)
 	rte_spinlock_lock(&avp->lock);
 	if (avp->flags & AVP_F_DETACHED) {
 		PMD_DRV_LOG(ERR, "Operation not supported during VM live migration\n");
+		ret = -ENOTSUP;
 		goto unlock;
 	}
 
@@ -2099,6 +2101,7 @@ avp_dev_stop(struct rte_eth_dev *eth_dev)
 
 unlock:
 	rte_spinlock_unlock(&avp->lock);
+	return ret;
 }
 
 static int

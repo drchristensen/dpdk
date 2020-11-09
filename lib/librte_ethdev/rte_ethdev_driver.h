@@ -21,6 +21,9 @@
 extern "C" {
 #endif
 
+/**< @internal Declaration of the hairpin peer queue information structure. */
+struct rte_hairpin_peer_info;
+
 /*
  * Definitions of all functions exported by an Ethernet driver through the
  * generic structure of type *eth_dev_ops* supplied in the *rte_eth_dev*
@@ -33,7 +36,7 @@ typedef int  (*eth_dev_configure_t)(struct rte_eth_dev *dev);
 typedef int  (*eth_dev_start_t)(struct rte_eth_dev *dev);
 /**< @internal Function used to start a configured Ethernet device. */
 
-typedef void (*eth_dev_stop_t)(struct rte_eth_dev *dev);
+typedef int (*eth_dev_stop_t)(struct rte_eth_dev *dev);
 /**< @internal Function used to stop a configured Ethernet device. */
 
 typedef int  (*eth_dev_set_link_up_t)(struct rte_eth_dev *dev);
@@ -575,6 +578,181 @@ typedef int (*eth_tx_hairpin_queue_setup_t)
 	 const struct rte_eth_hairpin_conf *hairpin_conf);
 
 /**
+ * @internal
+ * Get Forward Error Correction(FEC) capability.
+ *
+ * @param dev
+ *   ethdev handle of port.
+ * @param speed_fec_capa
+ *   speed_fec_capa is out only with per-speed capabilities.
+ * @param num
+ *   a number of elements in an speed_fec_capa array.
+ *
+ * @return
+ *   Negative errno value on error, positive value on success.
+ *
+ * @retval positive value
+ *   A non-negative value lower or equal to num: success. The return value
+ *   is the number of entries filled in the fec capa array.
+ *   A non-negative value higher than num: error, the given fec capa array
+ *   is too small. The return value corresponds to the num that should
+ *   be given to succeed. The entries in the fec capa array are not valid
+ *   and shall not be used by the caller.
+ * @retval -ENOTSUP
+ *   Operation is not supported.
+ * @retval -EIO
+ *   Device is removed.
+ * @retval -EINVAL
+ *   *num* or *speed_fec_capa* invalid.
+ */
+typedef int (*eth_fec_get_capability_t)(struct rte_eth_dev *dev,
+		struct rte_eth_fec_capa *speed_fec_capa, unsigned int num);
+
+/**
+ * @internal
+ * Get Forward Error Correction(FEC) mode.
+ *
+ * @param dev
+ *   ethdev handle of port.
+ * @param fec_capa
+ *   a bitmask of enabled FEC modes. If AUTO bit is set, other
+ *   bits specify FEC modes which may be negotiated. If AUTO
+ *   bit is clear, specify FEC modes to be used (only one valid
+ *   mode per speed may be set).
+ *
+ * @return
+ *   Negative errno value on error, 0 on success.
+ *
+ * @retval 0
+ *   Success, get FEC success.
+ * @retval -ENOTSUP
+ *   Operation is not supported.
+ * @retval -EIO
+ *   Device is removed.
+ */
+typedef int (*eth_fec_get_t)(struct rte_eth_dev *dev,
+			     uint32_t *fec_capa);
+
+/**
+ * @internal
+ * Set Forward Error Correction(FEC) mode.
+ *
+ * @param dev
+ *   ethdev handle of port.
+ * @param fec_capa
+ *   bitmask of allowed FEC modes. It must be only one
+ *   if AUTO is disabled. If AUTO is enabled, other
+ *   bits specify FEC modes which may be negotiated.
+ *
+ * @return
+ *   Negative errno value on error, 0 on success.
+ *
+ * @retval 0
+ *   Success, set FEC success.
+ * @retval -ENOTSUP
+ *   Operation is not supported.
+ * @retval -EINVAL
+ *   Unsupported FEC mode requested.
+ * @retval -EIO
+ *   Device is removed.
+ */
+typedef int (*eth_fec_set_t)(struct rte_eth_dev *dev, uint32_t fec_capa);
+
+/**
+ * @internal
+ * Get all hairpin Tx/Rx peer ports of the current device, if any.
+ *
+ * @param dev
+ *   ethdev handle of port.
+ * @param peer_ports
+ *   array to save the ports list.
+ * @param len
+ *   array length.
+ * @param direction
+ *   value to decide the current to peer direction
+ *   positive - used as Tx to get all peer Rx ports.
+ *   zero - used as Rx to get all peer Tx ports.
+ *
+ * @return
+ *   Negative errno value on error, 0 or positive on success.
+ *
+ * @retval 0
+ *   Success, no peer ports.
+ * @retval >0
+ *   Actual number of the peer ports.
+ * @retval -ENOTSUP
+ *   Get peer ports API is not supported.
+ * @retval -EINVAL
+ *   One of the parameters is invalid.
+ */
+typedef int (*hairpin_get_peer_ports_t)(struct rte_eth_dev *dev,
+					uint16_t *peer_ports, size_t len,
+					uint32_t direction);
+
+/**
+ * @internal
+ * Bind all hairpin Tx queues of one port to the Rx queues of the peer port.
+ *
+ * @param dev
+ *   ethdev handle of port.
+ * @param rx_port
+ *   the peer Rx port.
+ *
+ * @return
+ *   Negative errno value on error, 0 on success.
+ *
+ * @retval 0
+ *   Success, bind successfully.
+ * @retval -ENOTSUP
+ *   Bind API is not supported.
+ * @retval -EINVAL
+ *   One of the parameters is invalid.
+ * @retval -EBUSY
+ *   Device is not started.
+ */
+typedef int (*eth_hairpin_bind_t)(struct rte_eth_dev *dev,
+				uint16_t rx_port);
+
+/**
+ * @internal
+ * Unbind all hairpin Tx queues of one port from the Rx queues of the peer port.
+ *
+ * @param dev
+ *   ethdev handle of port.
+ * @param rx_port
+ *   the peer Rx port.
+ *
+ * @return
+ *   Negative errno value on error, 0 on success.
+ *
+ * @retval 0
+ *   Success, unbind successfully.
+ * @retval -ENOTSUP
+ *   Bind API is not supported.
+ * @retval -EINVAL
+ *   One of the parameters is invalid.
+ * @retval -EBUSY
+ *   Device is already stopped.
+ */
+typedef int (*eth_hairpin_unbind_t)(struct rte_eth_dev *dev,
+				  uint16_t rx_port);
+
+typedef int (*eth_hairpin_queue_peer_update_t)
+	(struct rte_eth_dev *dev, uint16_t peer_queue,
+	 struct rte_hairpin_peer_info *current_info,
+	 struct rte_hairpin_peer_info *peer_info, uint32_t direction);
+/**< @internal Update and fetch peer queue information. */
+
+typedef int (*eth_hairpin_queue_peer_bind_t)
+	(struct rte_eth_dev *dev, uint16_t cur_queue,
+	 struct rte_hairpin_peer_info *peer_info, uint32_t direction);
+/**< @internal Bind peer queue to the current queue with fetched information. */
+
+typedef int (*eth_hairpin_queue_peer_unbind_t)
+	(struct rte_eth_dev *dev, uint16_t cur_queue, uint32_t direction);
+/**< @internal Unbind peer queue from the current queue. */
+
+/**
  * @internal A structure containing the functions exported by an Ethernet driver.
  */
 struct eth_dev_ops {
@@ -713,6 +891,25 @@ struct eth_dev_ops {
 	/**< Set up device RX hairpin queue. */
 	eth_tx_hairpin_queue_setup_t tx_hairpin_queue_setup;
 	/**< Set up device TX hairpin queue. */
+
+	eth_fec_get_capability_t fec_get_capability;
+	/**< Get Forward Error Correction(FEC) capability. */
+	eth_fec_get_t fec_get;
+	/**< Get Forward Error Correction(FEC) mode. */
+	eth_fec_set_t fec_set;
+	/**< Set Forward Error Correction(FEC) mode. */
+	hairpin_get_peer_ports_t hairpin_get_peer_ports;
+	/**< Get hairpin peer ports list. */
+	eth_hairpin_bind_t hairpin_bind;
+	/**< Bind all hairpin Tx queues of device to the peer port Rx queues. */
+	eth_hairpin_unbind_t hairpin_unbind;
+	/**< Unbind all hairpin Tx queues from the peer port Rx queues. */
+	eth_hairpin_queue_peer_update_t hairpin_queue_peer_update;
+	/**< Pass the current queue info and get the peer queue info. */
+	eth_hairpin_queue_peer_bind_t hairpin_queue_peer_bind;
+	/**< Set up the connection between the pair of hairpin queues. */
+	eth_hairpin_queue_peer_unbind_t hairpin_queue_peer_unbind;
+	/**< Disconnect the hairpin queues of a pair from each other. */
 };
 
 /**
@@ -1067,6 +1264,83 @@ typedef int (*ethdev_uninit_t)(struct rte_eth_dev *ethdev);
 __rte_internal
 int
 rte_eth_dev_destroy(struct rte_eth_dev *ethdev, ethdev_uninit_t ethdev_uninit);
+
+/**
+ * @internal
+ * Pass the current hairpin queue HW and/or SW information to the peer queue
+ * and fetch back the information of the peer queue.
+ *
+ * @param peer_port
+ *  Peer port identifier of the Ethernet device.
+ * @param peer_queue
+ *  Peer queue index of the port.
+ * @param cur_info
+ *  Pointer to the current information structure.
+ * @param peer_info
+ *  Pointer to the peer information, output.
+ * @param direction
+ *  Direction to pass the information.
+ *  positive - pass Tx queue information and get peer Rx queue information
+ *  zero - pass Rx queue information and get peer Tx queue information
+ *
+ * @return
+ *  Negative errno value on error, 0 on success.
+ */
+__rte_internal
+int
+rte_eth_hairpin_queue_peer_update(uint16_t peer_port, uint16_t peer_queue,
+				  struct rte_hairpin_peer_info *cur_info,
+				  struct rte_hairpin_peer_info *peer_info,
+				  uint32_t direction);
+
+/**
+ * @internal
+ * Configure current hairpin queue with the peer information fetched to create
+ * the connection (bind) with peer queue in the specified direction.
+ * This function might need to be called twice to fully create the connections.
+ *
+ * @param cur_port
+ *  Current port identifier of the Ethernet device.
+ * @param cur_queue
+ *  Current queue index of the port.
+ * @param peer_info
+ *  Pointer to the peer information, input.
+ * @param direction
+ *  Direction to create the connection.
+ *  positive - bind current Tx queue to peer Rx queue
+ *  zero - bind current Rx queue to peer Tx queue
+ *
+ * @return
+ *  Negative errno value on error, 0 on success.
+ */
+__rte_internal
+int
+rte_eth_hairpin_queue_peer_bind(uint16_t cur_port, uint16_t cur_queue,
+				struct rte_hairpin_peer_info *peer_info,
+				uint32_t direction);
+
+/**
+ * @internal
+ * Reset the current queue state and configuration to disconnect (unbind) it
+ * from the peer queue.
+ * This function might need to be called twice to disconnect each other.
+ *
+ * @param cur_port
+ *  Current port identifier of the Ethernet device.
+ * @param cur_queue
+ *  Current queue index of the port.
+ * @param direction
+ *  Direction to destroy the connection.
+ *  positive - unbind current Tx queue from peer Rx queue
+ *  zero - unbind current Rx queue from peer Tx queue
+ *
+ * @return
+ *  Negative errno value on error, 0 on success.
+ */
+__rte_internal
+int
+rte_eth_hairpin_queue_peer_unbind(uint16_t cur_port, uint16_t cur_queue,
+				  uint32_t direction);
 
 #ifdef __cplusplus
 }

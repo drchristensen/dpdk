@@ -29,7 +29,7 @@ static int ark_config_device(struct rte_eth_dev *dev);
 static int eth_ark_dev_uninit(struct rte_eth_dev *eth_dev);
 static int eth_ark_dev_configure(struct rte_eth_dev *dev);
 static int eth_ark_dev_start(struct rte_eth_dev *dev);
-static void eth_ark_dev_stop(struct rte_eth_dev *dev);
+static int eth_ark_dev_stop(struct rte_eth_dev *dev);
 static int eth_ark_dev_close(struct rte_eth_dev *dev);
 static int eth_ark_dev_info_get(struct rte_eth_dev *dev,
 				struct rte_eth_dev_info *dev_info);
@@ -256,6 +256,7 @@ eth_ark_dev_init(struct rte_eth_dev *dev)
 		return ret;
 	pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	rte_eth_copy_pci_info(dev, pci_dev);
+	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Use dummy function until setup */
 	dev->rx_pkt_burst = &eth_ark_recv_pkts_noop;
@@ -383,6 +384,7 @@ eth_ark_dev_init(struct rte_eth_dev *dev)
 		eth_dev->rx_pkt_burst = ark->eth_dev->rx_pkt_burst;
 
 		rte_eth_copy_pci_info(eth_dev, pci_dev);
+		eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 		eth_dev->data->mac_addrs = rte_zmalloc(name,
 						RTE_ETHER_ADDR_LEN, 0);
@@ -504,9 +506,6 @@ eth_ark_dev_uninit(struct rte_eth_dev *dev)
 	ark_pktgen_uninit(ark->pg);
 	ark_pktchkr_uninit(ark->pc);
 
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
 	return 0;
 }
 
@@ -584,7 +583,7 @@ eth_ark_dev_start(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 eth_ark_dev_stop(struct rte_eth_dev *dev)
 {
 	uint16_t i;
@@ -593,8 +592,9 @@ eth_ark_dev_stop(struct rte_eth_dev *dev)
 	struct ark_mpu_t *mpu;
 
 	if (ark->started == 0)
-		return;
+		return 0;
 	ark->started = 0;
+	dev->data->dev_started = 0;
 
 	/* Stop the extension first */
 	if (ark->user_ext.dev_stop)
@@ -672,6 +672,8 @@ eth_ark_dev_stop(struct rte_eth_dev *dev)
 		ark_pktchkr_dump_stats(ark->pc);
 		ark_pktchkr_stop(ark->pc);
 	}
+
+	return 0;
 }
 
 static int

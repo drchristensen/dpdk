@@ -1,5 +1,5 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
-    Copyright 2016 NXP
+    Copyright 2016,2020 NXP
 
 
 DPAA2 Poll Mode Driver
@@ -300,7 +300,7 @@ The diagram below shows the dpaa2 drivers involved in a networking
 scenario and the objects bound to each driver.  A brief description
 of each driver follows.
 
-.. code-block: console
+.. code-block:: console
 
 
                                        +------------+
@@ -432,30 +432,6 @@ Currently supported by DPDK:
    Some part of fslmc bus code (mc flib - object library) routines are
    dual licensed (BSD & GPLv2), however they are used as BSD in DPDK in userspace.
 
-Pre-Installation Configuration
-------------------------------
-
-Config File Options
-~~~~~~~~~~~~~~~~~~~
-
-The following options can be modified in the ``config`` file.
-Please note that enabling debugging options may affect system performance.
-
-- ``CONFIG_RTE_LIBRTE_FSLMC_BUS`` (default ``y``)
-
-  Toggle compilation of the ``librte_bus_fslmc`` driver.
-
-- ``CONFIG_RTE_LIBRTE_DPAA2_PMD`` (default ``y``)
-
-  Toggle compilation of the ``librte_pmd_dpaa2`` driver.
-
-- ``CONFIG_RTE_LIBRTE_DPAA2_DEBUG_DRIVER`` (default ``n``)
-
-  Toggle display of debugging messages/logic
-
-- ``CONFIG_RTE_LIBRTE_DPAA2_USE_PHYS_IOVA`` (default ``n``)
-
-  Toggle to use physical address vs virtual address for hardware accelerators.
 
 Driver compilation and testing
 ------------------------------
@@ -473,7 +449,7 @@ for details.
 
    .. code-block:: console
 
-      ./testpmd -c 0xff -n 1 -- -i --portmask=0x3 --nb-cores=1 --no-flush-rx
+      ./dpdk-testpmd -c 0xff -n 1 -- -i --portmask=0x3 --nb-cores=1 --no-flush-rx
 
       .....
       EAL: Registered [pci] bus.

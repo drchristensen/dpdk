@@ -39,6 +39,8 @@ enum mlx5_ipool_index {
 	MLX5_IPOOL_TAG, /* Pool for tag resource. */
 	MLX5_IPOOL_PORT_ID, /* Pool for port id resource. */
 	MLX5_IPOOL_JUMP, /* Pool for jump resource. */
+	MLX5_IPOOL_SAMPLE, /* Pool for sample resource. */
+	MLX5_IPOOL_DEST_ARRAY, /* Pool for destination array resource. */
 #endif
 	MLX5_IPOOL_MTR, /* Pool for meter resource. */
 	MLX5_IPOOL_MCP, /* Pool for metadata resource. */
@@ -503,15 +505,16 @@ struct mlx5_flow_tbl_resource {
 };
 
 #define MLX5_MAX_TABLES UINT16_MAX
-#define MLX5_FLOW_TABLE_LEVEL_METER (UINT16_MAX - 3)
-#define MLX5_FLOW_TABLE_LEVEL_SUFFIX (UINT16_MAX - 2)
 #define MLX5_HAIRPIN_TX_TABLE (UINT16_MAX - 1)
 /* Reserve the last two tables for metadata register copy. */
 #define MLX5_FLOW_MREG_ACT_TABLE_GROUP (MLX5_MAX_TABLES - 1)
 #define MLX5_FLOW_MREG_CP_TABLE_GROUP (MLX5_MAX_TABLES - 2)
 /* Tables for metering splits should be added here. */
 #define MLX5_MAX_TABLES_EXTERNAL (MLX5_MAX_TABLES - 3)
+#define MLX5_FLOW_TABLE_LEVEL_METER (MLX5_MAX_TABLES - 4)
+#define MLX5_FLOW_TABLE_LEVEL_SUFFIX (MLX5_MAX_TABLES - 3)
 #define MLX5_MAX_TABLES_FDB UINT16_MAX
+#define MLX5_FLOW_TABLE_FACTOR 10
 
 /* ID generation structure. */
 struct mlx5_flow_id_pool {
@@ -561,7 +564,6 @@ struct mlx5_dev_txpp {
 	uint32_t tick; /* Completion tick duration in nanoseconds. */
 	uint32_t test; /* Packet pacing test mode. */
 	int32_t skew; /* Scheduling skew. */
-	uint32_t eqn; /* Event Queue number. */
 	struct rte_intr_handle intr_handle; /* Periodic interrupt. */
 	void *echan; /* Event Channel. */
 	struct mlx5_txpp_wq clock_queue; /* Clock Queue. */
@@ -603,6 +605,7 @@ struct mlx5_dev_ctx_shared {
 	LIST_ENTRY(mlx5_dev_ctx_shared) next;
 	uint32_t refcnt;
 	uint32_t devx:1; /* Opened with DV. */
+	uint32_t eqn; /* Event Queue number. */
 	uint32_t max_port; /* Maximal IB device port index. */
 	void *ctx; /* Verbs/DV/DevX context. */
 	void *pd; /* Protection Domain. */
@@ -640,6 +643,8 @@ struct mlx5_dev_ctx_shared {
 	struct mlx5_hlist *tag_table;
 	uint32_t port_id_action_list; /* List of port ID actions. */
 	uint32_t push_vlan_action_list; /* List of push VLAN actions. */
+	uint32_t sample_action_list; /* List of sample actions. */
+	uint32_t dest_array_list; /* List of destination array actions. */
 	struct mlx5_flow_counter_mng cmng; /* Counters management structure. */
 	struct mlx5_flow_default_miss_resource default_miss;
 	/* Default miss action resource structure. */
@@ -676,18 +681,10 @@ TAILQ_HEAD(mlx5_flow_meters, mlx5_flow_meter);
 #define MLX5_PROC_PRIV(port_id) \
 	((struct mlx5_proc_priv *)rte_eth_devices[port_id].process_private)
 
-enum mlx5_rxq_obj_type {
-	MLX5_RXQ_OBJ_TYPE_IBV,          /* mlx5_rxq_obj with ibv_wq. */
-	MLX5_RXQ_OBJ_TYPE_DEVX_RQ,      /* mlx5_rxq_obj with mlx5_devx_rq. */
-	MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN,
-	/* mlx5_rxq_obj with mlx5_devx_rq and hairpin support. */
-};
-
 /* Verbs/DevX Rx queue elements. */
 struct mlx5_rxq_obj {
 	LIST_ENTRY(mlx5_rxq_obj) next; /* Pointer to the next element. */
 	struct mlx5_rxq_ctrl *rxq_ctrl; /* Back pointer to parent. */
-	enum mlx5_rxq_obj_type type;
 	int fd; /* File descriptor for event channel */
 	RTE_STD_C11
 	union {
@@ -735,12 +732,57 @@ struct mlx5_hrxq {
 	uint8_t rss_key[]; /* Hash key. */
 };
 
+/* Verbs/DevX Tx queue elements. */
+struct mlx5_txq_obj {
+	LIST_ENTRY(mlx5_txq_obj) next; /* Pointer to the next element. */
+	struct mlx5_txq_ctrl *txq_ctrl; /* Pointer to the control queue. */
+	RTE_STD_C11
+	union {
+		struct {
+			void *cq; /* Completion Queue. */
+			void *qp; /* Queue Pair. */
+		};
+		struct {
+			struct mlx5_devx_obj *sq;
+			/* DevX object for Sx queue. */
+			struct mlx5_devx_obj *tis; /* The TIS object. */
+		};
+		struct {
+			struct rte_eth_dev *dev;
+			struct mlx5_devx_obj *cq_devx;
+			void *cq_umem;
+			void *cq_buf;
+			int64_t cq_dbrec_offset;
+			struct mlx5_devx_dbr_page *cq_dbrec_page;
+			struct mlx5_devx_obj *sq_devx;
+			void *sq_umem;
+			void *sq_buf;
+			int64_t sq_dbrec_offset;
+			struct mlx5_devx_dbr_page *sq_dbrec_page;
+		};
+	};
+};
+
+enum mlx5_rxq_modify_type {
+	MLX5_RXQ_MOD_ERR2RST, /* modify state from error to reset. */
+	MLX5_RXQ_MOD_RST2RDY, /* modify state from reset to ready. */
+	MLX5_RXQ_MOD_RDY2ERR, /* modify state from ready to error. */
+	MLX5_RXQ_MOD_RDY2RST, /* modify state from ready to reset. */
+};
+
+enum mlx5_txq_modify_type {
+	MLX5_TXQ_MOD_RDY2RDY, /* modify state from ready to ready. */
+	MLX5_TXQ_MOD_RST2RDY, /* modify state from reset to ready. */
+	MLX5_TXQ_MOD_RDY2RST, /* modify state from ready to reset. */
+	MLX5_TXQ_MOD_ERR2RDY, /* modify state from error to ready. */
+};
+
 /* HW objects operations structure. */
 struct mlx5_obj_ops {
 	int (*rxq_obj_modify_vlan_strip)(struct mlx5_rxq_obj *rxq_obj, int on);
 	int (*rxq_obj_new)(struct rte_eth_dev *dev, uint16_t idx);
 	int (*rxq_event_get)(struct mlx5_rxq_obj *rxq_obj);
-	int (*rxq_obj_modify)(struct mlx5_rxq_obj *rxq_obj, bool is_start);
+	int (*rxq_obj_modify)(struct mlx5_rxq_obj *rxq_obj, uint8_t type);
 	void (*rxq_obj_release)(struct mlx5_rxq_obj *rxq_obj);
 	int (*ind_table_new)(struct rte_eth_dev *dev, const unsigned int log_n,
 			     struct mlx5_ind_table_obj *ind_tbl);
@@ -750,6 +792,10 @@ struct mlx5_obj_ops {
 	void (*hrxq_destroy)(struct mlx5_hrxq *hrxq);
 	int (*drop_action_create)(struct rte_eth_dev *dev);
 	void (*drop_action_destroy)(struct rte_eth_dev *dev);
+	int (*txq_obj_new)(struct rte_eth_dev *dev, uint16_t idx);
+	int (*txq_obj_modify)(struct mlx5_txq_obj *obj,
+			      enum mlx5_txq_modify_type type, uint8_t dev_port);
+	void (*txq_obj_release)(struct mlx5_txq_obj *txq_obj);
 };
 
 struct mlx5_priv {
@@ -772,6 +818,7 @@ struct mlx5_priv {
 	unsigned int counter_fallback:1; /* Use counter fallback management. */
 	unsigned int mtr_en:1; /* Whether support meter. */
 	unsigned int mtr_reg_share:1; /* Whether support meter REG_C share. */
+	unsigned int sampler_en:1; /* Whether support sampler. */
 	uint16_t domain_id; /* Switch domain identifier. */
 	uint16_t vport_id; /* Associated VF vport index (if any). */
 	uint32_t vport_meta_tag; /* Used for vport index match ove VF LAG. */
@@ -983,7 +1030,7 @@ void *mlx5_vlan_vmwa_init(struct rte_eth_dev *dev, uint32_t ifindex);
 /* mlx5_trigger.c */
 
 int mlx5_dev_start(struct rte_eth_dev *dev);
-void mlx5_dev_stop(struct rte_eth_dev *dev);
+int mlx5_dev_stop(struct rte_eth_dev *dev);
 int mlx5_traffic_enable(struct rte_eth_dev *dev);
 void mlx5_traffic_disable(struct rte_eth_dev *dev);
 int mlx5_traffic_restart(struct rte_eth_dev *dev);

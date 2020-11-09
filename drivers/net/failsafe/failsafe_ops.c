@@ -147,7 +147,9 @@ fs_dev_start(struct rte_eth_dev *dev)
 		if (ret) {
 			if (!fs_err(sdev, ret))
 				continue;
-			rte_eth_dev_stop(PORT_ID(sdev));
+			if (fs_err(sdev, rte_eth_dev_stop(PORT_ID(sdev))) < 0)
+				ERROR("Failed to stop sub-device %u",
+				      SUB_ID(sdev));
 			fs_unlock(dev, 0);
 			return ret;
 		}
@@ -177,22 +179,32 @@ fs_set_queues_state_stop(struct rte_eth_dev *dev)
 						RTE_ETH_QUEUE_STATE_STOPPED;
 }
 
-static void
+static int
 fs_dev_stop(struct rte_eth_dev *dev)
 {
 	struct sub_device *sdev;
 	uint8_t i;
+	int ret;
 
 	fs_lock(dev, 0);
 	PRIV(dev)->state = DEV_STARTED - 1;
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_STARTED) {
-		rte_eth_dev_stop(PORT_ID(sdev));
+		ret = rte_eth_dev_stop(PORT_ID(sdev));
+		if (fs_err(sdev, ret) < 0) {
+			ERROR("Failed to stop device %u",
+			      PORT_ID(sdev));
+			PRIV(dev)->state = DEV_STARTED + 1;
+			fs_unlock(dev, 0);
+			return ret;
+		}
 		failsafe_rx_intr_uninstall_subdevice(sdev);
 		sdev->state = DEV_STARTED - 1;
 	}
 	failsafe_rx_intr_uninstall(dev);
 	fs_set_queues_state_stop(dev);
 	fs_unlock(dev, 0);
+
+	return 0;
 }
 
 static int
@@ -638,39 +650,53 @@ failsafe_eth_dev_close(struct rte_eth_dev *dev)
 {
 	struct sub_device *sdev;
 	uint8_t i;
-	int ret;
+	int err, ret = 0;
 
 	fs_lock(dev, 0);
 	failsafe_hotplug_alarm_cancel(dev);
-	if (PRIV(dev)->state == DEV_STARTED)
-		dev->dev_ops->dev_stop(dev);
+	if (PRIV(dev)->state == DEV_STARTED) {
+		ret = dev->dev_ops->dev_stop(dev);
+		if (ret != 0) {
+			fs_unlock(dev, 0);
+			return ret;
+		}
+	}
 	PRIV(dev)->state = DEV_ACTIVE - 1;
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		DEBUG("Closing sub_device %d", i);
 		failsafe_eth_dev_unregister_callbacks(sdev);
-		rte_eth_dev_close(PORT_ID(sdev));
+		err = rte_eth_dev_close(PORT_ID(sdev));
+		if (err) {
+			ret = ret ? ret : err;
+			ERROR("Error while closing sub-device %u",
+					PORT_ID(sdev));
+		}
 		sdev->state = DEV_ACTIVE - 1;
 	}
 	rte_eth_dev_callback_unregister(RTE_ETH_ALL, RTE_ETH_EVENT_NEW,
 					failsafe_eth_new_event_callback, dev);
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 		fs_unlock(dev, 0);
-		return 0;
+		return ret;
 	}
 	fs_dev_free_queues(dev);
-	ret = failsafe_eal_uninit(dev);
-	if (ret)
+	err = failsafe_eal_uninit(dev);
+	if (err) {
+		ret = ret ? ret : err;
 		ERROR("Error while uninitializing sub-EAL");
+	}
 	failsafe_args_free(dev);
 	rte_free(PRIV(dev)->subs);
 	rte_free(PRIV(dev)->mcast_addrs);
 	/* mac_addrs must not be freed alone because part of dev_private */
 	dev->data->mac_addrs = NULL;
 	fs_unlock(dev, 0);
-	ret = pthread_mutex_destroy(&PRIV(dev)->hotplug_mutex);
-	if (ret)
+	err = pthread_mutex_destroy(&PRIV(dev)->hotplug_mutex);
+	if (err) {
+		ret = ret ? ret : err;
 		ERROR("Error while destroying hotplug mutex");
-	return 0;
+	}
+	return ret;
 }
 
 static int

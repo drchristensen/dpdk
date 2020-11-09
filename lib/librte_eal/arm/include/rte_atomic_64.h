@@ -7,7 +7,7 @@
 #define _RTE_ATOMIC_ARM64_H_
 
 #ifndef RTE_FORCE_INTRINSICS
-#  error Platform must be built with CONFIG_RTE_FORCE_INTRINSICS
+#  error Platform must be built with RTE_FORCE_INTRINSICS
 #endif
 
 #ifdef __cplusplus
@@ -38,9 +38,9 @@ extern "C" {
 #define rte_io_rmb() rte_rmb()
 
 static __rte_always_inline void
-rte_atomic_thread_fence(int memory_order)
+rte_atomic_thread_fence(int memorder)
 {
-	__atomic_thread_fence(memory_order);
+	__atomic_thread_fence(memorder);
 }
 
 /*------------------------ 128 bit atomic operations -------------------------*/

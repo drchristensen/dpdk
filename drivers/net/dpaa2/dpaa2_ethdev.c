@@ -1195,7 +1195,7 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
  *  This routine disables all traffic on the adapter by issuing a
  *  global reset on the MAC.
  */
-static void
+static int
 dpaa2_dev_stop(struct rte_eth_dev *dev)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
@@ -1227,12 +1227,14 @@ dpaa2_dev_stop(struct rte_eth_dev *dev)
 	if (ret) {
 		DPAA2_PMD_ERR("Failure (ret %d) in disabling dpni %d dev",
 			      ret, priv->hw_id);
-		return;
+		return ret;
 	}
 
 	/* clear the recorded link status */
 	memset(&link, 0, sizeof(link));
 	rte_eth_linkstatus_set(dev, &link);
+
+	return 0;
 }
 
 static int
@@ -1283,10 +1285,6 @@ dpaa2_dev_close(struct rte_eth_dev *dev)
 
 	if (priv->extract.qos_extract_param)
 		rte_free((void *)(size_t)priv->extract.qos_extract_param);
-
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
 
 	DPAA2_PMD_INFO("%s: netdev deleted", dev->data->name);
 	return 0;
@@ -2795,6 +2793,8 @@ rte_dpaa2_probe(struct rte_dpaa2_driver *dpaa2_drv,
 
 	if (dpaa2_drv->drv_flags & RTE_DPAA2_DRV_INTR_LSC)
 		eth_dev->data->dev_flags |= RTE_ETH_DEV_INTR_LSC;
+
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Invoke PMD device initialization function */
 	diag = dpaa2_dev_init(eth_dev);

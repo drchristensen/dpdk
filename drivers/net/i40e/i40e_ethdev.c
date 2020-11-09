@@ -224,7 +224,7 @@ static int eth_i40e_dev_init(struct rte_eth_dev *eth_dev, void *init_params);
 static int eth_i40e_dev_uninit(struct rte_eth_dev *eth_dev);
 static int i40e_dev_configure(struct rte_eth_dev *dev);
 static int i40e_dev_start(struct rte_eth_dev *dev);
-static void i40e_dev_stop(struct rte_eth_dev *dev);
+static int i40e_dev_stop(struct rte_eth_dev *dev);
 static int i40e_dev_close(struct rte_eth_dev *dev);
 static int  i40e_dev_reset(struct rte_eth_dev *dev);
 static int i40e_dev_promiscuous_enable(struct rte_eth_dev *dev);
@@ -1465,6 +1465,7 @@ eth_i40e_dev_init(struct rte_eth_dev *dev, void *init_params __rte_unused)
 	intr_handle = &pci_dev->intr_handle;
 
 	rte_eth_copy_pci_info(dev, pci_dev);
+	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	pf->adapter = I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	pf->adapter->eth_dev = dev;
@@ -2542,7 +2543,7 @@ rx_err:
 	return ret;
 }
 
-static void
+static int
 i40e_dev_stop(struct rte_eth_dev *dev)
 {
 	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
@@ -2553,7 +2554,7 @@ i40e_dev_stop(struct rte_eth_dev *dev)
 	int i;
 
 	if (hw->adapter_stopped == 1)
-		return;
+		return 0;
 
 	if (dev->data->dev_conf.intr_conf.rxq == 0) {
 		rte_eal_alarm_cancel(i40e_dev_alarm_handler, dev);
@@ -2599,8 +2600,11 @@ i40e_dev_stop(struct rte_eth_dev *dev)
 	pf->tm_conf.committed = false;
 
 	hw->adapter_stopped = 1;
+	dev->data->dev_started = 0;
 
 	pf->adapter->rss_reta_updated = 0;
+
+	return 0;
 }
 
 static int
@@ -2628,7 +2632,7 @@ i40e_dev_close(struct rte_eth_dev *dev)
 		PMD_INIT_LOG(WARNING, "failed to free switch domain: %d", ret);
 
 
-	i40e_dev_stop(dev);
+	ret = i40e_dev_stop(dev);
 
 	/* Remove all mirror rules */
 	while ((p_mirror = TAILQ_FIRST(&pf->mirror_list))) {
@@ -2692,10 +2696,6 @@ i40e_dev_close(struct rte_eth_dev *dev)
 			(reg | I40E_PFGEN_CTRL_PFSWR_MASK));
 	I40E_WRITE_FLUSH(hw);
 
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
-
 	/* Clear PXE mode */
 	i40e_clear_pxe_mode(hw);
 
@@ -2745,7 +2745,7 @@ i40e_dev_close(struct rte_eth_dev *dev)
 	i40e_tm_conf_uninit(dev);
 
 	hw->adapter_closed = 1;
-	return 0;
+	return ret;
 }
 
 /*

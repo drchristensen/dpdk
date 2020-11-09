@@ -352,6 +352,7 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 				if (!rte_dev_is_probed(&dev2->device)) {
 					dev2->kdrv = dev->kdrv;
 					dev2->max_vfs = dev->max_vfs;
+					dev2->id = dev->id;
 					pci_name_set(dev2);
 					memmove(dev2->mem_resource,
 						dev->mem_resource,
@@ -365,7 +366,8 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 					 * need to do anything here unless...
 					 **/
 					if (dev2->kdrv != dev->kdrv ||
-						dev2->max_vfs != dev->max_vfs)
+						dev2->max_vfs != dev->max_vfs ||
+						memcmp(&dev2->id, &dev->id, sizeof(dev2->id)))
 						/*
 						 * This should not happens.
 						 * But it is still possible if
@@ -393,18 +395,6 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 	}
 
 	return 0;
-}
-
-int
-pci_update_device(const struct rte_pci_addr *addr)
-{
-	char filename[PATH_MAX];
-
-	snprintf(filename, sizeof(filename), "%s/" PCI_PRI_FMT,
-		 rte_pci_get_sysfs_path(), addr->domain, addr->bus, addr->devid,
-		 addr->function);
-
-	return pci_scan_one(filename, addr);
 }
 
 /*
