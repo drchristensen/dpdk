@@ -71,7 +71,7 @@
 
 /* eventdev defines */
 #define RTE_EVENT_MAX_DEVS 16
-#define RTE_EVENT_MAX_QUEUES_PER_DEV 64
+#define RTE_EVENT_MAX_QUEUES_PER_DEV 255
 #define RTE_EVENT_TIMER_ADAPTER_NUM_MAX 32
 #define RTE_EVENT_ETH_INTR_RING_SIZE 1024
 #define RTE_EVENT_CRYPTO_ADAPTER_MAX_INSTANCE 32
@@ -102,6 +102,9 @@
 #define RTE_LIBRTE_GRAPH_STATS 1
 
 /****** driver defines ********/
+
+/* Packet prefetching in PMDs */
+#define RTE_PMD_PACKET_PREFETCH 1
 
 /* QuickAssist device */
 /* Max. number of QuickAssist devices which can be attached */
@@ -134,5 +137,18 @@
 
 /* QEDE PMD defines */
 #define RTE_LIBRTE_QEDE_FW ""
+
+/* DLB PMD defines */
+#define RTE_LIBRTE_PMD_DLB_POLL_INTERVAL 1000
+#define RTE_LIBRTE_PMD_DLB_UMWAIT_CTL_STATE  0
+#undef RTE_LIBRTE_PMD_DLB_QUELL_STATS
+#define RTE_LIBRTE_PMD_DLB_SW_CREDIT_QUANTA 32
+
+/* DLB2 defines */
+#define RTE_LIBRTE_PMD_DLB2_POLL_INTERVAL 1000
+#define RTE_LIBRTE_PMD_DLB2_UMWAIT_CTL_STATE  0
+#undef RTE_LIBRTE_PMD_DLB2_QUELL_STATS
+#define RTE_LIBRTE_PMD_DLB2_SW_CREDIT_QUANTA 32
+#define RTE_PMD_DLB2_DEFAULT_DEPTH_THRESH 256
 
 #endif /* _RTE_CONFIG_H_ */

@@ -221,8 +221,8 @@ typedef union efx_oword_u {
 	efx_word_t eo_word[8];
 	efx_dword_t eo_dword[4];
 	efx_qword_t eo_qword[2];
-#if EFSYS_HAS_SSE2_M128
-	__m128i eo_u128[1];
+#if EFSYS_HAS_UINT128
+	efsys_uint128_t eo_u128[1];
 #endif
 #if EFSYS_HAS_UINT64
 	uint64_t eo_u64[2];
@@ -243,8 +243,8 @@ typedef union efx_xword_u {
 	efx_dword_t ex_dword[8];
 	efx_qword_t ex_qword[4];
 	efx_oword_t ex_oword[2];
-#if EFSYS_HAS_SSE2_M128
-	__m128i ex_u128[2];
+#if EFSYS_HAS_UINT128
+	efsys_uint128_t ex_u128[2];
 #endif
 #if EFSYS_HAS_UINT64
 	uint64_t ex_u64[4];
@@ -447,7 +447,7 @@ extern int fix_lint;
 	EFX_EXTRACT64((_xword).ex_u64[3], FIX_LINT(192), FIX_LINT(255),	\
 	    _low, _high))
 
-#define	EFX_EXTRACT_XWORD32(_oword, _low, _high)			\
+#define	EFX_EXTRACT_XWORD32(_xword, _low, _high)			\
 	(EFX_EXTRACT32((_xword).ex_u32[0], FIX_LINT(0), FIX_LINT(31),	\
 	    _low, _high) |						\
 	EFX_EXTRACT32((_xword).ex_u32[1], FIX_LINT(32), FIX_LINT(63),	\

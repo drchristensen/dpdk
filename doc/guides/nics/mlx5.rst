@@ -7,7 +7,7 @@
 MLX5 poll mode driver
 =====================
 
-The MLX5 poll mode driver library (**librte_pmd_mlx5**) provides support
+The MLX5 poll mode driver library (**librte_net_mlx5**) provides support
 for **Mellanox ConnectX-4**, **Mellanox ConnectX-4 Lx** , **Mellanox
 ConnectX-5**, **Mellanox ConnectX-6**, **Mellanox ConnectX-6 Dx** and
 **Mellanox BlueField** families of 10/25/40/50/100/200 Gb/s adapters
@@ -25,7 +25,7 @@ Design
 ------
 
 Besides its dependency on libibverbs (that implies libmlx5 and associated
-kernel support), librte_pmd_mlx5 relies heavily on system calls for control
+kernel support), librte_net_mlx5 relies heavily on system calls for control
 operations such as querying/updating the MTU and flow control parameters.
 
 For security reasons and robustness, this driver only deals with virtual
@@ -51,7 +51,7 @@ to get the best performances:
 - DevX allows to access firmware objects
 - Direct Rules manages flow steering at low-level hardware layer
 
-Enabling librte_pmd_mlx5 causes DPDK applications to be linked against
+Enabling librte_net_mlx5 causes DPDK applications to be linked against
 libibverbs.
 
 Features
@@ -59,7 +59,8 @@ Features
 
 - Multi arch support: x86_64, POWER8, ARMv8, i686.
 - Multiple TX and RX queues.
-- Support for scattered TX and RX frames.
+- Support for scattered TX frames.
+- Advanced support for scattered Rx frames with tunable buffer attributes.
 - IPv4, IPv6, TCPv4, TCPv6, UDPv4 and UDPv6 RSS on any number of queues.
 - RSS using different combinations of fields: L3 only, L4 only or both,
   and source only, destination only or both.
@@ -95,6 +96,7 @@ Features
 - Per packet no-inline hint flag to disable packet data copying into Tx descriptors.
 - Hardware LRO.
 - Hairpin.
+- Multiple-thread flow insertion.
 
 Limitations
 -----------
@@ -122,23 +124,29 @@ Limitations
 
   Will match any ipv4 packet (VLAN included).
 
-- When using DV flow engine (``dv_flow_en`` = 1), flow pattern without VLAN item
-  will match untagged packets only.
+- When using Verbs flow engine (``dv_flow_en`` = 0), multi-tagged(QinQ) match is not supported.
+
+- When using DV flow engine (``dv_flow_en`` = 1), flow pattern with any VLAN specification will match only single-tagged packets unless the ETH item ``type`` field is 0x88A8 or the VLAN item ``has_more_vlan`` field is 1.
   The flow rule::
 
         flow create 0 ingress pattern eth / ipv4 / end ...
 
-  Will match untagged packets only.
-  The flow rule::
+  Will match any ipv4 packet.
+  The flow rules::
 
-        flow create 0 ingress pattern eth / vlan / ipv4 / end ...
+        flow create 0 ingress pattern eth / vlan / end ...
+        flow create 0 ingress pattern eth has_vlan is 1 / end ...
+        flow create 0 ingress pattern eth type is 0x8100 / end ...
 
-  Will match tagged packets only, with any VLAN ID value.
-  The flow rule::
+  Will match single-tagged packets only, with any VLAN ID value.
+  The flow rules::
 
-        flow create 0 ingress pattern eth / vlan vid is 3 / ipv4 / end ...
+        flow create 0 ingress pattern eth type is 0x88A8 / end ...
+        flow create 0 ingress pattern eth / vlan has_more_vlan is 1 / end ...
 
-  Will only match tagged packets with VLAN ID 3.
+  Will match multi-tagged packets only, with any VLAN ID value.
+
+- A flow pattern with 2 sequential VLAN items is not supported.
 
 - VLAN pop offload command:
 
@@ -186,6 +194,9 @@ Limitations
    kernel network device will be added and cleaned up by the PMD when closing
    the device. In case of ungraceful program termination, some entries may
    remain present and should be removed manually by other means.
+
+- Buffer split offload is supported with regular Rx burst routine only,
+  no MPRQ feature or vectorized code can be engaged.
 
 - When Multi-Packet Rx queue is configured (``mprq_en``), a Rx packet can be
   externally attached to a user-provided mbuf with having EXT_ATTACHED_MBUF in
@@ -237,9 +248,8 @@ Limitations
   ``txq_inline_max`` and ``txq_inline_mpw`` devargs keys.
 
 - To provide the packet send scheduling on mbuf timestamps the ``tx_pp``
-  parameter should be specified, RTE_MBUF_DYNFIELD_TIMESTAMP_NAME and
-  RTE_MBUF_DYNFLAG_TIMESTAMP_NAME should be registered by application.
-  When PMD sees the RTE_MBUF_DYNFLAG_TIMESTAMP_NAME set on the packet
+  parameter should be specified.
+  When PMD sees the RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME set on the packet
   being sent it tries to synchronize the time of packet appearing on
   the wire with the specified packet timestamp. It the specified one
   is in the past it should be ignored, if one is in the distant future
@@ -299,6 +309,9 @@ Limitations
         eth (with or without vlan) / ipv4 or ipv6 / tcp / payload
 
     Other TCP packets (e.g. with MPLS label) received on Rx queue with LRO enabled, will be received with bad checksum.
+  - LRO packet aggregation is performed by HW only for packet size larger than
+    ``lro_min_mss_size``. This value is reported on device start, when debug
+    mode is enabled.
 
 - CRC:
 
@@ -311,6 +324,18 @@ Limitations
   - Supports ``RTE_FLOW_ACTION_TYPE_SAMPLE`` action only within NIC Rx and E-Switch steering domain.
   - The E-Switch Sample flow must have the eswitch_manager VPORT destination (PF or ECPF) and no additional actions.
   - For ConnectX-5, the ``RTE_FLOW_ACTION_TYPE_SAMPLE`` is typically used as first action in the E-Switch egress flow if with header modify or encapsulation actions.
+
+- IPv6 header item 'proto' field, indicating the next header protocol, should
+  not be set as extension header.
+  In case the next header is an extension header, it should not be specified in
+  IPv6 header item 'proto' field.
+  The last extension header item 'next header' field can specify the following
+  header protocol type.
+
+- Hairpin:
+
+  - Hairpin between two ports could only manual binding and explicit Tx flow mode. For single port hairpin, all the combinations of auto/manual binding and explicit/implicit Tx flow mode could be supported.
+  - Hairpin in switchdev SR-IOV mode is not supported till now.
 
 Statistics
 ----------
@@ -370,7 +395,7 @@ Environment variables
 Run-time configuration
 ~~~~~~~~~~~~~~~~~~~~~~
 
-- librte_pmd_mlx5 brings kernel network interfaces up during initialization
+- librte_net_mlx5 brings kernel network interfaces up during initialization
   because it is affected by their state. Forcing them down prevents packets
   reception.
 
@@ -406,6 +431,14 @@ Driver options
 
   A nonzero value enables the compression of CQE on RX side. This feature
   allows to save PCI bandwidth and improve performance. Enabled by default.
+  Different compression formats are supported in order to achieve the best
+  performance for different traffic patterns. Hash RSS format is the default.
+
+  Specifying 2 as a ``rxq_cqe_comp_en`` value selects Flow Tag format for
+  better compression rate in case of RTE Flow Mark traffic.
+  Specifying 3 as a ``rxq_cqe_comp_en`` value selects Checksum format.
+  Specifying 4 as a ``rxq_cqe_comp_en`` value selects L3/L4 Header format for
+  better compression rate in case of mixed TCP/UDP and IPv4/IPv6 traffic.
 
   Supported on:
 
@@ -778,6 +811,9 @@ Driver options
     24 bits. The actual supported width can be retrieved in runtime by
     series of rte_flow_validate() trials.
 
+  - 3, this engages tunnel offload mode. In E-Switch configuration, that
+    mode implicitly activates ``dv_xmeta_en=1``.
+
   +------+-----------+-----------+-------------+-------------+
   | Mode | ``MARK``  | ``META``  | ``META`` Tx | FDB/Through |
   +======+===========+===========+=============+=============+
@@ -1000,7 +1036,7 @@ DPDK and must be installed separately:
 
 - **libibverbs**
 
-  User space Verbs framework used by librte_pmd_mlx5. This library provides
+  User space Verbs framework used by librte_net_mlx5. This library provides
   a generic interface between the kernel and low-level user space drivers
   such as libmlx5.
 
@@ -1444,13 +1480,13 @@ The application should re-create the flows as required after the port restart.
 Notes for testpmd
 -----------------
 
-Compared to librte_pmd_mlx4 that implements a single RSS configuration per
-port, librte_pmd_mlx5 supports per-protocol RSS configuration.
+Compared to librte_net_mlx4 that implements a single RSS configuration per
+port, librte_net_mlx5 supports per-protocol RSS configuration.
 
 Since ``testpmd`` defaults to IP RSS mode and there is currently no
 command-line parameter to enable additional protocols (UDP and TCP as well
 as IP), the following commands must be entered from its CLI to get the same
-behavior as librte_pmd_mlx4::
+behavior as librte_net_mlx4::
 
    > port stop all
    > port config all rss all
@@ -1460,7 +1496,7 @@ Usage example
 -------------
 
 This section demonstrates how to launch **testpmd** with Mellanox
-ConnectX-4/ConnectX-5/ConnectX-6/BlueField devices managed by librte_pmd_mlx5.
+ConnectX-4/ConnectX-5/ConnectX-6/BlueField devices managed by librte_net_mlx5.
 
 #. Load the kernel modules::
 
@@ -1488,7 +1524,7 @@ ConnectX-4/ConnectX-5/ConnectX-6/BlueField devices managed by librte_pmd_mlx5.
       eth32
       eth33
 
-#. Optionally, retrieve their PCI bus addresses for whitelisting::
+#. Optionally, retrieve their PCI bus addresses for to be used with the allow list::
 
       {
           for intf in eth2 eth3 eth4 eth5;
@@ -1496,14 +1532,14 @@ ConnectX-4/ConnectX-5/ConnectX-6/BlueField devices managed by librte_pmd_mlx5.
               (cd "/sys/class/net/${intf}/device/" && pwd -P);
           done;
       } |
-      sed -n 's,.*/\(.*\),-w \1,p'
+      sed -n 's,.*/\(.*\),-a \1,p'
 
    Example output::
 
-      -w 0000:05:00.1
-      -w 0000:06:00.0
-      -w 0000:06:00.1
-      -w 0000:05:00.0
+      -a 0000:05:00.1
+      -a 0000:06:00.0
+      -a 0000:06:00.1
+      -a 0000:05:00.0
 
 #. Request huge pages::
 
@@ -1511,47 +1547,47 @@ ConnectX-4/ConnectX-5/ConnectX-6/BlueField devices managed by librte_pmd_mlx5.
 
 #. Start testpmd with basic parameters::
 
-      testpmd -l 8-15 -n 4 -w 05:00.0 -w 05:00.1 -w 06:00.0 -w 06:00.1 -- --rxq=2 --txq=2 -i
+      testpmd -l 8-15 -n 4 -a 05:00.0 -a 05:00.1 -a 06:00.0 -a 06:00.1 -- --rxq=2 --txq=2 -i
 
    Example output::
 
       [...]
       EAL: PCI device 0000:05:00.0 on NUMA socket 0
-      EAL:   probe driver: 15b3:1013 librte_pmd_mlx5
-      PMD: librte_pmd_mlx5: PCI information matches, using device "mlx5_0" (VF: false)
-      PMD: librte_pmd_mlx5: 1 port(s) detected
-      PMD: librte_pmd_mlx5: port 1 MAC address is e4:1d:2d:e7:0c:fe
+      EAL:   probe driver: 15b3:1013 librte_net_mlx5
+      PMD: librte_net_mlx5: PCI information matches, using device "mlx5_0" (VF: false)
+      PMD: librte_net_mlx5: 1 port(s) detected
+      PMD: librte_net_mlx5: port 1 MAC address is e4:1d:2d:e7:0c:fe
       EAL: PCI device 0000:05:00.1 on NUMA socket 0
-      EAL:   probe driver: 15b3:1013 librte_pmd_mlx5
-      PMD: librte_pmd_mlx5: PCI information matches, using device "mlx5_1" (VF: false)
-      PMD: librte_pmd_mlx5: 1 port(s) detected
-      PMD: librte_pmd_mlx5: port 1 MAC address is e4:1d:2d:e7:0c:ff
+      EAL:   probe driver: 15b3:1013 librte_net_mlx5
+      PMD: librte_net_mlx5: PCI information matches, using device "mlx5_1" (VF: false)
+      PMD: librte_net_mlx5: 1 port(s) detected
+      PMD: librte_net_mlx5: port 1 MAC address is e4:1d:2d:e7:0c:ff
       EAL: PCI device 0000:06:00.0 on NUMA socket 0
-      EAL:   probe driver: 15b3:1013 librte_pmd_mlx5
-      PMD: librte_pmd_mlx5: PCI information matches, using device "mlx5_2" (VF: false)
-      PMD: librte_pmd_mlx5: 1 port(s) detected
-      PMD: librte_pmd_mlx5: port 1 MAC address is e4:1d:2d:e7:0c:fa
+      EAL:   probe driver: 15b3:1013 librte_net_mlx5
+      PMD: librte_net_mlx5: PCI information matches, using device "mlx5_2" (VF: false)
+      PMD: librte_net_mlx5: 1 port(s) detected
+      PMD: librte_net_mlx5: port 1 MAC address is e4:1d:2d:e7:0c:fa
       EAL: PCI device 0000:06:00.1 on NUMA socket 0
-      EAL:   probe driver: 15b3:1013 librte_pmd_mlx5
-      PMD: librte_pmd_mlx5: PCI information matches, using device "mlx5_3" (VF: false)
-      PMD: librte_pmd_mlx5: 1 port(s) detected
-      PMD: librte_pmd_mlx5: port 1 MAC address is e4:1d:2d:e7:0c:fb
+      EAL:   probe driver: 15b3:1013 librte_net_mlx5
+      PMD: librte_net_mlx5: PCI information matches, using device "mlx5_3" (VF: false)
+      PMD: librte_net_mlx5: 1 port(s) detected
+      PMD: librte_net_mlx5: port 1 MAC address is e4:1d:2d:e7:0c:fb
       Interactive-mode selected
       Configuring Port 0 (socket 0)
-      PMD: librte_pmd_mlx5: 0x8cba80: TX queues number update: 0 -> 2
-      PMD: librte_pmd_mlx5: 0x8cba80: RX queues number update: 0 -> 2
+      PMD: librte_net_mlx5: 0x8cba80: TX queues number update: 0 -> 2
+      PMD: librte_net_mlx5: 0x8cba80: RX queues number update: 0 -> 2
       Port 0: E4:1D:2D:E7:0C:FE
       Configuring Port 1 (socket 0)
-      PMD: librte_pmd_mlx5: 0x8ccac8: TX queues number update: 0 -> 2
-      PMD: librte_pmd_mlx5: 0x8ccac8: RX queues number update: 0 -> 2
+      PMD: librte_net_mlx5: 0x8ccac8: TX queues number update: 0 -> 2
+      PMD: librte_net_mlx5: 0x8ccac8: RX queues number update: 0 -> 2
       Port 1: E4:1D:2D:E7:0C:FF
       Configuring Port 2 (socket 0)
-      PMD: librte_pmd_mlx5: 0x8cdb10: TX queues number update: 0 -> 2
-      PMD: librte_pmd_mlx5: 0x8cdb10: RX queues number update: 0 -> 2
+      PMD: librte_net_mlx5: 0x8cdb10: TX queues number update: 0 -> 2
+      PMD: librte_net_mlx5: 0x8cdb10: RX queues number update: 0 -> 2
       Port 2: E4:1D:2D:E7:0C:FA
       Configuring Port 3 (socket 0)
-      PMD: librte_pmd_mlx5: 0x8ceb58: TX queues number update: 0 -> 2
-      PMD: librte_pmd_mlx5: 0x8ceb58: RX queues number update: 0 -> 2
+      PMD: librte_net_mlx5: 0x8ceb58: TX queues number update: 0 -> 2
+      PMD: librte_net_mlx5: 0x8ceb58: RX queues number update: 0 -> 2
       Port 3: E4:1D:2D:E7:0C:FB
       Checking link statuses...
       Port 0 Link Up - speed 40000 Mbps - full-duplex

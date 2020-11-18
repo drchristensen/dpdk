@@ -150,6 +150,7 @@ static void bnxt_tpa_start(struct bnxt_rx_queue *rxq,
 	tpa_info->mbuf = mbuf;
 	tpa_info->len = rte_le_to_cpu_32(tpa_start->len);
 
+	mbuf->data_off = RTE_PKTMBUF_HEADROOM;
 	mbuf->nb_segs = 1;
 	mbuf->next = NULL;
 	mbuf->pkt_len = rte_le_to_cpu_32(tpa_start->len);
@@ -305,7 +306,6 @@ static inline struct rte_mbuf *bnxt_tpa_end(
 	mbuf = tpa_info->mbuf;
 	RTE_ASSERT(mbuf != NULL);
 
-	rte_prefetch0(mbuf);
 	if (agg_bufs) {
 		bnxt_rx_pages(rxq, mbuf, raw_cp_cons, agg_bufs, tpa_info);
 	}
@@ -606,7 +606,7 @@ bnxt_ulp_set_mark_in_mbuf(struct bnxt *bp, struct rx_pkt_cmpl_hi *rxcmp1,
 			return mark_id;
 		/* Got the mark, write it to the mbuf and return */
 		mbuf->hash.fdir.hi = mark_id;
-		mbuf->udata64 = (cfa_code & 0xffffffffull) << 32;
+		*bnxt_cfa_code_dynfield(mbuf) = cfa_code & 0xffffffffull;
 		mbuf->hash.fdir.id = rxcmp1->cfa_code;
 		mbuf->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
 		return mark_id;
@@ -733,8 +733,6 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	if (mbuf == NULL)
 		return -EBUSY;
 
-	rte_prefetch0(mbuf);
-
 	mbuf->data_off = RTE_PKTMBUF_HEADROOM;
 	mbuf->nb_segs = 1;
 	mbuf->next = NULL;
@@ -842,8 +840,7 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		return 0;
 
 	/* If Rx Q was stopped return */
-	if (unlikely(!rxq->rx_started ||
-		     !rte_spinlock_trylock(&rxq->lock)))
+	if (unlikely(!rxq->rx_started))
 		return 0;
 
 #if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
@@ -867,7 +864,6 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	/* Handle RX burst request */
 	while (1) {
 		cons = RING_CMP(cpr->cp_ring_struct, raw_cons);
-		rte_prefetch0(&cpr->cp_desc_ring[cons]);
 		rxcmp = (struct rx_pkt_cmpl *)&cpr->cp_desc_ring[cons];
 
 		if (!CMP_VALID(rxcmp, raw_cons, cpr->cp_ring_struct))
@@ -945,8 +941,6 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	}
 
 done:
-	rte_spinlock_unlock(&rxq->lock);
-
 	return nb_rx_pkts;
 }
 

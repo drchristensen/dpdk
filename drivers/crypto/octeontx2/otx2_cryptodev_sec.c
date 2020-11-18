@@ -323,7 +323,7 @@ crypto_sec_ipsec_outb_session_create(struct rte_cryptodev *crypto_dev,
 	inst.egrp = OTX2_CPT_EGRP_SE;
 	inst.cptr = rte_mempool_virt2iova(sa);
 
-	lp->ucmd_w3 = inst.u64[7];
+	lp->cpt_inst_w7 = inst.u64[7];
 	lp->ucmd_opcode = (lp->ctx_len << 8) |
 				(OTX2_IPSEC_PO_PROCESS_IPSEC_OUTB);
 
@@ -407,7 +407,7 @@ crypto_sec_ipsec_inb_session_create(struct rte_cryptodev *crypto_dev,
 	inst.egrp = OTX2_CPT_EGRP_SE;
 	inst.cptr = rte_mempool_virt2iova(sa);
 
-	lp->ucmd_w3 = inst.u64[7];
+	lp->cpt_inst_w7 = inst.u64[7];
 	lp->ucmd_opcode = (lp->ctx_len << 8) |
 				(OTX2_IPSEC_PO_PROCESS_IPSEC_INB);
 
@@ -454,6 +454,9 @@ otx2_crypto_sec_session_create(void *device,
 
 	if (conf->action_type != RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL)
 		return -ENOTSUP;
+
+	if (rte_security_dynfield_register() < 0)
+		return -rte_errno;
 
 	if (rte_mempool_get(mempool, (void **)&priv)) {
 		otx2_err("Could not allocate security session private data");
@@ -514,7 +517,7 @@ otx2_crypto_sec_set_pkt_mdata(void *device __rte_unused,
 			      struct rte_mbuf *m, void *params __rte_unused)
 {
 	/* Set security session as the pkt metadata */
-	m->udata64 = (uint64_t)session;
+	*rte_security_dynfield(m) = (rte_security_dynfield_t)session;
 
 	return 0;
 }

@@ -51,6 +51,9 @@ static uint64_t start_cycles;
 static uint64_t hz;
 static uint8_t iface_idx;
 
+static uint64_t timestamp_rx_dynflag;
+static int timestamp_dynfield_offset = -1;
+
 struct queue_stat {
 	volatile unsigned long pkts;
 	volatile unsigned long bytes;
@@ -265,9 +268,11 @@ eth_pcap_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		}
 
 		mbuf->pkt_len = (uint16_t)header.caplen;
-		mbuf->timestamp = (uint64_t)header.ts.tv_sec * 1000000
-							+ header.ts.tv_usec;
-		mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+		*RTE_MBUF_DYNFIELD(mbuf, timestamp_dynfield_offset,
+			rte_mbuf_timestamp_t *) =
+				(uint64_t)header.ts.tv_sec * 1000000 +
+				header.ts.tv_usec;
+		mbuf->ol_flags |= timestamp_rx_dynflag;
 		mbuf->port = pcap_q->port_id;
 		bufs[num_rx] = mbuf;
 		num_rx++;
@@ -1372,6 +1377,13 @@ pmd_pcap_probe(struct rte_vdev_device *dev)
 	gettimeofday(&start_time, NULL);
 	start_cycles = rte_get_timer_cycles();
 	hz = rte_get_timer_hz();
+
+	ret = rte_mbuf_dyn_rx_timestamp_register(&timestamp_dynfield_offset,
+			&timestamp_rx_dynflag);
+	if (ret != 0) {
+		PMD_LOG(ERR, "Failed to register Rx timestamp field/flag");
+		return -1;
+	}
 
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
 		eth_dev = rte_eth_dev_attach_secondary(name);

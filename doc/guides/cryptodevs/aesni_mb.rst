@@ -5,7 +5,7 @@ AESN-NI Multi Buffer Crypto Poll Mode Driver
 ============================================
 
 
-The AESNI MB PMD (**librte_pmd_aesni_mb**) provides poll mode crypto driver
+The AESNI MB PMD (**librte_crypto_aesni_mb**) provides poll mode crypto driver
 support for utilizing Intel multi buffer library, see the white paper
 `Fast Multi-buffer IPsec Implementations on Intel® Architecture Processors
 <https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/fast-multi-buffer-ipsec-implementations-ia-processors-paper.pdf>`_.
@@ -85,8 +85,8 @@ Installation
 To build DPDK with the AESNI_MB_PMD the user is required to download the multi-buffer
 library from `here <https://github.com/01org/intel-ipsec-mb>`_
 and compile it on their user system before building DPDK.
-The latest version of the library supported by this PMD is v0.54, which
-can be downloaded from `<https://github.com/01org/intel-ipsec-mb/archive/v0.54.zip>`_.
+The latest version of the library supported by this PMD is v0.55, which
+can be downloaded from `<https://github.com/01org/intel-ipsec-mb/archive/v0.55.zip>`_.
 
 .. code-block:: console
 
@@ -130,7 +130,7 @@ and the Multi-Buffer library version supported by them:
    18.02           0.48
    18.05 - 19.02   0.49 - 0.52
    19.05 - 19.08   0.52
-   19.11+          0.52 - 0.54
+   19.11+          0.52 - 0.55
    ==============  ============================
 
 

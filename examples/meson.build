@@ -40,20 +40,13 @@ all_examples = [
 	'server_node_efd/node',
 	'server_node_efd/server',
 	'service_cores',
-	'skeleton', 'tep_termination',
+	'skeleton',
 	'timer', 'vdpa',
 	'vhost', 'vhost_crypto',
 	'vhost_blk', 'vm_power_manager',
 	'vm_power_manager/guest_cli',
 	'vmdq', 'vmdq_dcb',
 ]
-# install all example code on install - irrespective of whether the example in
-# question is to be built as part of this build or not.
-foreach ex:all_examples
-	install_subdir(ex,
-			install_dir: get_option('datadir') + '/dpdk/examples',
-			exclude_files: 'meson.build')
-endforeach
 
 if get_option('examples') == ''
 	subdir_done()

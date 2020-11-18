@@ -2,21 +2,6 @@
  * Copyright(c) 2018-2019 Hisilicon Limited.
  */
 
-#include <errno.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/queue.h>
-#include <inttypes.h>
-#include <unistd.h>
-#include <rte_bus_pci.h>
-#include <rte_common.h>
-#include <rte_cycles.h>
-#include <rte_dev.h>
-#include <rte_eal.h>
-#include <rte_ether.h>
-#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_io.h>
 
@@ -213,7 +198,6 @@ hns3_cmd_csq_clean(struct hns3_hw *hw)
 	int clean;
 
 	head = hns3_read_dev(hw, HNS3_CMDQ_TX_HEAD_REG);
-
 	if (!is_valid_csq_clean_head(csq, head)) {
 		hns3_err(hw, "wrong cmd head (%u, %u-%u)", head,
 			    csq->next_to_use, csq->next_to_clean);

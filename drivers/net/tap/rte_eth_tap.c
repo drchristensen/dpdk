@@ -303,6 +303,7 @@ tap_verify_csum(struct rte_mbuf *mbuf)
 	uint16_t cksum = 0;
 	void *l3_hdr;
 	void *l4_hdr;
+	struct rte_udp_hdr *udp_hdr;
 
 	if (l2 == RTE_PTYPE_L2_ETHER_VLAN)
 		l2_len += 4;
@@ -349,10 +350,23 @@ tap_verify_csum(struct rte_mbuf *mbuf)
 		/* Don't verify checksum for multi-segment packets. */
 		if (mbuf->nb_segs > 1)
 			return;
-		if (l3 == RTE_PTYPE_L3_IPV4)
+		if (l3 == RTE_PTYPE_L3_IPV4) {
+			if (l4 == RTE_PTYPE_L4_UDP) {
+				udp_hdr = (struct rte_udp_hdr *)l4_hdr;
+				if (udp_hdr->dgram_cksum == 0) {
+					/*
+					 * For IPv4, a zero UDP checksum
+					 * indicates that the sender did not
+					 * generate one [RFC 768].
+					 */
+					mbuf->ol_flags |= PKT_RX_L4_CKSUM_NONE;
+					return;
+				}
+			}
 			cksum = ~rte_ipv4_udptcp_cksum(l3_hdr, l4_hdr);
-		else if (l3 == RTE_PTYPE_L3_IPV6)
+		} else if (l3 == RTE_PTYPE_L3_IPV6) {
 			cksum = ~rte_ipv6_udptcp_cksum(l3_hdr, l4_hdr);
+		}
 		mbuf->ol_flags |= cksum ?
 			PKT_RX_L4_CKSUM_BAD :
 			PKT_RX_L4_CKSUM_GOOD;
@@ -751,8 +765,16 @@ pmd_tx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			if (num_tso_mbufs < 0)
 				break;
 
-			mbuf = gso_mbufs;
-			num_mbufs = num_tso_mbufs;
+			if (num_tso_mbufs >= 1) {
+				mbuf = gso_mbufs;
+				num_mbufs = num_tso_mbufs;
+			} else {
+				/* 0 means it can be transmitted directly
+				 * without gso.
+				 */
+				mbuf = &mbuf_in;
+				num_mbufs = 1;
+			}
 		} else {
 			/* stats.errs will be incremented */
 			if (rte_pktmbuf_pkt_len(mbuf_in) > max_size)

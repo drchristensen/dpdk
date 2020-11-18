@@ -18,6 +18,8 @@
 #include "mlx5_prm.h"
 #include "mlx5_devx_cmds.h"
 
+/* Reported driver name. */
+#define MLX5_DRIVER_NAME "mlx5_pci"
 
 /* Bit-field manipulation. */
 #define BITFIELD_DECLARE(bf, type, size) \
@@ -132,6 +134,8 @@ enum {
 	PCI_DEVICE_ID_MELLANOX_CONNECTX6DXVF = 0x101e,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX6DXBF = 0xa2d6,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX6LX = 0x101f,
+	PCI_DEVICE_ID_MELLANOX_CONNECTX7 = 0x1021,
+	PCI_DEVICE_ID_MELLANOX_CONNECTX7BF = 0Xa2dc,
 };
 
 /* Maximum number of simultaneous unicast MAC addresses. */
@@ -257,6 +261,8 @@ int64_t mlx5_get_dbr(void *ctx,  struct mlx5_dbr_page_list *head,
 __rte_internal
 int32_t mlx5_release_dbr(struct mlx5_dbr_page_list *head, uint32_t umem_id,
 			 uint64_t offset);
+__rte_internal
+void *mlx5_devx_alloc_uar(void *ctx, int mapping);
 extern uint8_t haswell_broadwell_cpu;
 
 __rte_internal

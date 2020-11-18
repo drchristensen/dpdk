@@ -32,6 +32,8 @@ CFLAGS += -O3 $(shell $(PKGCONF) --cflags libdpdk)
 LDFLAGS_SHARED = $(shell $(PKGCONF) --libs libdpdk)
 LDFLAGS_STATIC = $(shell $(PKGCONF) --static --libs libdpdk)
 
+CFLAGS += -DALLOW_EXPERIMENTAL_API
+
 ifneq ($(shell $(PKGCONF) --atleast-version=0.9.3 libvirt; echo $$?), 0)
 $(error vm_power_manager requires libvirt >= 0.9.3)
 endif
@@ -44,7 +46,7 @@ CFLAGS += -DUSE_JANSSON
 endif
 
 # for shared library builds, we need to explicitly link these PMDs
-LDFLAGS_SHARED += -lrte_pmd_ixgbe -lrte_pmd_i40e -lrte_pmd_bnxt
+LDFLAGS_SHARED += -lrte_net_ixgbe -lrte_net_i40e -lrte_net_bnxt
 
 build/$(APP)-shared: $(SRCS-y) Makefile $(PC_FILE) | build
 	$(CC) $(CFLAGS) $(SRCS-y) -o $@ $(LDFLAGS) $(LDFLAGS_SHARED)

@@ -149,10 +149,7 @@ extern "C" {
  */
 #define PKT_RX_LRO           (1ULL << 16)
 
-/**
- * Indicate that the timestamp field in the mbuf is valid.
- */
-#define PKT_RX_TIMESTAMP     (1ULL << 17)
+/* There is no flag defined at offset 17. It is free for any future use. */
 
 /**
  * Indicate that security offload processing was applied on the RX packet.
@@ -279,7 +276,7 @@ extern "C" {
  * mbuf 'vlan_tci' & 'vlan_tci_outer' must be valid when this flag is set.
  */
 #define PKT_TX_QINQ        (1ULL << 49)
-/* this old name is deprecated */
+/** This old name is deprecated. */
 #define PKT_TX_QINQ_PKT    PKT_TX_QINQ
 
 /**
@@ -589,23 +586,11 @@ struct rte_mbuf {
 
 	uint16_t buf_len;         /**< Length of segment buffer. */
 
-	/** Valid if PKT_RX_TIMESTAMP is set. The unit and time reference
-	 * are not normalized but are always the same for a given port.
-	 * Some devices allow to query rte_eth_read_clock that will return the
-	 * current device timestamp.
-	 */
-	uint64_t timestamp;
+	struct rte_mempool *pool; /**< Pool from which mbuf was allocated. */
 
 	/* second cache line - fields only used in slow path or on TX */
 	RTE_MARKER cacheline1 __rte_cache_min_aligned;
 
-	RTE_STD_C11
-	union {
-		void *userdata;   /**< Can be used for external metadata */
-		uint64_t udata64; /**< Allow 8-byte userdata on 32-bit */
-	};
-
-	struct rte_mempool *pool; /**< Pool from which mbuf was allocated. */
 	struct rte_mbuf *next;    /**< Next segment of scattered packet. */
 
 	/* fields to support TX offloads */
@@ -646,6 +631,11 @@ struct rte_mbuf {
 		};
 	};
 
+	/** Shared data for external buffer attached to mbuf. See
+	 * rte_pktmbuf_attach_extbuf().
+	 */
+	struct rte_mbuf_ext_shared_info *shinfo;
+
 	/** Size of the application private data. In case of an indirect
 	 * mbuf, it stores the direct mbuf private data size.
 	 */
@@ -654,15 +644,7 @@ struct rte_mbuf {
 	/** Timesync flags for use with IEEE1588. */
 	uint16_t timesync;
 
-	/** Sequence number. See also rte_reorder_insert(). */
-	uint32_t seqn;
-
-	/** Shared data for external buffer attached to mbuf. See
-	 * rte_pktmbuf_attach_extbuf().
-	 */
-	struct rte_mbuf_ext_shared_info *shinfo;
-
-	uint64_t dynfield1[2]; /**< Reserved for dynamic fields. */
+	uint32_t dynfield1[9]; /**< Reserved for dynamic fields. */
 } __rte_cache_aligned;
 
 /**
@@ -679,7 +661,7 @@ struct rte_mbuf_ext_shared_info {
 	uint16_t refcnt;
 };
 
-/**< Maximum number of nb_segs allowed. */
+/** Maximum number of nb_segs allowed. */
 #define RTE_MBUF_MAX_NB_SEGS	UINT16_MAX
 
 /**
@@ -707,7 +689,10 @@ struct rte_mbuf_ext_shared_info {
 #define RTE_MBUF_DIRECT(mb) \
 	(!((mb)->ol_flags & (IND_ATTACHED_MBUF | EXT_ATTACHED_MBUF)))
 
-#define MBUF_INVALID_PORT UINT16_MAX
+/** Uninitialized or unspecified port. */
+#define RTE_MBUF_PORT_INVALID UINT16_MAX
+/** For backwards compatibility. */
+#define MBUF_INVALID_PORT RTE_MBUF_PORT_INVALID
 
 /**
  * A macro that points to an offset into the data in the mbuf.

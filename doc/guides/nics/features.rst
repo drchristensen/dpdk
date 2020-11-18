@@ -261,7 +261,7 @@ Supports enabling/disabling receiving multicast frames.
 Unicast MAC filter
 ------------------
 
-Supports adding MAC addresses to enable whitelist filtering to accept packets.
+Supports adding MAC addresses to enable incoming filtering of packets.
 
 * **[implements] eth_dev_ops**: ``mac_addr_set``, ``mac_addr_add``, ``mac_addr_remove``.
 * **[implements] rte_eth_dev_data**: ``mac_addrs``.
@@ -929,11 +929,8 @@ Other dev ops not represented by a Feature
 * ``vlan_strip_queue_set``
 * ``vlan_pvid_set``
 * ``rx_queue_count``
-* ``l2_tunnel_offload_set``
 * ``uc_hash_table_set``
 * ``uc_all_hash_table_set``
 * ``udp_tunnel_port_add``
 * ``udp_tunnel_port_del``
-* ``l2_tunnel_eth_type_conf``
-* ``l2_tunnel_offload_set``
 * ``tx_pkt_prepare``
