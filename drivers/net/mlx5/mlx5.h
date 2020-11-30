@@ -44,6 +44,8 @@ enum mlx5_ipool_index {
 	MLX5_IPOOL_JUMP, /* Pool for jump resource. */
 	MLX5_IPOOL_SAMPLE, /* Pool for sample resource. */
 	MLX5_IPOOL_DEST_ARRAY, /* Pool for destination array resource. */
+	MLX5_IPOOL_TUNNEL_ID, /* Pool for tunnel offload context */
+	MLX5_IPOOL_TNL_TBL_ID, /* Pool for tunnel table ID. */
 #endif
 	MLX5_IPOOL_MTR, /* Pool for meter resource. */
 	MLX5_IPOOL_MCP, /* Pool for metadata resource. */
@@ -51,8 +53,6 @@ enum mlx5_ipool_index {
 	MLX5_IPOOL_MLX5_FLOW, /* Pool for mlx5 flow handle. */
 	MLX5_IPOOL_RTE_FLOW, /* Pool for rte_flow. */
 	MLX5_IPOOL_RSS_EXPANTION_FLOW_ID, /* Pool for Queue/RSS flow ID. */
-	MLX5_IPOOL_TUNNEL_ID, /* Pool for flow tunnel ID. */
-	MLX5_IPOOL_TNL_TBL_ID, /* Pool for tunnel table ID. */
 	MLX5_IPOOL_RSS_SHARED_ACTIONS, /* Pool for RSS shared actions. */
 	MLX5_IPOOL_MAX,
 };
@@ -705,6 +705,7 @@ struct mlx5_flex_parser_profiles {
 struct mlx5_dev_ctx_shared {
 	LIST_ENTRY(mlx5_dev_ctx_shared) next;
 	uint32_t refcnt;
+	uint16_t bond_dev; /* Bond primary device id. */
 	uint32_t devx:1; /* Opened with DV. */
 	uint32_t flow_hit_aso_en:1; /* Flow Hit ASO is supported. */
 	uint32_t eqn; /* Event Queue number. */
@@ -790,6 +791,8 @@ struct mlx5_flow_rss_desc {
 	uint32_t key_len; /**< RSS hash key len. */
 	uint32_t tunnel; /**< Queue in tunnel. */
 	uint32_t shared_rss; /**< Shared RSS index. */
+	struct mlx5_ind_table_obj *ind_tbl;
+	/**< Indirection table for shared RSS hash RX queues. */
 	union {
 		uint16_t *queue; /**< Destination queues. */
 		const uint16_t *const_q; /**< Const pointer convert. */
@@ -829,7 +832,7 @@ struct mlx5_ind_table_obj {
 		struct mlx5_devx_obj *rqt; /* DevX RQT object. */
 	};
 	uint32_t queues_n; /**< Number of queues in the list. */
-	uint16_t queues[]; /**< Queue list. */
+	uint16_t *queues; /**< Queue list. */
 };
 
 /* Hash Rx queue. */
@@ -905,6 +908,10 @@ struct mlx5_obj_ops {
 	void (*rxq_obj_release)(struct mlx5_rxq_obj *rxq_obj);
 	int (*ind_table_new)(struct rte_eth_dev *dev, const unsigned int log_n,
 			     struct mlx5_ind_table_obj *ind_tbl);
+	int (*ind_table_modify)(struct rte_eth_dev *dev,
+				const unsigned int log_n,
+				const uint16_t *queues, const uint32_t queues_n,
+				struct mlx5_ind_table_obj *ind_tbl);
 	void (*ind_table_destroy)(struct mlx5_ind_table_obj *ind_tbl);
 	int (*hrxq_new)(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 			int tunnel __rte_unused);
