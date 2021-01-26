@@ -65,7 +65,6 @@ ionic_dev_setup(struct ionic_adapter *adapter)
 	}
 
 	idev->db_pages = bar->vaddr;
-	idev->phy_db_pages = bar->bus_addr;
 
 	return 0;
 }
@@ -102,6 +101,9 @@ ionic_dev_cmd_go(struct ionic_dev *idev, union ionic_dev_cmd *cmd)
 	unsigned int i;
 	uint32_t cmd_size = sizeof(cmd->words) /
 		sizeof(cmd->words[0]);
+
+	IONIC_PRINT(DEBUG, "Sending %s (%d) via dev_cmd",
+		    ionic_opcode_to_str(cmd->cmd.opcode), cmd->cmd.opcode);
 
 	for (i = 0; i < cmd_size; i++)
 		iowrite32(cmd->words[i], &idev->dev_cmd->cmd.words[i]);
@@ -286,12 +288,10 @@ ionic_dev_cmd_lif_identify(struct ionic_dev *idev, uint8_t type, uint8_t ver)
 }
 
 void
-ionic_dev_cmd_lif_init(struct ionic_dev *idev, uint16_t lif_index,
-		       rte_iova_t info_pa)
+ionic_dev_cmd_lif_init(struct ionic_dev *idev, rte_iova_t info_pa)
 {
 	union ionic_dev_cmd cmd = {
 		.lif_init.opcode = IONIC_CMD_LIF_INIT,
-		.lif_init.index = lif_index,
 		.lif_init.info_pa = info_pa,
 	};
 
@@ -299,11 +299,10 @@ ionic_dev_cmd_lif_init(struct ionic_dev *idev, uint16_t lif_index,
 }
 
 void
-ionic_dev_cmd_lif_reset(struct ionic_dev *idev, uint16_t lif_index)
+ionic_dev_cmd_lif_reset(struct ionic_dev *idev)
 {
 	union ionic_dev_cmd cmd = {
 		.lif_init.opcode = IONIC_CMD_LIF_RESET,
-		.lif_init.index = lif_index,
 	};
 
 	ionic_dev_cmd_go(idev, &cmd);
@@ -313,12 +312,6 @@ struct ionic_doorbell *
 ionic_db_map(struct ionic_lif *lif, struct ionic_queue *q)
 {
 	return lif->kern_dbpage + q->hw_type;
-}
-
-int
-ionic_db_page_num(struct ionic_lif *lif, int pid)
-{
-	return (lif->index * 0) + pid;
 }
 
 void
@@ -332,23 +325,23 @@ ionic_intr_init(struct ionic_dev *idev, struct ionic_intr_info *intr,
 void
 ionic_dev_cmd_adminq_init(struct ionic_dev *idev,
 		struct ionic_qcq *qcq,
-		uint16_t lif_index, uint16_t intr_index)
+		uint16_t intr_index)
 {
 	struct ionic_queue *q = &qcq->q;
 	struct ionic_cq *cq = &qcq->cq;
 
 	union ionic_dev_cmd cmd = {
 		.q_init.opcode = IONIC_CMD_Q_INIT,
-		.q_init.lif_index = lif_index,
 		.q_init.type = q->type,
 		.q_init.index = q->index,
 		.q_init.flags = IONIC_QINIT_F_ENA,
-		.q_init.pid = q->pid,
 		.q_init.intr_index = intr_index,
 		.q_init.ring_size = rte_log2_u32(q->num_descs),
 		.q_init.ring_base = q->base_pa,
 		.q_init.cq_ring_base = cq->base_pa,
 	};
+
+	IONIC_PRINT(DEBUG, "adminq.q_init.ver %u", cmd.q_init.ver);
 
 	ionic_dev_cmd_go(idev, &cmd);
 }
@@ -419,7 +412,7 @@ ionic_cq_service(struct ionic_cq *cq, uint32_t work_to_do,
 int
 ionic_q_init(struct ionic_lif *lif, struct ionic_dev *idev,
 	     struct ionic_queue *q, uint32_t index, uint32_t num_descs,
-	     size_t desc_size, size_t sg_desc_size, uint32_t pid)
+	     size_t desc_size, size_t sg_desc_size)
 {
 	uint32_t ring_size;
 
@@ -439,7 +432,6 @@ ionic_q_init(struct ionic_lif *lif, struct ionic_dev *idev,
 	q->sg_desc_size = sg_desc_size;
 	q->head_idx = 0;
 	q->tail_idx = 0;
-	q->pid = pid;
 
 	return 0;
 }

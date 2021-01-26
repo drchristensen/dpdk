@@ -11,14 +11,6 @@ here.
 Deprecation Notices
 -------------------
 
-* build: The macros defined to indicate which DPDK libraries and drivers
-  are included in the meson build are changing to a standardized format of
-  ``RTE_LIB_<NAME>`` and ``RTE_<CLASS>_<NAME>``, where ``NAME`` is the
-  upper-case component name, e.g. EAL, ETHDEV, IXGBE, and ``CLASS`` is the
-  upper-case name of the device class to which a driver belongs e.g.
-  ``NET``, ``CRYPTO``, ``VDPA``. The old macros are deprecated and will be
-  removed in a future release.
-
 * kvargs: The function ``rte_kvargs_process`` will get a new parameter
   for returning key match count. It will ease handling of no-match case.
 
@@ -120,12 +112,6 @@ Deprecation Notices
   Instead queue stats will be received via xstats API. Current method support
   will be limited to maximum 256 queues.
   Also compile time flag ``RTE_ETHDEV_QUEUE_STAT_CNTRS`` will be removed.
-
-* Broadcom bnxt PMD: NetXtreme devices belonging to the ``BCM573xx and
-  BCM5740x`` families will no longer be supported as of DPDK 21.02.
-  Specifically the support for the following Broadcom PCI IDs will be removed
-  from the release: ``0x16c8, 0x16c9, 0x16ca, 0x16ce, 0x16cf, 0x16df,``
-  ``0x16d0, 0x16d1, 0x16d2, 0x16d4, 0x16d5, 0x16e7, 0x16e8, 0x16e9``.
 
 * sched: To allow more traffic classes, flexible mapping of pipe queues to
   traffic classes, and subport level configuration of pipes and queues

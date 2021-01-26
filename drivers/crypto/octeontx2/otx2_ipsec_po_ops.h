@@ -111,7 +111,7 @@ process_outb_sa(struct rte_crypto_op *cop,
 		memcpy(&hdr->iv[0], &sa->iv.gcm.nonce, 4);
 		memcpy(&hdr->iv[4], rte_crypto_op_ctod_offset(cop, uint8_t *,
 			sess->iv_offset), sess->iv_length);
-	} else if (ctl_wrd->auth_type == OTX2_IPSEC_FP_SA_ENC_AES_CBC) {
+	} else if (ctl_wrd->auth_type == OTX2_IPSEC_PO_SA_AUTH_SHA1) {
 		memcpy(&hdr->iv[0], rte_crypto_op_ctod_offset(cop, uint8_t *,
 			sess->iv_offset), sess->iv_length);
 	}
@@ -123,6 +123,8 @@ process_outb_sa(struct rte_crypto_op *cop,
 	req->ist.ei0 = word0.u64;
 	req->ist.ei1 = rte_pktmbuf_iova(m_src);
 	req->ist.ei2 = req->ist.ei1;
+
+	sa->esn_hi = sess->seq_hi;
 
 	hdr->seq = rte_cpu_to_be_32(sess->seq_lo);
 	hdr->ip_id = rte_cpu_to_be_32(sess->ip_id);

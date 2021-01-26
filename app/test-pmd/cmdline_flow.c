@@ -223,6 +223,7 @@ enum index {
 	ITEM_GENEVE,
 	ITEM_GENEVE_VNI,
 	ITEM_GENEVE_PROTO,
+	ITEM_GENEVE_OPTLEN,
 	ITEM_VXLAN_GPE,
 	ITEM_VXLAN_GPE_VNI,
 	ITEM_ARP_ETH_IPV4,
@@ -283,6 +284,11 @@ enum index {
 	ITEM_ECPRI_MSG_IQ_DATA_PCID,
 	ITEM_ECPRI_MSG_RTC_CTRL_RTCID,
 	ITEM_ECPRI_MSG_DLY_MSR_MSRID,
+	ITEM_GENEVE_OPT,
+	ITEM_GENEVE_OPT_CLASS,
+	ITEM_GENEVE_OPT_TYPE,
+	ITEM_GENEVE_OPT_LENGTH,
+	ITEM_GENEVE_OPT_DATA,
 
 	/* Validate/create actions. */
 	ACTIONS,
@@ -408,10 +414,26 @@ enum index {
 	ACTION_SAMPLE_INDEX_VALUE,
 	ACTION_SHARED,
 	SHARED_ACTION_ID2PTR,
+	ACTION_MODIFY_FIELD,
+	ACTION_MODIFY_FIELD_OP,
+	ACTION_MODIFY_FIELD_OP_VALUE,
+	ACTION_MODIFY_FIELD_DST_TYPE,
+	ACTION_MODIFY_FIELD_DST_TYPE_VALUE,
+	ACTION_MODIFY_FIELD_DST_LEVEL,
+	ACTION_MODIFY_FIELD_DST_OFFSET,
+	ACTION_MODIFY_FIELD_SRC_TYPE,
+	ACTION_MODIFY_FIELD_SRC_TYPE_VALUE,
+	ACTION_MODIFY_FIELD_SRC_LEVEL,
+	ACTION_MODIFY_FIELD_SRC_OFFSET,
+	ACTION_MODIFY_FIELD_SRC_VALUE,
+	ACTION_MODIFY_FIELD_WIDTH,
 };
 
 /** Maximum size for pattern in struct rte_flow_item_raw. */
 #define ITEM_RAW_PATTERN_SIZE 40
+
+/** Maximum size for GENEVE option data pattern in bytes. */
+#define ITEM_GENEVE_OPT_DATA_SIZE 124
 
 /** Storage size for struct rte_flow_item_raw including pattern. */
 #define ITEM_RAW_SIZE \
@@ -428,7 +450,7 @@ struct action_rss_data {
 };
 
 /** Maximum data size in struct rte_flow_action_raw_encap. */
-#define ACTION_RAW_ENCAP_MAX_DATA 128
+#define ACTION_RAW_ENCAP_MAX_DATA 512
 #define RAW_ENCAP_CONFS_MAX_NUM 8
 
 /** Storage for struct rte_flow_action_raw_encap. */
@@ -560,6 +582,23 @@ struct rte_flow_action_queue sample_queue[RAW_SAMPLE_CONFS_MAX_NUM];
 struct rte_flow_action_count sample_count[RAW_SAMPLE_CONFS_MAX_NUM];
 struct rte_flow_action_port_id sample_port_id[RAW_SAMPLE_CONFS_MAX_NUM];
 struct rte_flow_action_raw_encap sample_encap[RAW_SAMPLE_CONFS_MAX_NUM];
+struct action_rss_data sample_rss_data[RAW_SAMPLE_CONFS_MAX_NUM];
+
+static const char *const modify_field_ops[] = {
+	"set", "add", "sub", NULL
+};
+
+static const char *const modify_field_ids[] = {
+	"start", "mac_dst", "mac_src",
+	"vlan_type", "vlan_id", "mac_type",
+	"ipv4_dscp", "ipv4_ttl", "ipv4_src", "ipv4_dst",
+	"ipv6_hoplimit", "ipv6_src", "ipv6_dst",
+	"tcp_port_src", "tcp_port_dst",
+	"tcp_seq_num", "tcp_ack_num", "tcp_flags",
+	"udp_port_src", "udp_port_dst",
+	"vxlan_vni", "geneve_vni", "gtp_teid",
+	"tag", "mark", "meta", "pointer", "value", NULL
+};
 
 /** Maximum number of subsequent tokens and arguments on the stack. */
 #define CTX_STACK_SIZE 16
@@ -656,6 +695,16 @@ struct token {
 	(&(const struct arg){ \
 		.size = sizeof(s), \
 		.mask = (const void *)&(const s){ .f = (1 << (b)) - 1 }, \
+	})
+
+/** Static initializer for ARGS() to target a field with limits. */
+#define ARGS_ENTRY_BOUNDED(s, f, i, a) \
+	(&(const struct arg){ \
+		.bounded = 1, \
+		.min = (i), \
+		.max = (a), \
+		.offset = offsetof(s, f), \
+		.size = sizeof(((s *)0)->f), \
 	})
 
 /** Static initializer for ARGS() to target an arbitrary bit-mask. */
@@ -903,6 +952,7 @@ static const enum index next_item[] = {
 	ITEM_AH,
 	ITEM_PFCP,
 	ITEM_ECPRI,
+	ITEM_GENEVE_OPT,
 	END_SET,
 	ZERO,
 };
@@ -1082,6 +1132,7 @@ static const enum index item_gtp[] = {
 static const enum index item_geneve[] = {
 	ITEM_GENEVE_VNI,
 	ITEM_GENEVE_PROTO,
+	ITEM_GENEVE_OPTLEN,
 	ITEM_NEXT,
 	ZERO,
 };
@@ -1244,6 +1295,15 @@ static const enum index item_ecpri_common_type[] = {
 	ZERO,
 };
 
+static const enum index item_geneve_opt[] = {
+	ITEM_GENEVE_OPT_CLASS,
+	ITEM_GENEVE_OPT_TYPE,
+	ITEM_GENEVE_OPT_LENGTH,
+	ITEM_GENEVE_OPT_DATA,
+	ITEM_NEXT,
+	ZERO,
+};
+
 static const enum index next_action[] = {
 	ACTION_END,
 	ACTION_VOID,
@@ -1306,6 +1366,7 @@ static const enum index next_action[] = {
 	ACTION_AGE,
 	ACTION_SAMPLE,
 	ACTION_SHARED,
+	ACTION_MODIFY_FIELD,
 	ZERO,
 };
 
@@ -1548,11 +1609,27 @@ static const enum index action_sample[] = {
 
 static const enum index next_action_sample[] = {
 	ACTION_QUEUE,
+	ACTION_RSS,
 	ACTION_MARK,
 	ACTION_COUNT,
 	ACTION_PORT_ID,
 	ACTION_RAW_ENCAP,
 	ACTION_NEXT,
+	ZERO,
+};
+
+static const enum index action_modify_field_dst[] = {
+	ACTION_MODIFY_FIELD_DST_LEVEL,
+	ACTION_MODIFY_FIELD_DST_OFFSET,
+	ACTION_MODIFY_FIELD_SRC_TYPE,
+	ZERO,
+};
+
+static const enum index action_modify_field_src[] = {
+	ACTION_MODIFY_FIELD_SRC_LEVEL,
+	ACTION_MODIFY_FIELD_SRC_OFFSET,
+	ACTION_MODIFY_FIELD_SRC_VALUE,
+	ACTION_MODIFY_FIELD_WIDTH,
 	ZERO,
 };
 
@@ -1638,6 +1715,14 @@ static int
 parse_vc_action_sample_index(struct context *ctx, const struct token *token,
 				const char *str, unsigned int len, void *buf,
 				unsigned int size);
+static int
+parse_vc_modify_field_op(struct context *ctx, const struct token *token,
+				const char *str, unsigned int len, void *buf,
+				unsigned int size);
+static int
+parse_vc_modify_field_id(struct context *ctx, const struct token *token,
+				const char *str, unsigned int len, void *buf,
+				unsigned int size);
 static int parse_destroy(struct context *, const struct token *,
 			 const char *, unsigned int,
 			 void *, unsigned int);
@@ -1721,6 +1806,10 @@ static int comp_vc_action_rss_queue(struct context *, const struct token *,
 static int comp_set_raw_index(struct context *, const struct token *,
 			      unsigned int, char *, unsigned int);
 static int comp_set_sample_index(struct context *, const struct token *,
+			      unsigned int, char *, unsigned int);
+static int comp_set_modify_field_op(struct context *, const struct token *,
+			      unsigned int, char *, unsigned int);
+static int comp_set_modify_field_id(struct context *, const struct token *,
 			      unsigned int, char *, unsigned int);
 
 /** Token definitions. */
@@ -2779,6 +2868,14 @@ static const struct token token_list[] = {
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_geneve,
 					     protocol)),
 	},
+	[ITEM_GENEVE_OPTLEN] = {
+		.name = "optlen",
+		.help = "GENEVE options length in dwords",
+		.next = NEXT(item_geneve, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_geneve,
+						  ver_opt_len_o_c_rsvd0,
+						  "\x3f\x00")),
+	},
 	[ITEM_VXLAN_GPE] = {
 		.name = "vxlan-gpe",
 		.help = "match VXLAN-GPE header",
@@ -3229,6 +3326,47 @@ static const struct token token_list[] = {
 				NEXT_ENTRY(UNSIGNED), item_param),
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ecpri,
 				hdr.type5.msr_id)),
+	},
+	[ITEM_GENEVE_OPT] = {
+		.name = "geneve-opt",
+		.help = "GENEVE header option",
+		.priv = PRIV_ITEM(GENEVE_OPT,
+				  sizeof(struct rte_flow_item_geneve_opt) +
+				  ITEM_GENEVE_OPT_DATA_SIZE),
+		.next = NEXT(item_geneve_opt),
+		.call = parse_vc,
+	},
+	[ITEM_GENEVE_OPT_CLASS]	= {
+		.name = "class",
+		.help = "GENEVE option class",
+		.next = NEXT(item_geneve_opt, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_geneve_opt,
+					     option_class)),
+	},
+	[ITEM_GENEVE_OPT_TYPE] = {
+		.name = "type",
+		.help = "GENEVE option type",
+		.next = NEXT(item_geneve_opt, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_geneve_opt,
+					option_type)),
+	},
+	[ITEM_GENEVE_OPT_LENGTH] = {
+		.name = "length",
+		.help = "GENEVE option data length (in 32b words)",
+		.next = NEXT(item_geneve_opt, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_BOUNDED(
+				struct rte_flow_item_geneve_opt, option_len,
+				0, 31)),
+	},
+	[ITEM_GENEVE_OPT_DATA] = {
+		.name = "data",
+		.help = "GENEVE option data pattern",
+		.next = NEXT(item_geneve_opt, NEXT_ENTRY(HEX), item_param),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_geneve_opt, data),
+			     ARGS_ENTRY_ARB(0, 0),
+			     ARGS_ENTRY_ARB
+				(sizeof(struct rte_flow_item_geneve_opt),
+				ITEM_GENEVE_OPT_DATA_SIZE)),
 	},
 	/* Validate/create actions. */
 	[ACTIONS] = {
@@ -4036,6 +4174,103 @@ static const struct token token_list[] = {
 		.next = NEXT(NEXT_ENTRY(ACTION_NEXT)),
 		.call = parse_vc_action_raw_decap_index,
 		.comp = comp_set_raw_index,
+	},
+	[ACTION_MODIFY_FIELD] = {
+		.name = "modify_field",
+		.help = "modify destination field with data from source field",
+		.priv = PRIV_ACTION(MODIFY_FIELD,
+			sizeof(struct rte_flow_action_modify_field)),
+		.next = NEXT(NEXT_ENTRY(ACTION_MODIFY_FIELD_OP)),
+		.call = parse_vc,
+	},
+	[ACTION_MODIFY_FIELD_OP] = {
+		.name = "op",
+		.help = "operation type",
+		.next = NEXT(NEXT_ENTRY(ACTION_MODIFY_FIELD_DST_TYPE),
+			NEXT_ENTRY(ACTION_MODIFY_FIELD_OP_VALUE)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_MODIFY_FIELD_OP_VALUE] = {
+		.name = "{operation}",
+		.help = "operation type value",
+		.call = parse_vc_modify_field_op,
+		.comp = comp_set_modify_field_op,
+	},
+	[ACTION_MODIFY_FIELD_DST_TYPE] = {
+		.name = "dst_type",
+		.help = "destination field type",
+		.next = NEXT(action_modify_field_dst,
+			NEXT_ENTRY(ACTION_MODIFY_FIELD_DST_TYPE_VALUE)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_MODIFY_FIELD_DST_TYPE_VALUE] = {
+		.name = "{dst_type}",
+		.help = "destination field type value",
+		.call = parse_vc_modify_field_id,
+		.comp = comp_set_modify_field_id,
+	},
+	[ACTION_MODIFY_FIELD_DST_LEVEL] = {
+		.name = "dst_level",
+		.help = "destination field level",
+		.next = NEXT(action_modify_field_dst, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_modify_field,
+					dst.level)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_MODIFY_FIELD_DST_OFFSET] = {
+		.name = "dst_offset",
+		.help = "destination field bit offset",
+		.next = NEXT(action_modify_field_dst, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_modify_field,
+					dst.offset)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_MODIFY_FIELD_SRC_TYPE] = {
+		.name = "src_type",
+		.help = "source field type",
+		.next = NEXT(action_modify_field_src,
+			NEXT_ENTRY(ACTION_MODIFY_FIELD_SRC_TYPE_VALUE)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_MODIFY_FIELD_SRC_TYPE_VALUE] = {
+		.name = "{src_type}",
+		.help = "source field type value",
+		.call = parse_vc_modify_field_id,
+		.comp = comp_set_modify_field_id,
+	},
+	[ACTION_MODIFY_FIELD_SRC_LEVEL] = {
+		.name = "src_level",
+		.help = "source field level",
+		.next = NEXT(action_modify_field_src, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_modify_field,
+					src.level)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_MODIFY_FIELD_SRC_OFFSET] = {
+		.name = "src_offset",
+		.help = "source field bit offset",
+		.next = NEXT(action_modify_field_src, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_modify_field,
+					src.offset)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_MODIFY_FIELD_SRC_VALUE] = {
+		.name = "src_value",
+		.help = "source immediate value",
+		.next = NEXT(NEXT_ENTRY(ACTION_MODIFY_FIELD_WIDTH),
+			NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_modify_field,
+					src.value)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_MODIFY_FIELD_WIDTH] = {
+		.name = "width",
+		.help = "number of bits to copy",
+		.next = NEXT(NEXT_ENTRY(ACTION_NEXT),
+			NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_modify_field,
+					width)),
+		.call = parse_vc_conf,
 	},
 	/* Top level command. */
 	[SET] = {
@@ -5960,6 +6195,62 @@ parse_vc_action_sample_index(struct context *ctx, const struct token *token,
 	return len;
 }
 
+/** Parse operation for modify_field command. */
+static int
+parse_vc_modify_field_op(struct context *ctx, const struct token *token,
+			 const char *str, unsigned int len, void *buf,
+			 unsigned int size)
+{
+	struct rte_flow_action_modify_field *action_modify_field;
+	unsigned int i;
+
+	(void)token;
+	(void)buf;
+	(void)size;
+	if (ctx->curr != ACTION_MODIFY_FIELD_OP_VALUE)
+		return -1;
+	for (i = 0; modify_field_ops[i]; ++i)
+		if (!strcmp_partial(modify_field_ops[i], str, len))
+			break;
+	if (!modify_field_ops[i])
+		return -1;
+	if (!ctx->object)
+		return len;
+	action_modify_field = ctx->object;
+	action_modify_field->operation = (enum rte_flow_modify_op)i;
+	return len;
+}
+
+/** Parse id for modify_field command. */
+static int
+parse_vc_modify_field_id(struct context *ctx, const struct token *token,
+			 const char *str, unsigned int len, void *buf,
+			 unsigned int size)
+{
+	struct rte_flow_action_modify_field *action_modify_field;
+	unsigned int i;
+
+	(void)token;
+	(void)buf;
+	(void)size;
+	if (ctx->curr != ACTION_MODIFY_FIELD_DST_TYPE_VALUE &&
+		ctx->curr != ACTION_MODIFY_FIELD_SRC_TYPE_VALUE)
+		return -1;
+	for (i = 0; modify_field_ids[i]; ++i)
+		if (!strcmp_partial(modify_field_ids[i], str, len))
+			break;
+	if (!modify_field_ids[i])
+		return -1;
+	if (!ctx->object)
+		return len;
+	action_modify_field = ctx->object;
+	if (ctx->curr == ACTION_MODIFY_FIELD_DST_TYPE_VALUE)
+		action_modify_field->dst.field = (enum rte_flow_field_id)i;
+	else
+		action_modify_field->src.field = (enum rte_flow_field_id)i;
+	return len;
+}
+
 /** Parse tokens for destroy command. */
 static int
 parse_destroy(struct context *ctx, const struct token *token,
@@ -6482,11 +6773,14 @@ parse_hex(struct context *ctx, const struct token *token,
 	ret = snprintf(tmp, sizeof(tmp), "%u", hexlen);
 	if (ret < 0)
 		goto error;
-	push_args(ctx, arg_len);
-	ret = parse_int(ctx, token, tmp, ret, NULL, 0);
-	if (ret < 0) {
-		pop_args(ctx);
-		goto error;
+	/* Save length if requested. */
+	if (arg_len->size) {
+		push_args(ctx, arg_len);
+		ret = parse_int(ctx, token, tmp, ret, NULL, 0);
+		if (ret < 0) {
+			pop_args(ctx);
+			goto error;
+		}
 	}
 	buf = (uint8_t *)ctx->object + arg_data->offset;
 	/* Output buffer is not necessarily NUL-terminated. */
@@ -7029,6 +7323,42 @@ comp_set_sample_index(struct context *ctx, const struct token *token,
 	return nb;
 }
 
+/** Complete operation for modify_field command. */
+static int
+comp_set_modify_field_op(struct context *ctx, const struct token *token,
+		   unsigned int ent, char *buf, unsigned int size)
+{
+	uint16_t idx = 0;
+
+	RTE_SET_USED(ctx);
+	RTE_SET_USED(token);
+	for (idx = 0; modify_field_ops[idx]; ++idx)
+		;
+	if (!buf)
+		return idx + 1;
+	if (ent < idx)
+		return strlcpy(buf, modify_field_ops[ent], size);
+	return -1;
+}
+
+/** Complete field id for modify_field command. */
+static int
+comp_set_modify_field_id(struct context *ctx, const struct token *token,
+		   unsigned int ent, char *buf, unsigned int size)
+{
+	uint16_t idx = 0;
+
+	RTE_SET_USED(ctx);
+	RTE_SET_USED(token);
+	for (idx = 0; modify_field_ids[idx]; ++idx)
+		;
+	if (!buf)
+		return idx + 1;
+	if (ent < idx)
+		return strlcpy(buf, modify_field_ids[ent], size);
+	return -1;
+}
+
 /** Internal context. */
 static struct context cmd_flow_context;
 
@@ -7486,6 +7816,9 @@ flow_item_default_mask(const struct rte_flow_item *item)
 	case RTE_FLOW_ITEM_TYPE_GENEVE:
 		mask = &rte_flow_item_geneve_mask;
 		break;
+	case RTE_FLOW_ITEM_TYPE_GENEVE_OPT:
+		mask = &rte_flow_item_geneve_opt_mask;
+		break;
 	case RTE_FLOW_ITEM_TYPE_PPPOE_PROTO_ID:
 		mask = &rte_flow_item_pppoe_proto_id_mask;
 		break;
@@ -7515,6 +7848,7 @@ cmd_set_raw_parsed_sample(const struct buffer *in)
 	uint32_t i = 0;
 	struct rte_flow_action *action = NULL;
 	struct rte_flow_action *data = NULL;
+	const struct rte_flow_action_rss *rss = NULL;
 	size_t size = 0;
 	uint16_t idx = in->port; /* We borrow port field as index */
 	uint32_t max_size = sizeof(struct rte_flow_action) *
@@ -7545,6 +7879,29 @@ cmd_set_raw_parsed_sample(const struct buffer *in)
 			rte_memcpy(&sample_queue[idx],
 				(const void *)action->conf, size);
 			action->conf = &sample_queue[idx];
+			break;
+		case RTE_FLOW_ACTION_TYPE_RSS:
+			size = sizeof(struct rte_flow_action_rss);
+			rss = action->conf;
+			rte_memcpy(&sample_rss_data[idx].conf,
+				   (const void *)rss, size);
+			if (rss->key_len) {
+				sample_rss_data[idx].conf.key =
+						sample_rss_data[idx].key;
+				rte_memcpy((void *)((uintptr_t)
+					   sample_rss_data[idx].conf.key),
+					   (const void *)rss->key,
+					   sizeof(uint8_t) * rss->key_len);
+			}
+			if (rss->queue_num) {
+				sample_rss_data[idx].conf.queue =
+						sample_rss_data[idx].queue;
+				rte_memcpy((void *)((uintptr_t)
+					   sample_rss_data[idx].conf.queue),
+					   (const void *)rss->queue,
+					   sizeof(uint16_t) * rss->queue_num);
+			}
+			action->conf = &sample_rss_data[idx].conf;
 			break;
 		case RTE_FLOW_ACTION_TYPE_RAW_ENCAP:
 			size = sizeof(struct rte_flow_action_raw_encap);
@@ -7581,6 +7938,7 @@ cmd_set_raw_parsed(const struct buffer *in)
 	uint16_t upper_layer = 0;
 	uint16_t proto = 0;
 	uint16_t idx = in->port; /* We borrow port field as index */
+	int gtp_psc = -1; /* GTP PSC option index. */
 
 	if (in->command == SET_SAMPLE_ACTIONS)
 		return cmd_set_raw_parsed_sample(in);
@@ -7598,6 +7956,9 @@ cmd_set_raw_parsed(const struct buffer *in)
 	/* process hdr from upper layer to low layer (L3/L4 -> L2). */
 	data_tail = data + ACTION_RAW_ENCAP_MAX_DATA;
 	for (i = n - 1 ; i >= 0; --i) {
+		const struct rte_flow_item_gtp *gtp;
+		const struct rte_flow_item_geneve_opt *opt;
+
 		item = in->args.vc.pattern + i;
 		if (item->spec == NULL)
 			item->spec = flow_item_default_mask(item);
@@ -7650,6 +8011,18 @@ cmd_set_raw_parsed(const struct buffer *in)
 		case RTE_FLOW_ITEM_TYPE_GENEVE:
 			size = sizeof(struct rte_geneve_hdr);
 			break;
+		case RTE_FLOW_ITEM_TYPE_GENEVE_OPT:
+			opt = (const struct rte_flow_item_geneve_opt *)
+								item->spec;
+			size = offsetof(struct rte_flow_item_geneve_opt, data);
+			if (opt->option_len && opt->data) {
+				*total_size += opt->option_len *
+					       sizeof(uint32_t);
+				rte_memcpy(data_tail - (*total_size),
+					   opt->data,
+					   opt->option_len * sizeof(uint32_t));
+			}
+			break;
 		case RTE_FLOW_ITEM_TYPE_L2TPV3OIP:
 			size = sizeof(rte_be32_t);
 			proto = 0x73;
@@ -7663,16 +8036,68 @@ cmd_set_raw_parsed(const struct buffer *in)
 			proto = 0x33;
 			break;
 		case RTE_FLOW_ITEM_TYPE_GTP:
+			if (gtp_psc < 0) {
+				size = sizeof(struct rte_gtp_hdr);
+				break;
+			}
+			if (gtp_psc != i + 1) {
+				printf("Error - GTP PSC does not follow GTP\n");
+				goto error;
+			}
+			gtp = item->spec;
+			if ((gtp->v_pt_rsv_flags & 0x07) != 0x04) {
+				/* Only E flag should be set. */
+				printf("Error - GTP unsupported flags\n");
+				goto error;
+			} else {
+				struct rte_gtp_hdr_ext_word ext_word = {
+					.next_ext = 0x85
+				};
+
+				/* We have to add GTP header extra word. */
+				*total_size += sizeof(ext_word);
+				rte_memcpy(data_tail - (*total_size),
+					   &ext_word, sizeof(ext_word));
+			}
 			size = sizeof(struct rte_gtp_hdr);
+			break;
+		case RTE_FLOW_ITEM_TYPE_GTP_PSC:
+			if (gtp_psc >= 0) {
+				printf("Error - Multiple GTP PSC items\n");
+				goto error;
+			} else {
+				const struct rte_flow_item_gtp_psc
+					*opt = item->spec;
+				struct {
+					uint8_t len;
+					uint8_t pdu_type;
+					uint8_t qfi;
+					uint8_t next;
+				} psc;
+
+				if (opt->pdu_type & 0x0F) {
+					/* Support the minimal option only. */
+					printf("Error - GTP PSC option with "
+					       "extra fields not supported\n");
+					goto error;
+				}
+				psc.len = sizeof(psc);
+				psc.pdu_type = opt->pdu_type;
+				psc.qfi = opt->qfi;
+				psc.next = 0;
+				*total_size += sizeof(psc);
+				rte_memcpy(data_tail - (*total_size),
+					   &psc, sizeof(psc));
+				gtp_psc = i;
+				size = 0;
+			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_PFCP:
 			size = sizeof(struct rte_flow_item_pfcp);
 			break;
 		default:
 			printf("Error - Not supported item\n");
-			*total_size = 0;
-			memset(data, 0x00, ACTION_RAW_ENCAP_MAX_DATA);
-			return;
+			goto error;
 		}
 		*total_size += size;
 		rte_memcpy(data_tail - (*total_size), item->spec, size);
@@ -7685,6 +8110,11 @@ cmd_set_raw_parsed(const struct buffer *in)
 		printf("total data size is %zu\n", (*total_size));
 	RTE_ASSERT((*total_size) <= ACTION_RAW_ENCAP_MAX_DATA);
 	memmove(data, (data_tail - (*total_size)), *total_size);
+	return;
+
+error:
+	*total_size = 0;
+	memset(data, 0x00, ACTION_RAW_ENCAP_MAX_DATA);
 }
 
 /** Populate help strings for current token (cmdline API). */

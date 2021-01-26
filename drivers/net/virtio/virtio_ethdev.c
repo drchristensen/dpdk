@@ -203,17 +203,17 @@ virtio_send_command_packed(struct virtnet_ctl *cvq,
 		vq->vq_packed.cached_flags ^= VRING_PACKED_DESC_F_AVAIL_USED;
 	}
 
-	virtio_wmb(vq->hw->weak_barriers);
-	desc[head].flags = VRING_DESC_F_NEXT | flags;
+	virtqueue_store_flags_packed(&desc[head], VRING_DESC_F_NEXT | flags,
+			vq->hw->weak_barriers);
 
 	virtio_wmb(vq->hw->weak_barriers);
 	virtqueue_notify(vq);
 
-	/* wait for used descriptors in virtqueue */
+	/* wait for used desc in virtqueue
+	 * desc_is_used has a load-acquire or rte_io_rmb inside
+	 */
 	while (!desc_is_used(&desc[head], vq))
 		usleep(100);
-
-	virtio_rmb(vq->hw->weak_barriers);
 
 	/* now get used descriptors */
 	vq->vq_free_cnt += nb_descs;
@@ -1967,12 +1967,12 @@ eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 		if (!vtpci_packed_queue(hw)) {
 			hw->use_vec_rx = 1;
 		} else {
-#if !defined(CC_AVX512_SUPPORT)
-			PMD_DRV_LOG(INFO,
-				"building environment do not support packed ring vectorized");
-#else
+#if defined(CC_AVX512_SUPPORT) || defined(RTE_ARCH_ARM)
 			hw->use_vec_rx = 1;
 			hw->use_vec_tx = 1;
+#else
+			PMD_DRV_LOG(INFO,
+				"building environment do not support packed ring vectorized");
 #endif
 		}
 	}
@@ -2315,6 +2315,17 @@ virtio_dev_configure(struct rte_eth_dev *dev)
 		     !vtpci_with_feature(hw, VIRTIO_F_IN_ORDER) ||
 		     !vtpci_with_feature(hw, VIRTIO_F_VERSION_1) ||
 		     rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_512)) {
+			PMD_DRV_LOG(INFO,
+				"disabled packed ring vectorized path for requirements not met");
+			hw->use_vec_rx = 0;
+			hw->use_vec_tx = 0;
+		}
+#elif defined(RTE_ARCH_ARM)
+		if ((hw->use_vec_rx || hw->use_vec_tx) &&
+		    (!rte_cpu_get_flag_enabled(RTE_CPUFLAG_NEON) ||
+		     !vtpci_with_feature(hw, VIRTIO_F_IN_ORDER) ||
+		     !vtpci_with_feature(hw, VIRTIO_F_VERSION_1) ||
+		     rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_128)) {
 			PMD_DRV_LOG(INFO,
 				"disabled packed ring vectorized path for requirements not met");
 			hw->use_vec_rx = 0;

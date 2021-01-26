@@ -61,7 +61,7 @@ ionic_error_to_str(enum ionic_status_code code)
 	}
 }
 
-static const char *
+const char *
 ionic_opcode_to_str(enum ionic_cmd_opcode opcode)
 {
 	switch (opcode) {
@@ -107,6 +107,8 @@ ionic_opcode_to_str(enum ionic_cmd_opcode opcode)
 		return "IONIC_CMD_Q_INIT";
 	case IONIC_CMD_Q_CONTROL:
 		return "IONIC_CMD_Q_CONTROL";
+	case IONIC_CMD_Q_IDENTIFY:
+		return "IONIC_CMD_Q_IDENTIFY";
 	case IONIC_CMD_RDMA_RESET_LIF:
 		return "IONIC_CMD_RDMA_RESET_LIF";
 	case IONIC_CMD_RDMA_CREATE_EQ:
@@ -126,8 +128,9 @@ ionic_adminq_check_err(struct ionic_admin_ctx *ctx, bool timeout)
 	const char *name;
 	const char *status;
 
+	name = ionic_opcode_to_str(ctx->cmd.cmd.opcode);
+
 	if (ctx->comp.comp.status || timeout) {
-		name = ionic_opcode_to_str(ctx->cmd.cmd.opcode);
 		status = ionic_error_to_str(ctx->comp.comp.status);
 		IONIC_PRINT(ERR, "%s (%d) failed: %s (%d)",
 			name,
@@ -137,6 +140,8 @@ ionic_adminq_check_err(struct ionic_admin_ctx *ctx, bool timeout)
 		return -EIO;
 	}
 
+	IONIC_PRINT(DEBUG, "%s (%d) succeeded", name, ctx->cmd.cmd.opcode);
+
 	return 0;
 }
 
@@ -144,12 +149,12 @@ static int
 ionic_wait_ctx_for_completion(struct ionic_lif *lif, struct ionic_qcq *qcq,
 		struct ionic_admin_ctx *ctx, unsigned long max_wait)
 {
-	unsigned long step_msec = 1;
-	unsigned int max_wait_msec = max_wait * 1000;
-	unsigned long elapsed_msec = 0;
+	unsigned long step_usec = IONIC_DEVCMD_CHECK_PERIOD_US;
+	unsigned long max_wait_usec = max_wait * 1000000L;
+	unsigned long elapsed_usec = 0;
 	int budget = 8;
 
-	while (ctx->pending_work && elapsed_msec < max_wait_msec) {
+	while (ctx->pending_work && elapsed_usec < max_wait_usec) {
 		/*
 		 * Locking here as adminq is served inline (this could be called
 		 * from multiple places)
@@ -160,8 +165,8 @@ ionic_wait_ctx_for_completion(struct ionic_lif *lif, struct ionic_qcq *qcq,
 
 		rte_spinlock_unlock(&lif->adminq_service_lock);
 
-		msec_delay(step_msec);
-		elapsed_msec += step_msec;
+		rte_delay_us_block(step_usec);
+		elapsed_usec += step_usec;
 	}
 
 	return (!ctx->pending_work);
@@ -174,30 +179,28 @@ ionic_adminq_post_wait(struct ionic_lif *lif, struct ionic_admin_ctx *ctx)
 	bool done;
 	int err;
 
-	IONIC_PRINT(DEBUG, "Sending %s to the admin queue",
-		ionic_opcode_to_str(ctx->cmd.cmd.opcode));
+	IONIC_PRINT(DEBUG, "Sending %s (%d) via the admin queue",
+		ionic_opcode_to_str(ctx->cmd.cmd.opcode), ctx->cmd.cmd.opcode);
 
 	err = ionic_adminq_post(lif, ctx);
 	if (err) {
-		IONIC_PRINT(ERR, "Failure posting to the admin queue %d (%d)",
+		IONIC_PRINT(ERR, "Failure posting %d to the admin queue (%d)",
 			ctx->cmd.cmd.opcode, err);
-
 		return err;
 	}
 
 	done = ionic_wait_ctx_for_completion(lif, qcq, ctx,
 		IONIC_DEVCMD_TIMEOUT);
 
-	err = ionic_adminq_check_err(ctx, !done /* timed out */);
-	return err;
+	return ionic_adminq_check_err(ctx, !done /* timed out */);
 }
 
 static int
 ionic_dev_cmd_wait(struct ionic_dev *idev, unsigned long max_wait)
 {
-	unsigned long step_msec = 100;
-	unsigned int max_wait_msec = max_wait * 1000;
-	unsigned long elapsed_msec = 0;
+	unsigned long step_usec = IONIC_DEVCMD_CHECK_PERIOD_US;
+	unsigned long max_wait_usec = max_wait * 1000000L;
+	unsigned long elapsed_usec = 0;
 	int done;
 
 	/* Wait for dev cmd to complete.. but no more than max_wait sec */
@@ -205,20 +208,20 @@ ionic_dev_cmd_wait(struct ionic_dev *idev, unsigned long max_wait)
 	do {
 		done = ionic_dev_cmd_done(idev);
 		if (done) {
-			IONIC_PRINT(DEBUG, "DEVCMD %d done took %ld msecs",
-				idev->dev_cmd->cmd.cmd.opcode,
-				elapsed_msec);
+			IONIC_PRINT(DEBUG, "DEVCMD %d done took %ld usecs",
+				ioread8(&idev->dev_cmd->cmd.cmd.opcode),
+				elapsed_usec);
 			return 0;
 		}
 
-		msec_delay(step_msec);
+		rte_delay_us_block(step_usec);
 
-		elapsed_msec += step_msec;
-	} while (elapsed_msec < max_wait_msec);
+		elapsed_usec += step_usec;
+	} while (elapsed_usec < max_wait_usec);
 
-	IONIC_PRINT(DEBUG, "DEVCMD %d timeout after %ld msecs",
-		idev->dev_cmd->cmd.cmd.opcode,
-		elapsed_msec);
+	IONIC_PRINT(ERR, "DEVCMD %d timeout after %ld usecs",
+		ioread8(&idev->dev_cmd->cmd.cmd.opcode),
+		elapsed_usec);
 
 	return -ETIMEDOUT;
 }
@@ -241,10 +244,12 @@ ionic_dev_cmd_wait_check(struct ionic_dev *idev, unsigned long max_wait)
 	int err;
 
 	err = ionic_dev_cmd_wait(idev, max_wait);
-	if (err)
-		return err;
 
-	return ionic_dev_cmd_check_error(idev);
+	if (!err)
+		err = ionic_dev_cmd_check_error(idev);
+
+	IONIC_PRINT(DEBUG, "dev_cmd returned %d", err);
+	return err;
 }
 
 int
@@ -299,22 +304,18 @@ int
 ionic_init(struct ionic_adapter *adapter)
 {
 	struct ionic_dev *idev = &adapter->idev;
-	int err;
 
 	ionic_dev_cmd_init(idev);
-	err = ionic_dev_cmd_wait_check(idev, IONIC_DEVCMD_TIMEOUT);
-	return err;
+	return ionic_dev_cmd_wait_check(idev, IONIC_DEVCMD_TIMEOUT);
 }
 
 int
 ionic_reset(struct ionic_adapter *adapter)
 {
 	struct ionic_dev *idev = &adapter->idev;
-	int err;
 
 	ionic_dev_cmd_reset(idev);
-	err = ionic_dev_cmd_wait_check(idev, IONIC_DEVCMD_TIMEOUT);
-	return err;
+	return ionic_dev_cmd_wait_check(idev, IONIC_DEVCMD_TIMEOUT);
 }
 
 int
@@ -339,12 +340,12 @@ ionic_port_identify(struct ionic_adapter *adapter)
 				ioread32(&idev->dev_cmd->data[i]);
 	}
 
-	IONIC_PRINT(INFO, "speed %d ", ident->port.config.speed);
-	IONIC_PRINT(INFO, "mtu %d ", ident->port.config.mtu);
-	IONIC_PRINT(INFO, "state %d ", ident->port.config.state);
-	IONIC_PRINT(INFO, "an_enable %d ", ident->port.config.an_enable);
-	IONIC_PRINT(INFO, "fec_type %d ", ident->port.config.fec_type);
-	IONIC_PRINT(INFO, "pause_type %d ", ident->port.config.pause_type);
+	IONIC_PRINT(INFO, "speed %d", ident->port.config.speed);
+	IONIC_PRINT(INFO, "mtu %d", ident->port.config.mtu);
+	IONIC_PRINT(INFO, "state %d", ident->port.config.state);
+	IONIC_PRINT(INFO, "an_enable %d", ident->port.config.an_enable);
+	IONIC_PRINT(INFO, "fec_type %d", ident->port.config.fec_type);
+	IONIC_PRINT(INFO, "pause_type %d", ident->port.config.pause_type);
 	IONIC_PRINT(INFO, "loopback_mode %d",
 		ident->port.config.loopback_mode);
 
@@ -385,8 +386,7 @@ ionic_port_init(struct ionic_adapter *adapter)
 	idev->port_info_sz = RTE_ALIGN(sizeof(*idev->port_info), PAGE_SIZE);
 
 	snprintf(z_name, sizeof(z_name), "%s_port_%s_info",
-		IONIC_DRV_NAME,
-		adapter->pci_dev->device.name);
+		IONIC_DRV_NAME, adapter->name);
 
 	idev->port_info_z = ionic_memzone_reserve(z_name, idev->port_info_sz,
 		SOCKET_ID_ANY);
@@ -403,21 +403,13 @@ ionic_port_init(struct ionic_adapter *adapter)
 	for (i = 0; i < nwords; i++)
 		iowrite32(ident->port.config.words[i], &idev->dev_cmd->data[i]);
 
+	idev->port_info->config.state = IONIC_PORT_ADMIN_STATE_UP;
 	ionic_dev_cmd_port_init(idev);
 	err = ionic_dev_cmd_wait_check(idev, IONIC_DEVCMD_TIMEOUT);
-	if (err) {
+	if (err)
 		IONIC_PRINT(ERR, "Failed to init port");
-		return err;
-	}
 
-	ionic_dev_cmd_port_state(idev, IONIC_PORT_ADMIN_STATE_UP);
-	err = ionic_dev_cmd_wait_check(idev, IONIC_DEVCMD_TIMEOUT);
-	if (err) {
-		IONIC_PRINT(WARNING, "Failed to bring port UP");
-		return err;
-	}
-
-	return 0;
+	return err;
 }
 
 int

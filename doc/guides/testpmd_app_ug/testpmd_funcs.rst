@@ -2375,7 +2375,7 @@ port config udp_tunnel_port
 
 Add/remove UDP tunnel port for VXLAN/GENEVE tunneling protocols::
 
-    testpmd> port config (port_id) udp_tunnel_port add|rm vxlan|geneve|vxlan-gpe (udp_port)
+    testpmd> port config (port_id) udp_tunnel_port add|rm vxlan|geneve|vxlan-gpe|ecpri (udp_port)
 
 port config tx_metadata
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -3679,6 +3679,14 @@ This section lists supported pattern items and their attributes, if any.
 
   - ``vni {unsigned}``: virtual network identifier.
   - ``protocol {unsigned}``: protocol type.
+
+- ``geneve-opt``: match GENEVE header option.
+
+  - ``class {unsigned}``: GENEVE option class.
+  - ``type {unsigned}``: GENEVE option type.
+  - ``length {unsigned}``: GENEVE option length in 32-bit words.
+  - ``data {hex string}``: GENEVE option data, the length is defined by
+    ``length`` field.
 
 - ``vxlan-gpe``: match VXLAN-GPE header.
 

@@ -105,20 +105,35 @@ prep_one(struct mlx5_regex_priv *priv, struct mlx5_regex_qp *qp,
 {
 	size_t wqe_offset = (sq->pi & (sq_size_get(sq) - 1)) * MLX5_SEND_WQE_BB;
 	uint32_t lkey;
+	uint16_t group0 = op->req_flags & RTE_REGEX_OPS_REQ_GROUP_ID0_VALID_F ?
+				op->group_id0 : 0;
+	uint16_t group1 = op->req_flags & RTE_REGEX_OPS_REQ_GROUP_ID1_VALID_F ?
+				op->group_id1 : 0;
+	uint16_t group2 = op->req_flags & RTE_REGEX_OPS_REQ_GROUP_ID2_VALID_F ?
+				op->group_id2 : 0;
+	uint16_t group3 = op->req_flags & RTE_REGEX_OPS_REQ_GROUP_ID3_VALID_F ?
+				op->group_id3 : 0;
+	uint8_t control = op->req_flags &
+				RTE_REGEX_OPS_REQ_MATCH_HIGH_PRIORITY_F ? 1 : 0;
 
+	/* For backward compatibility. */
+	if (!(op->req_flags & (RTE_REGEX_OPS_REQ_GROUP_ID0_VALID_F |
+			       RTE_REGEX_OPS_REQ_GROUP_ID1_VALID_F |
+			       RTE_REGEX_OPS_REQ_GROUP_ID2_VALID_F |
+			       RTE_REGEX_OPS_REQ_GROUP_ID3_VALID_F)))
+		group0 = op->group_id0;
 	lkey = mlx5_mr_addr2mr_bh(priv->pd, 0,
 				  &priv->mr_scache, &qp->mr_ctrl,
 				  rte_pktmbuf_mtod(op->mbuf, uintptr_t),
 				  !!(op->mbuf->ol_flags & EXT_ATTACHED_MBUF));
-	uint8_t *wqe = (uint8_t *)sq->wqe + wqe_offset;
+	uint8_t *wqe = (uint8_t *)(uintptr_t)sq->sq_obj.wqes + wqe_offset;
 	int ds = 4; /*  ctrl + meta + input + output */
 
 	set_wqe_ctrl_seg((struct mlx5_wqe_ctrl_seg *)wqe, sq->pi,
-			 MLX5_OPCODE_MMO, MLX5_OPC_MOD_MMO_REGEX, sq->obj->id,
-			 0, ds, 0, 0);
-	set_regex_ctrl_seg(wqe + 12, 0, op->group_id0, op->group_id1,
-			   op->group_id2,
-			   op->group_id3, 0);
+			 MLX5_OPCODE_MMO, MLX5_OPC_MOD_MMO_REGEX,
+			 sq->sq_obj.sq->id, 0, ds, 0, 0);
+	set_regex_ctrl_seg(wqe + 12, 0, group0, group1, group2, group3,
+			   control);
 	struct mlx5_wqe_data_seg *input_seg =
 		(struct mlx5_wqe_data_seg *)(wqe +
 					     MLX5_REGEX_WQE_GATHER_OFFSET);
@@ -137,12 +152,12 @@ send_doorbell(struct mlx5dv_devx_uar *uar, struct mlx5_regex_sq *sq)
 {
 	size_t wqe_offset = (sq->db_pi & (sq_size_get(sq) - 1)) *
 		MLX5_SEND_WQE_BB;
-	uint8_t *wqe = (uint8_t *)sq->wqe + wqe_offset;
+	uint8_t *wqe = (uint8_t *)(uintptr_t)sq->sq_obj.wqes + wqe_offset;
 	((struct mlx5_wqe_ctrl_seg *)wqe)->fm_ce_se = MLX5_WQE_CTRL_CQ_UPDATE;
 	uint64_t *doorbell_addr =
 		(uint64_t *)((uint8_t *)uar->base_addr + 0x800);
 	rte_io_wmb();
-	sq->dbr[MLX5_SND_DBR] = rte_cpu_to_be_32((sq->db_pi + 1) &
+	sq->sq_obj.db_rec[MLX5_SND_DBR] = rte_cpu_to_be_32((sq->db_pi + 1) &
 						 MLX5_REGEX_MAX_WQE_INDEX);
 	rte_wmb();
 	*doorbell_addr = *(volatile uint64_t *)wqe;
@@ -194,7 +209,10 @@ out:
 static inline void
 extract_result(struct rte_regex_ops *op, struct mlx5_regex_job *job)
 {
-	size_t j, offset;
+	size_t j;
+	size_t offset;
+	uint16_t status;
+
 	op->user_id = job->user_id;
 	op->nb_matches = MLX5_GET_VOLATILE(regexp_metadata, job->metadata +
 					   MLX5_REGEX_METADATA_OFF,
@@ -215,6 +233,24 @@ extract_result(struct rte_regex_ops *op, struct mlx5_regex_job *job)
 			MLX5_GET_VOLATILE(regexp_match_tuple,
 					  (job->output +  offset), length);
 	}
+	status = MLX5_GET_VOLATILE(regexp_metadata, job->metadata +
+				   MLX5_REGEX_METADATA_OFF,
+				   status);
+	op->rsp_flags = 0;
+	if (status & MLX5_RXP_RESP_STATUS_PMI_SOJ)
+		op->rsp_flags |= RTE_REGEX_OPS_RSP_PMI_SOJ_F;
+	if (status & MLX5_RXP_RESP_STATUS_PMI_EOJ)
+		op->rsp_flags |= RTE_REGEX_OPS_RSP_PMI_EOJ_F;
+	if (status & MLX5_RXP_RESP_STATUS_MAX_LATENCY)
+		op->rsp_flags |= RTE_REGEX_OPS_RSP_MAX_SCAN_TIMEOUT_F;
+	if (status & MLX5_RXP_RESP_STATUS_MAX_MATCH)
+		op->rsp_flags |= RTE_REGEX_OPS_RSP_MAX_MATCH_F;
+	if (status & MLX5_RXP_RESP_STATUS_MAX_PREFIX)
+		op->rsp_flags |= RTE_REGEX_OPS_RSP_MAX_PREFIX_F;
+	if (status & MLX5_RXP_RESP_STATUS_MAX_PRI_THREADS)
+		op->rsp_flags |= RTE_REGEX_OPS_RSP_RESOURCE_LIMIT_REACHED_F;
+	if (status & MLX5_RXP_RESP_STATUS_MAX_SEC_THREADS)
+		op->rsp_flags |= RTE_REGEX_OPS_RSP_RESOURCE_LIMIT_REACHED_F;
 }
 
 static inline volatile struct mlx5_cqe *
@@ -224,7 +260,7 @@ poll_one(struct mlx5_regex_cq *cq)
 	size_t next_cqe_offset;
 
 	next_cqe_offset =  (cq->ci & (cq_size_get(cq) - 1));
-	cqe = (volatile struct mlx5_cqe *)(cq->cqe + next_cqe_offset);
+	cqe = (volatile struct mlx5_cqe *)(cq->cq_obj.cqes + next_cqe_offset);
 	rte_io_wmb();
 
 	int ret = check_cqe(cqe, cq_size_get(cq), cq->ci);
@@ -285,7 +321,7 @@ mlx5_regexdev_dequeue(struct rte_regexdev *dev, uint16_t qp_id,
 		}
 		cq->ci = (cq->ci + 1) & 0xffffff;
 		rte_wmb();
-		cq->dbr[0] = rte_cpu_to_be_32(cq->ci);
+		cq->cq_obj.db_rec[0] = rte_cpu_to_be_32(cq->ci);
 		queue->free_sqs |= (1 << sqid);
 	}
 
@@ -301,7 +337,7 @@ setup_sqs(struct mlx5_regex_qp *queue)
 	uint32_t job_id;
 	for (sqid = 0; sqid < queue->nb_obj; sqid++) {
 		struct mlx5_regex_sq *sq = &queue->sqs[sqid];
-		uint8_t *wqe = (uint8_t *)sq->wqe;
+		uint8_t *wqe = (uint8_t *)(uintptr_t)sq->sq_obj.wqes;
 		for (entry = 0 ; entry < sq_size_get(sq); entry++) {
 			job_id = sqid * sq_size_get(sq) + entry;
 			struct mlx5_regex_job *job = &queue->jobs[job_id];
@@ -334,7 +370,7 @@ setup_buffers(struct mlx5_regex_qp *qp, struct ibv_pd *pd)
 		return -ENOMEM;
 
 	qp->metadata = mlx5_glue->reg_mr(pd, ptr,
-					 MLX5_REGEX_METADATA_SIZE*qp->nb_desc,
+					 MLX5_REGEX_METADATA_SIZE * qp->nb_desc,
 					 IBV_ACCESS_LOCAL_WRITE);
 	if (!qp->metadata) {
 		DRV_LOG(ERR, "Failed to register metadata");

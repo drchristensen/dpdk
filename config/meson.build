@@ -142,12 +142,19 @@ endif
 
 # check for libraries used in multiple places in DPDK
 has_libnuma = 0
-numa_dep = cc.find_library('numa', required: false)
-if numa_dep.found() and cc.has_header('numaif.h')
-	dpdk_conf.set10('RTE_HAS_LIBNUMA', true)
-	has_libnuma = 1
-	add_project_link_arguments('-lnuma', language: 'c')
-	dpdk_extra_ldflags += '-lnuma'
+find_libnuma = true
+if meson.is_cross_build() and not meson.get_cross_property('numa', true)
+	# don't look for libnuma if explicitly disabled in cross build
+	find_libnuma = false
+endif
+if find_libnuma
+	numa_dep = cc.find_library('numa', required: false)
+	if numa_dep.found() and cc.has_header('numaif.h')
+		dpdk_conf.set10('RTE_HAS_LIBNUMA', true)
+		has_libnuma = 1
+		add_project_link_arguments('-lnuma', language: 'c')
+		dpdk_extra_ldflags += '-lnuma'
+	endif
 endif
 
 has_libfdt = 0
@@ -160,7 +167,7 @@ if fdt_dep.found() and cc.has_header('fdt.h')
 endif
 
 # check for libbsd
-libbsd = dependency('libbsd', required: false)
+libbsd = dependency('libbsd', required: false, method: 'pkg-config')
 if libbsd.found()
 	dpdk_conf.set('RTE_USE_LIBBSD', 1)
 endif
@@ -253,10 +260,25 @@ compile_time_cpuflags = []
 subdir(arch_subdir)
 dpdk_conf.set('RTE_COMPILE_TIME_CPUFLAGS', ','.join(compile_time_cpuflags))
 
+# apply cross-specific options
+if meson.is_cross_build()
+	# configure RTE_MAX_LCORE and RTE_MAX_NUMA_NODES from cross file
+	cross_max_lcores = meson.get_cross_property('max_lcores', 0)
+	if cross_max_lcores != 0
+		message('Setting RTE_MAX_LCORE from cross file')
+		dpdk_conf.set('RTE_MAX_LCORE', cross_max_lcores)
+	endif
+	cross_max_numa_nodes = meson.get_cross_property('max_numa_nodes', 0)
+	if cross_max_numa_nodes != 0
+		message('Setting RTE_MAX_NUMA_NODES from cross file')
+		dpdk_conf.set('RTE_MAX_NUMA_NODES', cross_max_numa_nodes)
+	endif
+endif
+
 # set the install path for the drivers
 dpdk_conf.set_quoted('RTE_EAL_PMD_PATH', eal_pmd_path)
 
-install_headers(['rte_config.h', 'rte_compatibility_defines.h'],
+install_headers(['rte_config.h'],
 		subdir: get_option('include_subdir_arch'))
 
 # enable VFIO only if it is linux OS
@@ -277,6 +299,11 @@ if is_windows
 	# Use MinGW-w64 stdio, because DPDK assumes ANSI-compliant formatting.
 	if cc.get_id() == 'gcc'
 		add_project_arguments('-D__USE_MINGW_ANSI_STDIO', language: 'c')
+	endif
+
+	# Disable secure CRT deprecated warnings for clang
+	if cc.get_id() == 'clang'
+		add_project_arguments('-D_CRT_SECURE_NO_WARNINGS', language: 'c')
 	endif
 
 	add_project_link_arguments('-lws2_32', language: 'c')
@@ -302,4 +329,13 @@ if get_option('b_lto')
 		add_project_arguments('-Wno-lto-type-mismatch', language: 'c')
 		add_project_link_arguments('-Wno-lto-type-mismatch', language: 'c')
 	endif
+endif
+
+if get_option('default_library') == 'both'
+	error( '''
+    Unsupported value "both" for "default_library" option.
+
+    NOTE: DPDK always builds both shared and static libraries.  Please set
+    "default_library" to either "static" or "shared" to select default linkage
+    for apps and any examples.''')
 endif

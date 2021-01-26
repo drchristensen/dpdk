@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2020 Intel Corporation
+ * Copyright(c) 2001-2021 Intel Corporation
  */
 
 #ifndef _ICE_SWITCH_H_
@@ -182,7 +182,6 @@ struct ice_fltr_info {
 		 */
 		u16 q_id:11;
 		u16 hw_vsi_id:10;
-		u16 vsi_id:10;
 		u16 vsi_list_id:10;
 	} fwd_id;
 

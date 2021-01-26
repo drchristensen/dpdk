@@ -88,6 +88,10 @@ static const struct reg_info *txgbe_regs_others[] = {
 				txgbe_regs_diagnostic,
 				NULL};
 
+static int txgbe_fdir_filter_init(struct rte_eth_dev *eth_dev);
+static int txgbe_fdir_filter_uninit(struct rte_eth_dev *eth_dev);
+static int txgbe_l2_tn_filter_init(struct rte_eth_dev *eth_dev);
+static int txgbe_l2_tn_filter_uninit(struct rte_eth_dev *eth_dev);
 static int  txgbe_dev_set_link_up(struct rte_eth_dev *dev);
 static int  txgbe_dev_set_link_down(struct rte_eth_dev *dev);
 static int txgbe_dev_close(struct rte_eth_dev *dev);
@@ -108,6 +112,9 @@ static int txgbe_dev_interrupt_action(struct rte_eth_dev *dev,
 static void txgbe_dev_interrupt_handler(void *param);
 static void txgbe_dev_interrupt_delayed_handler(void *param);
 static void txgbe_configure_msix(struct rte_eth_dev *dev);
+
+static int txgbe_filter_restore(struct rte_eth_dev *dev);
+static void txgbe_l2_tunnel_conf(struct rte_eth_dev *dev);
 
 #define TXGBE_SET_HWSTRIP(h, q) do {\
 		uint32_t idx = (q) / (sizeof((h)->bitmap[0]) * NBBY); \
@@ -470,6 +477,7 @@ eth_txgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	struct txgbe_vfta *shadow_vfta = TXGBE_DEV_VFTA(eth_dev);
 	struct txgbe_hwstrip *hwstrip = TXGBE_DEV_HWSTRIP(eth_dev);
 	struct txgbe_dcb_config *dcb_config = TXGBE_DEV_DCB_CONFIG(eth_dev);
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(eth_dev);
 	struct txgbe_bw_conf *bw_conf = TXGBE_DEV_BW_CONF(eth_dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	const struct rte_memzone *mz;
@@ -538,6 +546,12 @@ eth_txgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 
 	/* Unlock any pending hardware semaphore */
 	txgbe_swfw_lock_reset(hw);
+
+#ifdef RTE_LIB_SECURITY
+	/* Initialize security_ctx only for primary process*/
+	if (txgbe_ipsec_ctx_create(eth_dev))
+		return -ENOMEM;
+#endif
 
 	/* Initialize DCB configuration*/
 	memset(dcb_config, 0, sizeof(struct txgbe_dcb_config));
@@ -677,8 +691,27 @@ eth_txgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	/* enable support intr */
 	txgbe_enable_intr(eth_dev);
 
+	/* initialize filter info */
+	memset(filter_info, 0,
+	       sizeof(struct txgbe_filter_info));
+
+	/* initialize 5tuple filter list */
+	TAILQ_INIT(&filter_info->fivetuple_list);
+
+	/* initialize flow director filter list & hash */
+	txgbe_fdir_filter_init(eth_dev);
+
+	/* initialize l2 tunnel filter list & hash */
+	txgbe_l2_tn_filter_init(eth_dev);
+
+	/* initialize flow filter lists */
+	txgbe_filterlist_init();
+
 	/* initialize bandwidth configuration info */
 	memset(bw_conf, 0, sizeof(struct txgbe_bw_conf));
+
+	/* initialize Traffic Manager configuration */
+	txgbe_tm_conf_init(eth_dev);
 
 	return 0;
 }
@@ -692,6 +725,135 @@ eth_txgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 		return 0;
 
 	txgbe_dev_close(eth_dev);
+
+	return 0;
+}
+
+static int txgbe_ntuple_filter_uninit(struct rte_eth_dev *eth_dev)
+{
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(eth_dev);
+	struct txgbe_5tuple_filter *p_5tuple;
+
+	while ((p_5tuple = TAILQ_FIRST(&filter_info->fivetuple_list))) {
+		TAILQ_REMOVE(&filter_info->fivetuple_list,
+			     p_5tuple,
+			     entries);
+		rte_free(p_5tuple);
+	}
+	memset(filter_info->fivetuple_mask, 0,
+	       sizeof(uint32_t) * TXGBE_5TUPLE_ARRAY_SIZE);
+
+	return 0;
+}
+
+static int txgbe_fdir_filter_uninit(struct rte_eth_dev *eth_dev)
+{
+	struct txgbe_hw_fdir_info *fdir_info = TXGBE_DEV_FDIR(eth_dev);
+	struct txgbe_fdir_filter *fdir_filter;
+
+	if (fdir_info->hash_map)
+		rte_free(fdir_info->hash_map);
+	if (fdir_info->hash_handle)
+		rte_hash_free(fdir_info->hash_handle);
+
+	while ((fdir_filter = TAILQ_FIRST(&fdir_info->fdir_list))) {
+		TAILQ_REMOVE(&fdir_info->fdir_list,
+			     fdir_filter,
+			     entries);
+		rte_free(fdir_filter);
+	}
+
+	return 0;
+}
+
+static int txgbe_l2_tn_filter_uninit(struct rte_eth_dev *eth_dev)
+{
+	struct txgbe_l2_tn_info *l2_tn_info = TXGBE_DEV_L2_TN(eth_dev);
+	struct txgbe_l2_tn_filter *l2_tn_filter;
+
+	if (l2_tn_info->hash_map)
+		rte_free(l2_tn_info->hash_map);
+	if (l2_tn_info->hash_handle)
+		rte_hash_free(l2_tn_info->hash_handle);
+
+	while ((l2_tn_filter = TAILQ_FIRST(&l2_tn_info->l2_tn_list))) {
+		TAILQ_REMOVE(&l2_tn_info->l2_tn_list,
+			     l2_tn_filter,
+			     entries);
+		rte_free(l2_tn_filter);
+	}
+
+	return 0;
+}
+
+static int txgbe_fdir_filter_init(struct rte_eth_dev *eth_dev)
+{
+	struct txgbe_hw_fdir_info *fdir_info = TXGBE_DEV_FDIR(eth_dev);
+	char fdir_hash_name[RTE_HASH_NAMESIZE];
+	struct rte_hash_parameters fdir_hash_params = {
+		.name = fdir_hash_name,
+		.entries = TXGBE_MAX_FDIR_FILTER_NUM,
+		.key_len = sizeof(struct txgbe_atr_input),
+		.hash_func = rte_hash_crc,
+		.hash_func_init_val = 0,
+		.socket_id = rte_socket_id(),
+	};
+
+	TAILQ_INIT(&fdir_info->fdir_list);
+	snprintf(fdir_hash_name, RTE_HASH_NAMESIZE,
+		 "fdir_%s", TDEV_NAME(eth_dev));
+	fdir_info->hash_handle = rte_hash_create(&fdir_hash_params);
+	if (!fdir_info->hash_handle) {
+		PMD_INIT_LOG(ERR, "Failed to create fdir hash table!");
+		return -EINVAL;
+	}
+	fdir_info->hash_map = rte_zmalloc("txgbe",
+					  sizeof(struct txgbe_fdir_filter *) *
+					  TXGBE_MAX_FDIR_FILTER_NUM,
+					  0);
+	if (!fdir_info->hash_map) {
+		PMD_INIT_LOG(ERR,
+			     "Failed to allocate memory for fdir hash map!");
+		return -ENOMEM;
+	}
+	fdir_info->mask_added = FALSE;
+
+	return 0;
+}
+
+static int txgbe_l2_tn_filter_init(struct rte_eth_dev *eth_dev)
+{
+	struct txgbe_l2_tn_info *l2_tn_info = TXGBE_DEV_L2_TN(eth_dev);
+	char l2_tn_hash_name[RTE_HASH_NAMESIZE];
+	struct rte_hash_parameters l2_tn_hash_params = {
+		.name = l2_tn_hash_name,
+		.entries = TXGBE_MAX_L2_TN_FILTER_NUM,
+		.key_len = sizeof(struct txgbe_l2_tn_key),
+		.hash_func = rte_hash_crc,
+		.hash_func_init_val = 0,
+		.socket_id = rte_socket_id(),
+	};
+
+	TAILQ_INIT(&l2_tn_info->l2_tn_list);
+	snprintf(l2_tn_hash_name, RTE_HASH_NAMESIZE,
+		 "l2_tn_%s", TDEV_NAME(eth_dev));
+	l2_tn_info->hash_handle = rte_hash_create(&l2_tn_hash_params);
+	if (!l2_tn_info->hash_handle) {
+		PMD_INIT_LOG(ERR, "Failed to create L2 TN hash table!");
+		return -EINVAL;
+	}
+	l2_tn_info->hash_map = rte_zmalloc("txgbe",
+				   sizeof(struct txgbe_l2_tn_filter *) *
+				   TXGBE_MAX_L2_TN_FILTER_NUM,
+				   0);
+	if (!l2_tn_info->hash_map) {
+		PMD_INIT_LOG(ERR,
+			"Failed to allocate memory for L2 TN hash map!");
+		return -ENOMEM;
+	}
+	l2_tn_info->e_tag_en = FALSE;
+	l2_tn_info->e_tag_fwd_en = FALSE;
+	l2_tn_info->e_tag_ether_type = RTE_ETHER_TYPE_ETAG;
 
 	return 0;
 }
@@ -1392,6 +1554,7 @@ txgbe_dev_start(struct rte_eth_dev *dev)
 	int status;
 	uint16_t vf, idx;
 	uint32_t *link_speeds;
+	struct txgbe_tm_conf *tm_conf = TXGBE_DEV_TM_CONF(dev);
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1482,6 +1645,12 @@ txgbe_dev_start(struct rte_eth_dev *dev)
 	txgbe_configure_pb(dev);
 	txgbe_configure_port(dev);
 	txgbe_configure_dcb(dev);
+
+	if (dev->data->dev_conf.fdir_conf.mode != RTE_FDIR_MODE_NONE) {
+		err = txgbe_fdir_configure(dev);
+		if (err)
+			goto error;
+	}
 
 	/* Restore vf rate limit */
 	if (vfinfo != NULL) {
@@ -1586,6 +1755,13 @@ skip_link_setup:
 
 	/* resume enabled intr since hw reset */
 	txgbe_enable_intr(dev);
+	txgbe_l2_tunnel_conf(dev);
+	txgbe_filter_restore(dev);
+
+	if (tm_conf->root && !tm_conf->committed)
+		PMD_DRV_LOG(WARNING,
+			    "please call hierarchy_commit() "
+			    "before starting the port");
 
 	/*
 	 * Update link status right before return, because it may
@@ -1619,6 +1795,7 @@ txgbe_dev_stop(struct rte_eth_dev *dev)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	int vf;
+	struct txgbe_tm_conf *tm_conf = TXGBE_DEV_TM_CONF(dev);
 
 	if (hw->adapter_stopped)
 		return 0;
@@ -1670,6 +1847,9 @@ txgbe_dev_stop(struct rte_eth_dev *dev)
 		rte_free(intr_handle->intr_vec);
 		intr_handle->intr_vec = NULL;
 	}
+
+	/* reset hierarchy commit */
+	tm_conf->committed = false;
 
 	adapter->rss_reta_updated = 0;
 	wr32m(hw, TXGBE_LEDCTL, 0xFFFFFFFF, TXGBE_LEDCTL_SEL_MASK);
@@ -1773,6 +1953,25 @@ txgbe_dev_close(struct rte_eth_dev *dev)
 
 	rte_free(dev->data->hash_mac_addrs);
 	dev->data->hash_mac_addrs = NULL;
+
+	/* remove all the fdir filters & hash */
+	txgbe_fdir_filter_uninit(dev);
+
+	/* remove all the L2 tunnel filters & hash */
+	txgbe_l2_tn_filter_uninit(dev);
+
+	/* Remove all ntuple filters of the device */
+	txgbe_ntuple_filter_uninit(dev);
+
+	/* clear all the filters list */
+	txgbe_filterlist_flush();
+
+	/* Remove all Traffic Manager configuration */
+	txgbe_tm_conf_uninit(dev);
+
+#ifdef RTE_LIB_SECURITY
+	rte_free(dev->security_ctx);
+#endif
 
 	return ret;
 }
@@ -3480,6 +3679,426 @@ txgbe_set_queue_rate_limit(struct rte_eth_dev *dev,
 	return 0;
 }
 
+int
+txgbe_syn_filter_set(struct rte_eth_dev *dev,
+			struct rte_eth_syn_filter *filter,
+			bool add)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	uint32_t syn_info;
+	uint32_t synqf;
+
+	if (filter->queue >= TXGBE_MAX_RX_QUEUE_NUM)
+		return -EINVAL;
+
+	syn_info = filter_info->syn_info;
+
+	if (add) {
+		if (syn_info & TXGBE_SYNCLS_ENA)
+			return -EINVAL;
+		synqf = (uint32_t)TXGBE_SYNCLS_QPID(filter->queue);
+		synqf |= TXGBE_SYNCLS_ENA;
+
+		if (filter->hig_pri)
+			synqf |= TXGBE_SYNCLS_HIPRIO;
+		else
+			synqf &= ~TXGBE_SYNCLS_HIPRIO;
+	} else {
+		synqf = rd32(hw, TXGBE_SYNCLS);
+		if (!(syn_info & TXGBE_SYNCLS_ENA))
+			return -ENOENT;
+		synqf &= ~(TXGBE_SYNCLS_QPID_MASK | TXGBE_SYNCLS_ENA);
+	}
+
+	filter_info->syn_info = synqf;
+	wr32(hw, TXGBE_SYNCLS, synqf);
+	txgbe_flush(hw);
+	return 0;
+}
+
+static inline enum txgbe_5tuple_protocol
+convert_protocol_type(uint8_t protocol_value)
+{
+	if (protocol_value == IPPROTO_TCP)
+		return TXGBE_5TF_PROT_TCP;
+	else if (protocol_value == IPPROTO_UDP)
+		return TXGBE_5TF_PROT_UDP;
+	else if (protocol_value == IPPROTO_SCTP)
+		return TXGBE_5TF_PROT_SCTP;
+	else
+		return TXGBE_5TF_PROT_NONE;
+}
+
+/* inject a 5-tuple filter to HW */
+static inline void
+txgbe_inject_5tuple_filter(struct rte_eth_dev *dev,
+			   struct txgbe_5tuple_filter *filter)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	int i;
+	uint32_t ftqf, sdpqf;
+	uint32_t l34timir = 0;
+	uint32_t mask = TXGBE_5TFCTL0_MASK;
+
+	i = filter->index;
+	sdpqf = TXGBE_5TFPORT_DST(be_to_le16(filter->filter_info.dst_port));
+	sdpqf |= TXGBE_5TFPORT_SRC(be_to_le16(filter->filter_info.src_port));
+
+	ftqf = TXGBE_5TFCTL0_PROTO(filter->filter_info.proto);
+	ftqf |= TXGBE_5TFCTL0_PRI(filter->filter_info.priority);
+	if (filter->filter_info.src_ip_mask == 0) /* 0 means compare. */
+		mask &= ~TXGBE_5TFCTL0_MSADDR;
+	if (filter->filter_info.dst_ip_mask == 0)
+		mask &= ~TXGBE_5TFCTL0_MDADDR;
+	if (filter->filter_info.src_port_mask == 0)
+		mask &= ~TXGBE_5TFCTL0_MSPORT;
+	if (filter->filter_info.dst_port_mask == 0)
+		mask &= ~TXGBE_5TFCTL0_MDPORT;
+	if (filter->filter_info.proto_mask == 0)
+		mask &= ~TXGBE_5TFCTL0_MPROTO;
+	ftqf |= mask;
+	ftqf |= TXGBE_5TFCTL0_MPOOL;
+	ftqf |= TXGBE_5TFCTL0_ENA;
+
+	wr32(hw, TXGBE_5TFDADDR(i), be_to_le32(filter->filter_info.dst_ip));
+	wr32(hw, TXGBE_5TFSADDR(i), be_to_le32(filter->filter_info.src_ip));
+	wr32(hw, TXGBE_5TFPORT(i), sdpqf);
+	wr32(hw, TXGBE_5TFCTL0(i), ftqf);
+
+	l34timir |= TXGBE_5TFCTL1_QP(filter->queue);
+	wr32(hw, TXGBE_5TFCTL1(i), l34timir);
+}
+
+/*
+ * add a 5tuple filter
+ *
+ * @param
+ * dev: Pointer to struct rte_eth_dev.
+ * index: the index the filter allocates.
+ * filter: pointer to the filter that will be added.
+ * rx_queue: the queue id the filter assigned to.
+ *
+ * @return
+ *    - On success, zero.
+ *    - On failure, a negative value.
+ */
+static int
+txgbe_add_5tuple_filter(struct rte_eth_dev *dev,
+			struct txgbe_5tuple_filter *filter)
+{
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	int i, idx, shift;
+
+	/*
+	 * look for an unused 5tuple filter index,
+	 * and insert the filter to list.
+	 */
+	for (i = 0; i < TXGBE_MAX_FTQF_FILTERS; i++) {
+		idx = i / (sizeof(uint32_t) * NBBY);
+		shift = i % (sizeof(uint32_t) * NBBY);
+		if (!(filter_info->fivetuple_mask[idx] & (1 << shift))) {
+			filter_info->fivetuple_mask[idx] |= 1 << shift;
+			filter->index = i;
+			TAILQ_INSERT_TAIL(&filter_info->fivetuple_list,
+					  filter,
+					  entries);
+			break;
+		}
+	}
+	if (i >= TXGBE_MAX_FTQF_FILTERS) {
+		PMD_DRV_LOG(ERR, "5tuple filters are full.");
+		return -ENOSYS;
+	}
+
+	txgbe_inject_5tuple_filter(dev, filter);
+
+	return 0;
+}
+
+/*
+ * remove a 5tuple filter
+ *
+ * @param
+ * dev: Pointer to struct rte_eth_dev.
+ * filter: the pointer of the filter will be removed.
+ */
+static void
+txgbe_remove_5tuple_filter(struct rte_eth_dev *dev,
+			struct txgbe_5tuple_filter *filter)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	uint16_t index = filter->index;
+
+	filter_info->fivetuple_mask[index / (sizeof(uint32_t) * NBBY)] &=
+				~(1 << (index % (sizeof(uint32_t) * NBBY)));
+	TAILQ_REMOVE(&filter_info->fivetuple_list, filter, entries);
+	rte_free(filter);
+
+	wr32(hw, TXGBE_5TFDADDR(index), 0);
+	wr32(hw, TXGBE_5TFSADDR(index), 0);
+	wr32(hw, TXGBE_5TFPORT(index), 0);
+	wr32(hw, TXGBE_5TFCTL0(index), 0);
+	wr32(hw, TXGBE_5TFCTL1(index), 0);
+}
+
+static inline struct txgbe_5tuple_filter *
+txgbe_5tuple_filter_lookup(struct txgbe_5tuple_filter_list *filter_list,
+			struct txgbe_5tuple_filter_info *key)
+{
+	struct txgbe_5tuple_filter *it;
+
+	TAILQ_FOREACH(it, filter_list, entries) {
+		if (memcmp(key, &it->filter_info,
+			sizeof(struct txgbe_5tuple_filter_info)) == 0) {
+			return it;
+		}
+	}
+	return NULL;
+}
+
+/* translate elements in struct rte_eth_ntuple_filter
+ * to struct txgbe_5tuple_filter_info
+ */
+static inline int
+ntuple_filter_to_5tuple(struct rte_eth_ntuple_filter *filter,
+			struct txgbe_5tuple_filter_info *filter_info)
+{
+	if (filter->queue >= TXGBE_MAX_RX_QUEUE_NUM ||
+		filter->priority > TXGBE_5TUPLE_MAX_PRI ||
+		filter->priority < TXGBE_5TUPLE_MIN_PRI)
+		return -EINVAL;
+
+	switch (filter->dst_ip_mask) {
+	case UINT32_MAX:
+		filter_info->dst_ip_mask = 0;
+		filter_info->dst_ip = filter->dst_ip;
+		break;
+	case 0:
+		filter_info->dst_ip_mask = 1;
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "invalid dst_ip mask.");
+		return -EINVAL;
+	}
+
+	switch (filter->src_ip_mask) {
+	case UINT32_MAX:
+		filter_info->src_ip_mask = 0;
+		filter_info->src_ip = filter->src_ip;
+		break;
+	case 0:
+		filter_info->src_ip_mask = 1;
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "invalid src_ip mask.");
+		return -EINVAL;
+	}
+
+	switch (filter->dst_port_mask) {
+	case UINT16_MAX:
+		filter_info->dst_port_mask = 0;
+		filter_info->dst_port = filter->dst_port;
+		break;
+	case 0:
+		filter_info->dst_port_mask = 1;
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "invalid dst_port mask.");
+		return -EINVAL;
+	}
+
+	switch (filter->src_port_mask) {
+	case UINT16_MAX:
+		filter_info->src_port_mask = 0;
+		filter_info->src_port = filter->src_port;
+		break;
+	case 0:
+		filter_info->src_port_mask = 1;
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "invalid src_port mask.");
+		return -EINVAL;
+	}
+
+	switch (filter->proto_mask) {
+	case UINT8_MAX:
+		filter_info->proto_mask = 0;
+		filter_info->proto =
+			convert_protocol_type(filter->proto);
+		break;
+	case 0:
+		filter_info->proto_mask = 1;
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "invalid protocol mask.");
+		return -EINVAL;
+	}
+
+	filter_info->priority = (uint8_t)filter->priority;
+	return 0;
+}
+
+/*
+ * add or delete a ntuple filter
+ *
+ * @param
+ * dev: Pointer to struct rte_eth_dev.
+ * ntuple_filter: Pointer to struct rte_eth_ntuple_filter
+ * add: if true, add filter, if false, remove filter
+ *
+ * @return
+ *    - On success, zero.
+ *    - On failure, a negative value.
+ */
+int
+txgbe_add_del_ntuple_filter(struct rte_eth_dev *dev,
+			struct rte_eth_ntuple_filter *ntuple_filter,
+			bool add)
+{
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	struct txgbe_5tuple_filter_info filter_5tuple;
+	struct txgbe_5tuple_filter *filter;
+	int ret;
+
+	if (ntuple_filter->flags != RTE_5TUPLE_FLAGS) {
+		PMD_DRV_LOG(ERR, "only 5tuple is supported.");
+		return -EINVAL;
+	}
+
+	memset(&filter_5tuple, 0, sizeof(struct txgbe_5tuple_filter_info));
+	ret = ntuple_filter_to_5tuple(ntuple_filter, &filter_5tuple);
+	if (ret < 0)
+		return ret;
+
+	filter = txgbe_5tuple_filter_lookup(&filter_info->fivetuple_list,
+					 &filter_5tuple);
+	if (filter != NULL && add) {
+		PMD_DRV_LOG(ERR, "filter exists.");
+		return -EEXIST;
+	}
+	if (filter == NULL && !add) {
+		PMD_DRV_LOG(ERR, "filter doesn't exist.");
+		return -ENOENT;
+	}
+
+	if (add) {
+		filter = rte_zmalloc("txgbe_5tuple_filter",
+				sizeof(struct txgbe_5tuple_filter), 0);
+		if (filter == NULL)
+			return -ENOMEM;
+		rte_memcpy(&filter->filter_info,
+				 &filter_5tuple,
+				 sizeof(struct txgbe_5tuple_filter_info));
+		filter->queue = ntuple_filter->queue;
+		ret = txgbe_add_5tuple_filter(dev, filter);
+		if (ret < 0) {
+			rte_free(filter);
+			return ret;
+		}
+	} else {
+		txgbe_remove_5tuple_filter(dev, filter);
+	}
+
+	return 0;
+}
+
+int
+txgbe_add_del_ethertype_filter(struct rte_eth_dev *dev,
+			struct rte_eth_ethertype_filter *filter,
+			bool add)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	uint32_t etqf = 0;
+	uint32_t etqs = 0;
+	int ret;
+	struct txgbe_ethertype_filter ethertype_filter;
+
+	if (filter->queue >= TXGBE_MAX_RX_QUEUE_NUM)
+		return -EINVAL;
+
+	if (filter->ether_type == RTE_ETHER_TYPE_IPV4 ||
+	    filter->ether_type == RTE_ETHER_TYPE_IPV6) {
+		PMD_DRV_LOG(ERR, "unsupported ether_type(0x%04x) in"
+			" ethertype filter.", filter->ether_type);
+		return -EINVAL;
+	}
+
+	if (filter->flags & RTE_ETHTYPE_FLAGS_MAC) {
+		PMD_DRV_LOG(ERR, "mac compare is unsupported.");
+		return -EINVAL;
+	}
+	if (filter->flags & RTE_ETHTYPE_FLAGS_DROP) {
+		PMD_DRV_LOG(ERR, "drop option is unsupported.");
+		return -EINVAL;
+	}
+
+	ret = txgbe_ethertype_filter_lookup(filter_info, filter->ether_type);
+	if (ret >= 0 && add) {
+		PMD_DRV_LOG(ERR, "ethertype (0x%04x) filter exists.",
+			    filter->ether_type);
+		return -EEXIST;
+	}
+	if (ret < 0 && !add) {
+		PMD_DRV_LOG(ERR, "ethertype (0x%04x) filter doesn't exist.",
+			    filter->ether_type);
+		return -ENOENT;
+	}
+
+	if (add) {
+		etqf = TXGBE_ETFLT_ENA;
+		etqf |= TXGBE_ETFLT_ETID(filter->ether_type);
+		etqs |= TXGBE_ETCLS_QPID(filter->queue);
+		etqs |= TXGBE_ETCLS_QENA;
+
+		ethertype_filter.ethertype = filter->ether_type;
+		ethertype_filter.etqf = etqf;
+		ethertype_filter.etqs = etqs;
+		ethertype_filter.conf = FALSE;
+		ret = txgbe_ethertype_filter_insert(filter_info,
+						    &ethertype_filter);
+		if (ret < 0) {
+			PMD_DRV_LOG(ERR, "ethertype filters are full.");
+			return -ENOSPC;
+		}
+	} else {
+		ret = txgbe_ethertype_filter_remove(filter_info, (uint8_t)ret);
+		if (ret < 0)
+			return -ENOSYS;
+	}
+	wr32(hw, TXGBE_ETFLT(ret), etqf);
+	wr32(hw, TXGBE_ETCLS(ret), etqs);
+	txgbe_flush(hw);
+
+	return 0;
+}
+
+static int
+txgbe_dev_filter_ctrl(__rte_unused struct rte_eth_dev *dev,
+		     enum rte_filter_type filter_type,
+		     enum rte_filter_op filter_op,
+		     void *arg)
+{
+	int ret = 0;
+
+	switch (filter_type) {
+	case RTE_ETH_FILTER_GENERIC:
+		if (filter_op != RTE_ETH_FILTER_GET)
+			return -EINVAL;
+		*(const void **)arg = &txgbe_flow_ops;
+		break;
+	default:
+		PMD_DRV_LOG(WARNING, "Filter type (%d) not supported",
+							filter_type);
+		ret = -EINVAL;
+		break;
+	}
+
+	return ret;
+}
+
 static u8 *
 txgbe_dev_addr_list_itr(__rte_unused struct txgbe_hw *hw,
 			u8 **mc_addr_ptr, u32 *vmdq)
@@ -4001,6 +4620,537 @@ txgbe_dev_get_dcb_info(struct rte_eth_dev *dev,
 	return 0;
 }
 
+/* Update e-tag ether type */
+static int
+txgbe_update_e_tag_eth_type(struct txgbe_hw *hw,
+			    uint16_t ether_type)
+{
+	uint32_t etag_etype;
+
+	etag_etype = rd32(hw, TXGBE_EXTAG);
+	etag_etype &= ~TXGBE_EXTAG_ETAG_MASK;
+	etag_etype |= ether_type;
+	wr32(hw, TXGBE_EXTAG, etag_etype);
+	txgbe_flush(hw);
+
+	return 0;
+}
+
+/* Enable e-tag tunnel */
+static int
+txgbe_e_tag_enable(struct txgbe_hw *hw)
+{
+	uint32_t etag_etype;
+
+	etag_etype = rd32(hw, TXGBE_PORTCTL);
+	etag_etype |= TXGBE_PORTCTL_ETAG;
+	wr32(hw, TXGBE_PORTCTL, etag_etype);
+	txgbe_flush(hw);
+
+	return 0;
+}
+
+static int
+txgbe_e_tag_filter_del(struct rte_eth_dev *dev,
+		       struct txgbe_l2_tunnel_conf  *l2_tunnel)
+{
+	int ret = 0;
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	uint32_t i, rar_entries;
+	uint32_t rar_low, rar_high;
+
+	rar_entries = hw->mac.num_rar_entries;
+
+	for (i = 1; i < rar_entries; i++) {
+		wr32(hw, TXGBE_ETHADDRIDX, i);
+		rar_high = rd32(hw, TXGBE_ETHADDRH);
+		rar_low  = rd32(hw, TXGBE_ETHADDRL);
+		if ((rar_high & TXGBE_ETHADDRH_VLD) &&
+		    (rar_high & TXGBE_ETHADDRH_ETAG) &&
+		    (TXGBE_ETHADDRL_ETAG(rar_low) ==
+		     l2_tunnel->tunnel_id)) {
+			wr32(hw, TXGBE_ETHADDRL, 0);
+			wr32(hw, TXGBE_ETHADDRH, 0);
+
+			txgbe_clear_vmdq(hw, i, BIT_MASK32);
+
+			return ret;
+		}
+	}
+
+	return ret;
+}
+
+static int
+txgbe_e_tag_filter_add(struct rte_eth_dev *dev,
+		       struct txgbe_l2_tunnel_conf *l2_tunnel)
+{
+	int ret = 0;
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	uint32_t i, rar_entries;
+	uint32_t rar_low, rar_high;
+
+	/* One entry for one tunnel. Try to remove potential existing entry. */
+	txgbe_e_tag_filter_del(dev, l2_tunnel);
+
+	rar_entries = hw->mac.num_rar_entries;
+
+	for (i = 1; i < rar_entries; i++) {
+		wr32(hw, TXGBE_ETHADDRIDX, i);
+		rar_high = rd32(hw, TXGBE_ETHADDRH);
+		if (rar_high & TXGBE_ETHADDRH_VLD) {
+			continue;
+		} else {
+			txgbe_set_vmdq(hw, i, l2_tunnel->pool);
+			rar_high = TXGBE_ETHADDRH_VLD | TXGBE_ETHADDRH_ETAG;
+			rar_low = l2_tunnel->tunnel_id;
+
+			wr32(hw, TXGBE_ETHADDRL, rar_low);
+			wr32(hw, TXGBE_ETHADDRH, rar_high);
+
+			return ret;
+		}
+	}
+
+	PMD_INIT_LOG(NOTICE, "The table of E-tag forwarding rule is full."
+		     " Please remove a rule before adding a new one.");
+	return -EINVAL;
+}
+
+static inline struct txgbe_l2_tn_filter *
+txgbe_l2_tn_filter_lookup(struct txgbe_l2_tn_info *l2_tn_info,
+			  struct txgbe_l2_tn_key *key)
+{
+	int ret;
+
+	ret = rte_hash_lookup(l2_tn_info->hash_handle, (const void *)key);
+	if (ret < 0)
+		return NULL;
+
+	return l2_tn_info->hash_map[ret];
+}
+
+static inline int
+txgbe_insert_l2_tn_filter(struct txgbe_l2_tn_info *l2_tn_info,
+			  struct txgbe_l2_tn_filter *l2_tn_filter)
+{
+	int ret;
+
+	ret = rte_hash_add_key(l2_tn_info->hash_handle,
+			       &l2_tn_filter->key);
+
+	if (ret < 0) {
+		PMD_DRV_LOG(ERR,
+			    "Failed to insert L2 tunnel filter"
+			    " to hash table %d!",
+			    ret);
+		return ret;
+	}
+
+	l2_tn_info->hash_map[ret] = l2_tn_filter;
+
+	TAILQ_INSERT_TAIL(&l2_tn_info->l2_tn_list, l2_tn_filter, entries);
+
+	return 0;
+}
+
+static inline int
+txgbe_remove_l2_tn_filter(struct txgbe_l2_tn_info *l2_tn_info,
+			  struct txgbe_l2_tn_key *key)
+{
+	int ret;
+	struct txgbe_l2_tn_filter *l2_tn_filter;
+
+	ret = rte_hash_del_key(l2_tn_info->hash_handle, key);
+
+	if (ret < 0) {
+		PMD_DRV_LOG(ERR,
+			    "No such L2 tunnel filter to delete %d!",
+			    ret);
+		return ret;
+	}
+
+	l2_tn_filter = l2_tn_info->hash_map[ret];
+	l2_tn_info->hash_map[ret] = NULL;
+
+	TAILQ_REMOVE(&l2_tn_info->l2_tn_list, l2_tn_filter, entries);
+	rte_free(l2_tn_filter);
+
+	return 0;
+}
+
+/* Add l2 tunnel filter */
+int
+txgbe_dev_l2_tunnel_filter_add(struct rte_eth_dev *dev,
+			       struct txgbe_l2_tunnel_conf *l2_tunnel,
+			       bool restore)
+{
+	int ret;
+	struct txgbe_l2_tn_info *l2_tn_info = TXGBE_DEV_L2_TN(dev);
+	struct txgbe_l2_tn_key key;
+	struct txgbe_l2_tn_filter *node;
+
+	if (!restore) {
+		key.l2_tn_type = l2_tunnel->l2_tunnel_type;
+		key.tn_id = l2_tunnel->tunnel_id;
+
+		node = txgbe_l2_tn_filter_lookup(l2_tn_info, &key);
+
+		if (node) {
+			PMD_DRV_LOG(ERR,
+				    "The L2 tunnel filter already exists!");
+			return -EINVAL;
+		}
+
+		node = rte_zmalloc("txgbe_l2_tn",
+				   sizeof(struct txgbe_l2_tn_filter),
+				   0);
+		if (!node)
+			return -ENOMEM;
+
+		rte_memcpy(&node->key,
+				 &key,
+				 sizeof(struct txgbe_l2_tn_key));
+		node->pool = l2_tunnel->pool;
+		ret = txgbe_insert_l2_tn_filter(l2_tn_info, node);
+		if (ret < 0) {
+			rte_free(node);
+			return ret;
+		}
+	}
+
+	switch (l2_tunnel->l2_tunnel_type) {
+	case RTE_L2_TUNNEL_TYPE_E_TAG:
+		ret = txgbe_e_tag_filter_add(dev, l2_tunnel);
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Invalid tunnel type");
+		ret = -EINVAL;
+		break;
+	}
+
+	if (!restore && ret < 0)
+		(void)txgbe_remove_l2_tn_filter(l2_tn_info, &key);
+
+	return ret;
+}
+
+/* Delete l2 tunnel filter */
+int
+txgbe_dev_l2_tunnel_filter_del(struct rte_eth_dev *dev,
+			       struct txgbe_l2_tunnel_conf *l2_tunnel)
+{
+	int ret;
+	struct txgbe_l2_tn_info *l2_tn_info = TXGBE_DEV_L2_TN(dev);
+	struct txgbe_l2_tn_key key;
+
+	key.l2_tn_type = l2_tunnel->l2_tunnel_type;
+	key.tn_id = l2_tunnel->tunnel_id;
+	ret = txgbe_remove_l2_tn_filter(l2_tn_info, &key);
+	if (ret < 0)
+		return ret;
+
+	switch (l2_tunnel->l2_tunnel_type) {
+	case RTE_L2_TUNNEL_TYPE_E_TAG:
+		ret = txgbe_e_tag_filter_del(dev, l2_tunnel);
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Invalid tunnel type");
+		ret = -EINVAL;
+		break;
+	}
+
+	return ret;
+}
+
+static int
+txgbe_e_tag_forwarding_en_dis(struct rte_eth_dev *dev, bool en)
+{
+	int ret = 0;
+	uint32_t ctrl;
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+
+	ctrl = rd32(hw, TXGBE_POOLCTL);
+	ctrl &= ~TXGBE_POOLCTL_MODE_MASK;
+	if (en)
+		ctrl |= TXGBE_PSRPOOL_MODE_ETAG;
+	wr32(hw, TXGBE_POOLCTL, ctrl);
+
+	return ret;
+}
+
+/* Add UDP tunneling port */
+static int
+txgbe_dev_udp_tunnel_port_add(struct rte_eth_dev *dev,
+			      struct rte_eth_udp_tunnel *udp_tunnel)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	int ret = 0;
+
+	if (udp_tunnel == NULL)
+		return -EINVAL;
+
+	switch (udp_tunnel->prot_type) {
+	case RTE_TUNNEL_TYPE_VXLAN:
+		if (udp_tunnel->udp_port == 0) {
+			PMD_DRV_LOG(ERR, "Add VxLAN port 0 is not allowed.");
+			ret = -EINVAL;
+			break;
+		}
+		wr32(hw, TXGBE_VXLANPORT, udp_tunnel->udp_port);
+		wr32(hw, TXGBE_VXLANPORTGPE, udp_tunnel->udp_port);
+		break;
+	case RTE_TUNNEL_TYPE_GENEVE:
+		if (udp_tunnel->udp_port == 0) {
+			PMD_DRV_LOG(ERR, "Add Geneve port 0 is not allowed.");
+			ret = -EINVAL;
+			break;
+		}
+		wr32(hw, TXGBE_GENEVEPORT, udp_tunnel->udp_port);
+		break;
+	case RTE_TUNNEL_TYPE_TEREDO:
+		if (udp_tunnel->udp_port == 0) {
+			PMD_DRV_LOG(ERR, "Add Teredo port 0 is not allowed.");
+			ret = -EINVAL;
+			break;
+		}
+		wr32(hw, TXGBE_TEREDOPORT, udp_tunnel->udp_port);
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Invalid tunnel type");
+		ret = -EINVAL;
+		break;
+	}
+
+	txgbe_flush(hw);
+
+	return ret;
+}
+
+/* Remove UDP tunneling port */
+static int
+txgbe_dev_udp_tunnel_port_del(struct rte_eth_dev *dev,
+			      struct rte_eth_udp_tunnel *udp_tunnel)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	int ret = 0;
+	uint16_t cur_port;
+
+	if (udp_tunnel == NULL)
+		return -EINVAL;
+
+	switch (udp_tunnel->prot_type) {
+	case RTE_TUNNEL_TYPE_VXLAN:
+		cur_port = (uint16_t)rd32(hw, TXGBE_VXLANPORT);
+		if (cur_port != udp_tunnel->udp_port) {
+			PMD_DRV_LOG(ERR, "Port %u does not exist.",
+					udp_tunnel->udp_port);
+			ret = -EINVAL;
+			break;
+		}
+		wr32(hw, TXGBE_VXLANPORT, 0);
+		wr32(hw, TXGBE_VXLANPORTGPE, 0);
+		break;
+	case RTE_TUNNEL_TYPE_GENEVE:
+		cur_port = (uint16_t)rd32(hw, TXGBE_GENEVEPORT);
+		if (cur_port != udp_tunnel->udp_port) {
+			PMD_DRV_LOG(ERR, "Port %u does not exist.",
+					udp_tunnel->udp_port);
+			ret = -EINVAL;
+			break;
+		}
+		wr32(hw, TXGBE_GENEVEPORT, 0);
+		break;
+	case RTE_TUNNEL_TYPE_TEREDO:
+		cur_port = (uint16_t)rd32(hw, TXGBE_TEREDOPORT);
+		if (cur_port != udp_tunnel->udp_port) {
+			PMD_DRV_LOG(ERR, "Port %u does not exist.",
+					udp_tunnel->udp_port);
+			ret = -EINVAL;
+			break;
+		}
+		wr32(hw, TXGBE_TEREDOPORT, 0);
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Invalid tunnel type");
+		ret = -EINVAL;
+		break;
+	}
+
+	txgbe_flush(hw);
+
+	return ret;
+}
+
+/* restore n-tuple filter */
+static inline void
+txgbe_ntuple_filter_restore(struct rte_eth_dev *dev)
+{
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	struct txgbe_5tuple_filter *node;
+
+	TAILQ_FOREACH(node, &filter_info->fivetuple_list, entries) {
+		txgbe_inject_5tuple_filter(dev, node);
+	}
+}
+
+/* restore ethernet type filter */
+static inline void
+txgbe_ethertype_filter_restore(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	int i;
+
+	for (i = 0; i < TXGBE_ETF_ID_MAX; i++) {
+		if (filter_info->ethertype_mask & (1 << i)) {
+			wr32(hw, TXGBE_ETFLT(i),
+					filter_info->ethertype_filters[i].etqf);
+			wr32(hw, TXGBE_ETCLS(i),
+					filter_info->ethertype_filters[i].etqs);
+			txgbe_flush(hw);
+		}
+	}
+}
+
+/* restore SYN filter */
+static inline void
+txgbe_syn_filter_restore(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	uint32_t synqf;
+
+	synqf = filter_info->syn_info;
+
+	if (synqf & TXGBE_SYNCLS_ENA) {
+		wr32(hw, TXGBE_SYNCLS, synqf);
+		txgbe_flush(hw);
+	}
+}
+
+/* restore L2 tunnel filter */
+static inline void
+txgbe_l2_tn_filter_restore(struct rte_eth_dev *dev)
+{
+	struct txgbe_l2_tn_info *l2_tn_info = TXGBE_DEV_L2_TN(dev);
+	struct txgbe_l2_tn_filter *node;
+	struct txgbe_l2_tunnel_conf l2_tn_conf;
+
+	TAILQ_FOREACH(node, &l2_tn_info->l2_tn_list, entries) {
+		l2_tn_conf.l2_tunnel_type = node->key.l2_tn_type;
+		l2_tn_conf.tunnel_id      = node->key.tn_id;
+		l2_tn_conf.pool           = node->pool;
+		(void)txgbe_dev_l2_tunnel_filter_add(dev, &l2_tn_conf, TRUE);
+	}
+}
+
+/* restore rss filter */
+static inline void
+txgbe_rss_filter_restore(struct rte_eth_dev *dev)
+{
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+
+	if (filter_info->rss_info.conf.queue_num)
+		txgbe_config_rss_filter(dev,
+			&filter_info->rss_info, TRUE);
+}
+
+static int
+txgbe_filter_restore(struct rte_eth_dev *dev)
+{
+	txgbe_ntuple_filter_restore(dev);
+	txgbe_ethertype_filter_restore(dev);
+	txgbe_syn_filter_restore(dev);
+	txgbe_fdir_filter_restore(dev);
+	txgbe_l2_tn_filter_restore(dev);
+	txgbe_rss_filter_restore(dev);
+
+	return 0;
+}
+
+static void
+txgbe_l2_tunnel_conf(struct rte_eth_dev *dev)
+{
+	struct txgbe_l2_tn_info *l2_tn_info = TXGBE_DEV_L2_TN(dev);
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+
+	if (l2_tn_info->e_tag_en)
+		(void)txgbe_e_tag_enable(hw);
+
+	if (l2_tn_info->e_tag_fwd_en)
+		(void)txgbe_e_tag_forwarding_en_dis(dev, 1);
+
+	(void)txgbe_update_e_tag_eth_type(hw, l2_tn_info->e_tag_ether_type);
+}
+
+/* remove all the n-tuple filters */
+void
+txgbe_clear_all_ntuple_filter(struct rte_eth_dev *dev)
+{
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	struct txgbe_5tuple_filter *p_5tuple;
+
+	while ((p_5tuple = TAILQ_FIRST(&filter_info->fivetuple_list)))
+		txgbe_remove_5tuple_filter(dev, p_5tuple);
+}
+
+/* remove all the ether type filters */
+void
+txgbe_clear_all_ethertype_filter(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+	int i;
+
+	for (i = 0; i < TXGBE_ETF_ID_MAX; i++) {
+		if (filter_info->ethertype_mask & (1 << i) &&
+		    !filter_info->ethertype_filters[i].conf) {
+			(void)txgbe_ethertype_filter_remove(filter_info,
+							    (uint8_t)i);
+			wr32(hw, TXGBE_ETFLT(i), 0);
+			wr32(hw, TXGBE_ETCLS(i), 0);
+			txgbe_flush(hw);
+		}
+	}
+}
+
+/* remove the SYN filter */
+void
+txgbe_clear_syn_filter(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
+
+	if (filter_info->syn_info & TXGBE_SYNCLS_ENA) {
+		filter_info->syn_info = 0;
+
+		wr32(hw, TXGBE_SYNCLS, 0);
+		txgbe_flush(hw);
+	}
+}
+
+/* remove all the L2 tunnel filters */
+int
+txgbe_clear_all_l2_tn_filter(struct rte_eth_dev *dev)
+{
+	struct txgbe_l2_tn_info *l2_tn_info = TXGBE_DEV_L2_TN(dev);
+	struct txgbe_l2_tn_filter *l2_tn_filter;
+	struct txgbe_l2_tunnel_conf l2_tn_conf;
+	int ret = 0;
+
+	while ((l2_tn_filter = TAILQ_FIRST(&l2_tn_info->l2_tn_list))) {
+		l2_tn_conf.l2_tunnel_type = l2_tn_filter->key.l2_tn_type;
+		l2_tn_conf.tunnel_id      = l2_tn_filter->key.tn_id;
+		l2_tn_conf.pool           = l2_tn_filter->pool;
+		ret = txgbe_dev_l2_tunnel_filter_del(dev, &l2_tn_conf);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static const struct eth_dev_ops txgbe_eth_dev_ops = {
 	.dev_configure              = txgbe_dev_configure,
 	.dev_infos_get              = txgbe_dev_info_get,
@@ -4055,6 +5205,7 @@ static const struct eth_dev_ops txgbe_eth_dev_ops = {
 	.reta_query                 = txgbe_dev_rss_reta_query,
 	.rss_hash_update            = txgbe_dev_rss_hash_update,
 	.rss_hash_conf_get          = txgbe_dev_rss_hash_conf_get,
+	.filter_ctrl                = txgbe_dev_filter_ctrl,
 	.set_mc_addr_list           = txgbe_dev_set_mc_addr_list,
 	.rxq_info_get               = txgbe_rxq_info_get,
 	.txq_info_get               = txgbe_txq_info_get,
@@ -4072,6 +5223,9 @@ static const struct eth_dev_ops txgbe_eth_dev_ops = {
 	.timesync_adjust_time       = txgbe_timesync_adjust_time,
 	.timesync_read_time         = txgbe_timesync_read_time,
 	.timesync_write_time        = txgbe_timesync_write_time,
+	.udp_tunnel_port_add        = txgbe_dev_udp_tunnel_port_add,
+	.udp_tunnel_port_del        = txgbe_dev_udp_tunnel_port_del,
+	.tm_ops_get                 = txgbe_tm_ops_get,
 	.tx_done_cleanup            = txgbe_dev_tx_done_cleanup,
 };
 

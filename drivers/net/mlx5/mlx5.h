@@ -26,6 +26,7 @@
 #include <mlx5_prm.h>
 #include <mlx5_common_mp.h>
 #include <mlx5_common_mr.h>
+#include <mlx5_common_devx.h>
 
 #include "mlx5_defs.h"
 #include "mlx5_utils.h"
@@ -36,7 +37,7 @@
 #define MLX5_SH(dev) (((struct mlx5_priv *)(dev)->data->dev_private)->sh)
 
 enum mlx5_ipool_index {
-#ifdef HAVE_IBV_FLOW_DV_SUPPORT
+#if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 	MLX5_IPOOL_DECAP_ENCAP = 0, /* Pool for encap/decap resource. */
 	MLX5_IPOOL_PUSH_VLAN, /* Pool for push vlan resource. */
 	MLX5_IPOOL_TAG, /* Pool for tag resource. */
@@ -83,6 +84,11 @@ struct mlx5_dev_attr {
 	int		max_sge;
 	int		max_cq;
 	int		max_qp;
+	int		max_cqe;
+	uint32_t	max_pd;
+	uint32_t	max_mr;
+	uint32_t	max_srq;
+	uint32_t	max_srq_wr;
 	uint32_t	raw_packet_caps;
 	uint32_t	max_rwq_indirection_table_size;
 	uint32_t	max_tso;
@@ -135,9 +141,9 @@ struct mlx5_local_data {
 extern struct mlx5_shared_data *mlx5_shared_data;
 
 /* Dev ops structs */
-extern const struct eth_dev_ops mlx5_os_dev_ops;
-extern const struct eth_dev_ops mlx5_os_dev_sec_ops;
-extern const struct eth_dev_ops mlx5_os_dev_ops_isolate;
+extern const struct eth_dev_ops mlx5_dev_ops;
+extern const struct eth_dev_ops mlx5_dev_sec_ops;
+extern const struct eth_dev_ops mlx5_dev_ops_isolate;
 
 struct mlx5_counter_ctrl {
 	/* Name of the counter. */
@@ -207,7 +213,6 @@ struct mlx5_dev_config {
 	unsigned int mpls_en:1; /* MPLS over GRE/UDP is enabled. */
 	unsigned int cqe_comp:1; /* CQE compression is enabled. */
 	unsigned int cqe_comp_fmt:3; /* CQE compression format. */
-	unsigned int cqe_pad:1; /* CQE padding is enabled. */
 	unsigned int tso:1; /* Whether TSO is supported. */
 	unsigned int rx_vec_en:1; /* Rx vector is enabled. */
 	unsigned int mr_ext_memseg_en:1;
@@ -258,28 +263,10 @@ struct mlx5_dev_config {
 };
 
 
-/**
- * Type of object being allocated.
- */
-enum mlx5_verbs_alloc_type {
-	MLX5_VERBS_ALLOC_TYPE_NONE,
-	MLX5_VERBS_ALLOC_TYPE_TX_QUEUE,
-	MLX5_VERBS_ALLOC_TYPE_RX_QUEUE,
-};
-
 /* Structure for VF VLAN workaround. */
 struct mlx5_vf_vlan {
 	uint32_t tag:12;
 	uint32_t created:1;
-};
-
-/**
- * Verbs allocator needs a context to know in the callback which kind of
- * resources it is allocating.
- */
-struct mlx5_verbs_alloc_ctx {
-	enum mlx5_verbs_alloc_type type; /* Kind of object being allocated. */
-	const void *obj; /* Pointer to the DPDK object. */
 };
 
 /* Flow drop context necessary due to Verbs API. */
@@ -480,13 +467,7 @@ struct mlx5_flow_counter_mng {
 struct mlx5_aso_cq {
 	uint16_t log_desc_n;
 	uint32_t cq_ci:24;
-	struct mlx5_devx_obj *cq;
-	struct mlx5dv_devx_umem *umem_obj;
-	union {
-		volatile void *umem_buf;
-		volatile struct mlx5_cqe *cqes;
-	};
-	volatile uint32_t *db_rec;
+	struct mlx5_devx_cq cq_obj;
 	uint64_t errors;
 };
 
@@ -506,13 +487,7 @@ struct mlx5_aso_sq_elem {
 struct mlx5_aso_sq {
 	uint16_t log_desc_n;
 	struct mlx5_aso_cq cq;
-	struct mlx5_devx_obj *sq;
-	struct mlx5dv_devx_umem *wqe_umem; /* SQ buffer umem. */
-	union {
-		volatile void *umem_buf;
-		volatile struct mlx5_aso_wqe *wqes;
-	};
-	volatile uint32_t *db_rec;
+	struct mlx5_devx_sq sq_obj;
 	volatile uint64_t *uar_addr;
 	struct mlx5_aso_devx_mr mr;
 	uint16_t pi;
@@ -552,6 +527,16 @@ struct mlx5_aso_age_mng {
 	struct aso_age_list free; /* Free age actions list - ready to use. */
 	struct mlx5_aso_sq aso_sq; /* ASO queue objects. */
 };
+
+/* Management structure for geneve tlv option */
+struct mlx5_geneve_tlv_option_resource {
+	struct mlx5_devx_obj *obj; /* Pointer to the geneve tlv opt object. */
+	rte_be16_t option_class; /* geneve tlv opt class.*/
+	uint8_t option_type; /* geneve tlv opt type.*/
+	uint8_t length; /* geneve tlv opt length. */
+	uint32_t refcnt; /* geneve tlv object reference counter */
+};
+
 
 #define MLX5_AGE_EVENT_NEW		1
 #define MLX5_AGE_TRIGGER		2
@@ -630,25 +615,13 @@ struct mlx5_flow_id_pool {
 /* Tx pacing queue structure - for Clock and Rearm queues. */
 struct mlx5_txpp_wq {
 	/* Completion Queue related data.*/
-	struct mlx5_devx_obj *cq;
-	void *cq_umem;
-	union {
-		volatile void *cq_buf;
-		volatile struct mlx5_cqe *cqes;
-	};
-	volatile uint32_t *cq_dbrec;
+	struct mlx5_devx_cq cq_obj;
 	uint32_t cq_ci:24;
 	uint32_t arm_sn:2;
 	/* Send Queue related data.*/
-	struct mlx5_devx_obj *sq;
-	void *sq_umem;
-	union {
-		volatile void *sq_buf;
-		volatile struct mlx5_wqe *wqes;
-	};
+	struct mlx5_devx_sq sq_obj;
 	uint16_t sq_size; /* Number of WQEs in the queue. */
 	uint16_t sq_ci; /* Next WQE to execute. */
-	volatile uint32_t *sq_dbrec;
 };
 
 /* Tx packet pacing internal timestamp. */
@@ -708,14 +681,13 @@ struct mlx5_dev_ctx_shared {
 	uint16_t bond_dev; /* Bond primary device id. */
 	uint32_t devx:1; /* Opened with DV. */
 	uint32_t flow_hit_aso_en:1; /* Flow Hit ASO is supported. */
-	uint32_t eqn; /* Event Queue number. */
 	uint32_t max_port; /* Maximal IB device port index. */
 	void *ctx; /* Verbs/DV/DevX context. */
 	void *pd; /* Protection Domain. */
 	uint32_t pdn; /* Protection Domain number. */
 	uint32_t tdn; /* Transport Domain number. */
-	char ibdev_name[DEV_SYSFS_NAME_MAX]; /* SYSFS dev name. */
-	char ibdev_path[DEV_SYSFS_PATH_MAX]; /* SYSFS dev path for secondary */
+	char ibdev_name[MLX5_FS_NAME_MAX]; /* SYSFS dev name. */
+	char ibdev_path[MLX5_FS_PATH_MAX]; /* SYSFS dev path for secondary */
 	struct mlx5_dev_attr device_attr; /* Device properties. */
 	int numa_node; /* Numa node of backing physical device. */
 	LIST_ENTRY(mlx5_dev_ctx_shared) mem_event_cb;
@@ -765,6 +737,9 @@ struct mlx5_dev_ctx_shared {
 	void *devx_rx_uar; /* DevX UAR for Rx. */
 	struct mlx5_aso_age_mng *aso_age_mng;
 	/* Management data for aging mechanism using ASO Flow Hit. */
+	struct mlx5_geneve_tlv_option_resource *geneve_tlv_option_resource;
+	/* Management structure for geneve tlv option */
+	rte_spinlock_t geneve_tlv_opt_sl; /* Lock for geneve tlv resource */
 	struct mlx5_dev_shared_port port[]; /* per device port data array. */
 };
 
@@ -814,9 +789,10 @@ struct mlx5_rxq_obj {
 			void *ibv_cq; /* Completion Queue. */
 			void *ibv_channel;
 		};
+		struct mlx5_devx_obj *rq; /* DevX RQ object for hairpin. */
 		struct {
-			struct mlx5_devx_obj *rq; /* DevX Rx Queue object. */
-			struct mlx5_devx_obj *devx_cq; /* DevX CQ object. */
+			struct mlx5_devx_rq rq_obj; /* DevX RQ object. */
+			struct mlx5_devx_cq cq_obj; /* DevX CQ object. */
 			void *devx_channel;
 		};
 	};
@@ -846,7 +822,7 @@ struct mlx5_hrxq {
 		void *qp; /* Verbs queue pair. */
 		struct mlx5_devx_obj *tir; /* DevX TIR object. */
 	};
-#ifdef HAVE_IBV_FLOW_DV_SUPPORT
+#if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 	void *action; /* DV QP action pointer. */
 #endif
 	uint64_t hash_fields; /* Verbs Hash fields. */
@@ -872,16 +848,10 @@ struct mlx5_txq_obj {
 		};
 		struct {
 			struct rte_eth_dev *dev;
-			struct mlx5_devx_obj *cq_devx;
-			void *cq_umem;
-			void *cq_buf;
-			int64_t cq_dbrec_offset;
-			struct mlx5_devx_dbr_page *cq_dbrec_page;
-			struct mlx5_devx_obj *sq_devx;
-			void *sq_umem;
-			void *sq_buf;
-			int64_t sq_dbrec_offset;
-			struct mlx5_devx_dbr_page *sq_dbrec_page;
+			struct mlx5_devx_cq cq_obj;
+			/* DevX CQ object and its resources. */
+			struct mlx5_devx_sq sq_obj;
+			/* DevX SQ object and its resources. */
 		};
 	};
 };
@@ -930,6 +900,12 @@ struct mlx5_obj_ops {
 
 #define MLX5_RSS_HASH_FIELDS_LEN RTE_DIM(mlx5_rss_hash_fields)
 
+/* MR operations structure. */
+struct mlx5_mr_ops {
+	mlx5_reg_mr_t reg_mr;
+	mlx5_dereg_mr_t dereg_mr;
+};
+
 struct mlx5_priv {
 	struct rte_eth_dev_data *dev_data;  /* Pointer to device data. */
 	struct mlx5_dev_ctx_shared *sh; /* Shared device context. */
@@ -957,7 +933,7 @@ struct mlx5_priv {
 	int32_t pf_bond; /* >=0 means PF index in bonding configuration. */
 	unsigned int if_index; /* Associated kernel network device index. */
 	uint32_t bond_ifindex; /**< Bond interface index. */
-	char bond_name[IF_NAMESIZE]; /**< Bond interface name. */
+	char bond_name[MLX5_NAMESIZE]; /**< Bond interface name. */
 	/* RX/TX queues. */
 	unsigned int rxqs_n; /* RX queues array size. */
 	unsigned int txqs_n; /* TX queues array size. */
@@ -989,11 +965,9 @@ struct mlx5_priv {
 	struct mlx5_xstats_ctrl xstats_ctrl; /* Extended stats control. */
 	struct mlx5_stats_ctrl stats_ctrl; /* Stats control. */
 	struct mlx5_dev_config config; /* Device configuration. */
-	struct mlx5_verbs_alloc_ctx verbs_alloc_ctx;
 	/* Context for Verbs allocator. */
 	int nl_socket_rdma; /* Netlink socket (NETLINK_RDMA). */
 	int nl_socket_route; /* Netlink socket (NETLINK_ROUTE). */
-	struct mlx5_dbr_page_list dbrpgs; /* Door-bell pages. */
 	struct mlx5_nl_vlan_vmwa_context *vmwa_context; /* VLAN WA context. */
 	struct mlx5_hlist *mreg_cp_tbl;
 	/* Hash table of Rx metadata register copy table. */
@@ -1075,6 +1049,8 @@ int mlx5_dev_configure_rss_reta(struct rte_eth_dev *dev);
 
 /* mlx5_ethdev_os.c */
 
+int mlx5_get_ifname(const struct rte_eth_dev *dev,
+			char (*ifname)[MLX5_NAMESIZE]);
 unsigned int mlx5_ifindex(const struct rte_eth_dev *dev);
 int mlx5_get_mac(struct rte_eth_dev *dev, uint8_t (*mac)[RTE_ETHER_ADDR_LEN]);
 int mlx5_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu);

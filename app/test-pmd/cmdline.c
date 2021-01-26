@@ -163,7 +163,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"Display:\n"
 			"--------\n\n"
 
-			"show port (info|stats|summary|xstats|fdir|stat_qmap|dcb_tc|cap) (port_id|all)\n"
+			"show port (info|stats|summary|xstats|fdir|dcb_tc|cap) (port_id|all)\n"
 			"    Display information for port_id, or all.\n\n"
 
 			"show port port_id (module_eeprom|eeprom)\n"
@@ -177,7 +177,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"show port (port_id) rss-hash [key]\n"
 			"    Display the RSS hash functions and RSS hash key of port\n\n"
 
-			"clear port (info|stats|xstats|fdir|stat_qmap) (port_id|all)\n"
+			"clear port (info|stats|xstats|fdir) (port_id|all)\n"
 			"    Clear information for port_id, or all.\n\n"
 
 			"show (rxq|txq) info (port_id) (queue_id)\n"
@@ -845,7 +845,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"fdir_inset|fdir_flx_inset clear all"
 			"    Clear RSS|FDIR|FDIR_FLX input set completely for some pctype\n\n"
 
-			"port config (port_id) udp_tunnel_port add|rm vxlan|geneve (udp_port)\n\n"
+			"port config (port_id) udp_tunnel_port add|rm vxlan|geneve|ecpri (udp_port)\n\n"
 			"    Add/remove UDP tunnel port for tunneling offload\n\n"
 
 			"port config <port_id> rx_offload vlan_strip|"
@@ -1886,7 +1886,6 @@ cmd_config_max_pkt_len_parsed(void *parsed_result,
 
 	RTE_ETH_FOREACH_DEV(pid) {
 		struct rte_port *port = &ports[pid];
-		uint64_t rx_offloads = port->dev_conf.rxmode.offloads;
 
 		if (!strcmp(res->name, "max-pkt-len")) {
 			if (res->value < RTE_ETHER_MIN_LEN) {
@@ -1898,11 +1897,6 @@ cmd_config_max_pkt_len_parsed(void *parsed_result,
 				return;
 
 			port->dev_conf.rxmode.max_rx_pkt_len = res->value;
-			if (res->value > RTE_ETHER_MAX_LEN)
-				rx_offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
-			else
-				rx_offloads &= ~DEV_RX_OFFLOAD_JUMBO_FRAME;
-			port->dev_conf.rxmode.offloads = rx_offloads;
 		} else {
 			printf("Unknown parameter\n");
 			return;
@@ -7555,9 +7549,6 @@ static void cmd_showportall_parsed(void *parsed_result,
 		RTE_ETH_FOREACH_DEV(i)
 			fdir_get_infos(i);
 #endif
-	else if (!strcmp(res->what, "stat_qmap"))
-		RTE_ETH_FOREACH_DEV(i)
-			nic_stats_mapping_display(i);
 	else if (!strcmp(res->what, "dcb_tc"))
 		RTE_ETH_FOREACH_DEV(i)
 			port_dcb_info_display(i);
@@ -7573,14 +7564,14 @@ cmdline_parse_token_string_t cmd_showportall_port =
 	TOKEN_STRING_INITIALIZER(struct cmd_showportall_result, port, "port");
 cmdline_parse_token_string_t cmd_showportall_what =
 	TOKEN_STRING_INITIALIZER(struct cmd_showportall_result, what,
-				 "info#summary#stats#xstats#fdir#stat_qmap#dcb_tc#cap");
+				 "info#summary#stats#xstats#fdir#dcb_tc#cap");
 cmdline_parse_token_string_t cmd_showportall_all =
 	TOKEN_STRING_INITIALIZER(struct cmd_showportall_result, all, "all");
 cmdline_parse_inst_t cmd_showportall = {
 	.f = cmd_showportall_parsed,
 	.data = NULL,
 	.help_str = "show|clear port "
-		"info|summary|stats|xstats|fdir|stat_qmap|dcb_tc|cap all",
+		"info|summary|stats|xstats|fdir|dcb_tc|cap all",
 	.tokens = {
 		(void *)&cmd_showportall_show,
 		(void *)&cmd_showportall_port,
@@ -7622,8 +7613,6 @@ static void cmd_showport_parsed(void *parsed_result,
 	else if (!strcmp(res->what, "fdir"))
 		 fdir_get_infos(res->portnum);
 #endif
-	else if (!strcmp(res->what, "stat_qmap"))
-		nic_stats_mapping_display(res->portnum);
 	else if (!strcmp(res->what, "dcb_tc"))
 		port_dcb_info_display(res->portnum);
 	else if (!strcmp(res->what, "cap"))
@@ -7637,7 +7626,7 @@ cmdline_parse_token_string_t cmd_showport_port =
 	TOKEN_STRING_INITIALIZER(struct cmd_showport_result, port, "port");
 cmdline_parse_token_string_t cmd_showport_what =
 	TOKEN_STRING_INITIALIZER(struct cmd_showport_result, what,
-				 "info#summary#stats#xstats#fdir#stat_qmap#dcb_tc#cap");
+				 "info#summary#stats#xstats#fdir#dcb_tc#cap");
 cmdline_parse_token_num_t cmd_showport_portnum =
 	TOKEN_NUM_INITIALIZER(struct cmd_showport_result, portnum, RTE_UINT16);
 
@@ -7645,7 +7634,7 @@ cmdline_parse_inst_t cmd_showport = {
 	.f = cmd_showport_parsed,
 	.data = NULL,
 	.help_str = "show|clear port "
-		"info|summary|stats|xstats|fdir|stat_qmap|dcb_tc|cap "
+		"info|summary|stats|xstats|fdir|dcb_tc|cap "
 		"<port_id>",
 	.tokens = {
 		(void *)&cmd_showport_show,
@@ -9180,6 +9169,8 @@ cmd_cfg_tunnel_udp_port_parsed(void *parsed_result,
 		tunnel_udp.prot_type = RTE_TUNNEL_TYPE_GENEVE;
 	} else if (!strcmp(res->tunnel_type, "vxlan-gpe")) {
 		tunnel_udp.prot_type = RTE_TUNNEL_TYPE_VXLAN_GPE;
+	} else if (!strcmp(res->tunnel_type, "ecpri")) {
+		tunnel_udp.prot_type = RTE_TUNNEL_TYPE_ECPRI;
 	} else {
 		printf("Invalid tunnel type\n");
 		return;
@@ -9214,7 +9205,7 @@ cmdline_parse_token_string_t cmd_config_tunnel_udp_port_action =
 				 "add#rm");
 cmdline_parse_token_string_t cmd_config_tunnel_udp_port_tunnel_type =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_tunnel_udp_port, tunnel_type,
-				 "vxlan#geneve#vxlan-gpe");
+				 "vxlan#geneve#vxlan-gpe#ecpri");
 cmdline_parse_token_num_t cmd_config_tunnel_udp_port_value =
 	TOKEN_NUM_INITIALIZER(struct cmd_config_tunnel_udp_port, udp_port,
 			      RTE_UINT16);
@@ -9222,7 +9213,8 @@ cmdline_parse_token_num_t cmd_config_tunnel_udp_port_value =
 cmdline_parse_inst_t cmd_cfg_tunnel_udp_port = {
 	.f = cmd_cfg_tunnel_udp_port_parsed,
 	.data = NULL,
-	.help_str = "port config <port_id> udp_tunnel_port add|rm vxlan|geneve|vxlan-gpe <udp_port>",
+	.help_str = "port config <port_id> udp_tunnel_port add|rm vxlan|"
+		"geneve|vxlan-gpe|ecpri <udp_port>",
 	.tokens = {
 		(void *)&cmd_config_tunnel_udp_port_port,
 		(void *)&cmd_config_tunnel_udp_port_config,
@@ -16268,11 +16260,9 @@ cmd_show_fec_capability_parsed(void *parsed_result,
 		__rte_unused struct cmdline *cl,
 		__rte_unused void *data)
 {
-#define FEC_CAP_NUM 2
 	struct cmd_show_fec_capability_result *res = parsed_result;
-	struct rte_eth_fec_capa speed_fec_capa[FEC_CAP_NUM];
-	unsigned int num = FEC_CAP_NUM;
-	unsigned int ret_num;
+	struct rte_eth_fec_capa *speed_fec_capa;
+	unsigned int num;
 	int ret;
 
 	if (!rte_eth_dev_is_valid_port(res->cmd_pid)) {
@@ -16280,17 +16270,31 @@ cmd_show_fec_capability_parsed(void *parsed_result,
 		return;
 	}
 
-	ret = rte_eth_fec_get_capability(res->cmd_pid, speed_fec_capa, num);
+	ret = rte_eth_fec_get_capability(res->cmd_pid, NULL, 0);
 	if (ret == -ENOTSUP) {
 		printf("Function not implemented\n");
 		return;
 	} else if (ret < 0) {
-		printf("Get FEC capability failed\n");
+		printf("Get FEC capability failed: %d\n", ret);
 		return;
 	}
 
-	ret_num = (unsigned int)ret;
-	show_fec_capability(ret_num, speed_fec_capa);
+	num = (unsigned int)ret;
+	speed_fec_capa = calloc(num, sizeof(*speed_fec_capa));
+	if (speed_fec_capa == NULL) {
+		printf("Failed to alloc FEC capability buffer\n");
+		return;
+	}
+
+	ret = rte_eth_fec_get_capability(res->cmd_pid, speed_fec_capa, num);
+	if (ret < 0) {
+		printf("Error getting FEC capability: %d\n", ret);
+		goto out;
+	}
+
+	show_fec_capability(num, speed_fec_capa);
+out:
+	free(speed_fec_capa);
 }
 
 cmdline_parse_token_string_t cmd_show_fec_capability_show =

@@ -34,6 +34,7 @@
 #define IAVF_PROT_AH		    (1ULL << 23)
 #define IAVF_PROT_L2TPV3OIP	    (1ULL << 24)
 #define IAVF_PROT_PFCP		    (1ULL << 25)
+#define IAVF_PROT_ECPRI		    (1ULL << 26)
 
 
 /* field */
@@ -59,6 +60,7 @@
 #define IAVF_L2TPV3OIP_SESSION_ID   (1ULL << 45)
 #define IAVF_PFCP_S_FIELD	    (1ULL << 44)
 #define IAVF_PFCP_SEID		    (1ULL << 43)
+#define IAVF_ECPRI_PC_RTC_ID	    (1ULL << 42)
 
 /* input set */
 
@@ -135,7 +137,8 @@
 	(IAVF_PROT_PFCP | IAVF_PFCP_S_FIELD)
 #define IAVF_INSET_PFCP_SEID \
 	(IAVF_PROT_PFCP | IAVF_PFCP_S_FIELD | IAVF_PFCP_SEID)
-
+#define IAVF_INSET_ECPRI \
+	(IAVF_PROT_ECPRI | IAVF_ECPRI_PC_RTC_ID)
 
 /* empty pattern */
 extern enum rte_flow_item_type iavf_pattern_empty[];
@@ -262,6 +265,9 @@ extern enum rte_flow_item_type iavf_pattern_eth_ipv6_l2tpv3[];
 extern enum rte_flow_item_type iavf_pattern_eth_ipv4_pfcp[];
 extern enum rte_flow_item_type iavf_pattern_eth_ipv6_pfcp[];
 
+/* ECPRI */
+extern enum rte_flow_item_type iavf_pattern_eth_ecpri[];
+extern enum rte_flow_item_type iavf_pattern_eth_ipv4_ecpri[];
 
 extern const struct rte_flow_ops iavf_flow_ops;
 

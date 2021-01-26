@@ -50,6 +50,7 @@ struct ionic_rx_stats {
 #define IONIC_QCQ_F_SG		BIT(1)
 #define IONIC_QCQ_F_INTR	BIT(2)
 #define IONIC_QCQ_F_NOTIFYQ	BIT(3)
+#define IONIC_QCQ_F_DEFERRED	BIT(4)
 
 /* Queue / Completion Queue */
 struct ionic_qcq {
@@ -68,7 +69,6 @@ struct ionic_qcq {
 	uint32_t total_size;
 	uint32_t flags;
 	struct ionic_intr_info intr;
-	bool deferred_start;
 };
 
 #define IONIC_Q_TO_QCQ(q)	container_of(q, struct ionic_qcq, q)
@@ -77,6 +77,8 @@ struct ionic_qcq {
 
 #define IONIC_LIF_F_INITED		BIT(0)
 #define IONIC_LIF_F_LINK_CHECK_NEEDED	BIT(1)
+#define IONIC_LIF_F_UP			BIT(2)
+#define IONIC_LIF_F_FW_RESET		BIT(3)
 
 #define IONIC_LIF_NAME_MAX_SZ		(32)
 
@@ -84,13 +86,10 @@ struct ionic_lif {
 	struct ionic_adapter *adapter;
 	struct rte_eth_dev *eth_dev;
 	uint16_t port_id;  /**< Device port identifier */
-	uint16_t mtu;
-	uint32_t index;
 	uint32_t hw_index;
 	uint32_t state;
 	uint32_t ntxqcqs;
 	uint32_t nrxqcqs;
-	uint32_t kern_pid;
 	rte_spinlock_t adminq_lock;
 	rte_spinlock_t adminq_service_lock;
 	struct ionic_qcq *adminqcq;
@@ -110,6 +109,7 @@ struct ionic_lif {
 	uint8_t *rss_ind_tbl;
 	rte_iova_t rss_ind_tbl_pa;
 	const struct rte_memzone *rss_ind_tbl_z;
+	uint32_t rss_ind_tbl_nrxqcqs;
 	uint32_t info_sz;
 	struct ionic_lif_info *info;
 	rte_iova_t info_pa;
@@ -123,14 +123,16 @@ int ionic_lifs_size(struct ionic_adapter *ionic);
 
 int ionic_lif_alloc(struct ionic_lif *lif);
 void ionic_lif_free(struct ionic_lif *lif);
+void ionic_lif_free_queues(struct ionic_lif *lif);
 
 int ionic_lif_init(struct ionic_lif *lif);
 void ionic_lif_deinit(struct ionic_lif *lif);
 
 int ionic_lif_start(struct ionic_lif *lif);
-int ionic_lif_stop(struct ionic_lif *lif);
+void ionic_lif_stop(struct ionic_lif *lif);
 
-int ionic_lif_configure(struct ionic_lif *lif);
+void ionic_lif_configure(struct ionic_lif *lif);
+void ionic_lif_configure_vlan_offload(struct ionic_lif *lif, int mask);
 void ionic_lif_reset(struct ionic_lif *lif);
 
 int ionic_intr_alloc(struct ionic_lif *lif, struct ionic_intr_info *intr);

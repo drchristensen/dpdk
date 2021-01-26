@@ -138,6 +138,10 @@ enum mlx5_feature_name {
 #define MLX5_FLOW_LAYER_OUTER_L3_IPV6_FRAG_EXT (1u << 30)
 #define MLX5_FLOW_LAYER_INNER_L3_IPV6_FRAG_EXT (1u << 31)
 
+/* Pattern tunnel Layer bits (continued). */
+#define MLX5_FLOW_LAYER_GENEVE_OPT (UINT64_C(1) << 32)
+#define MLX5_FLOW_LAYER_GTP_PSC (UINT64_C(1) << 33)
+
 /* Outer Masks. */
 #define MLX5_FLOW_LAYER_OUTER_L3 \
 	(MLX5_FLOW_LAYER_OUTER_L3_IPV4 | MLX5_FLOW_LAYER_OUTER_L3_IPV6)
@@ -326,7 +330,7 @@ enum mlx5_feature_name {
 #define MLX5_GENEVE_VER_VAL(a) \
 		(((a) >> (MLX5_GENEVE_VER_SHIFT)) & (MLX5_GENEVE_VER_MASK))
 #define MLX5_GENEVE_OPTLEN_MASK 0x3F
-#define MLX5_GENEVE_OPTLEN_SHIFT 7
+#define MLX5_GENEVE_OPTLEN_SHIFT 8
 #define MLX5_GENEVE_OPTLEN_VAL(a) \
 	    (((a) >> (MLX5_GENEVE_OPTLEN_SHIFT)) & (MLX5_GENEVE_OPTLEN_MASK))
 #define MLX5_GENEVE_OAMF_MASK 0x1
@@ -348,6 +352,14 @@ enum mlx5_feature_name {
 
 #define MLX5_ENCAPSULATION_DECISION_SIZE (sizeof(struct rte_ether_hdr) + \
 					  sizeof(struct rte_ipv4_hdr))
+/* GTP extension header flag. */
+#define MLX5_GTP_EXT_HEADER_FLAG 4
+
+/* GTP extension header max PDU type value. */
+#define MLX5_GTP_EXT_MAX_PDU_TYPE 15
+
+/* GTP extension header PDU type shift. */
+#define MLX5_GTP_PDU_TYPE_SHIFT(a) ((a) << 4)
 
 /* IPv4 fragment_offset field contains relevant data in bits 2 to 15. */
 #define MLX5_IPV4_FRAG_OFFSET_MASK \
@@ -437,6 +449,7 @@ struct mlx5_flow_dv_tag_resource {
 	/**< Tag action object. */
 	uint32_t refcnt; /**< Reference counter. */
 	uint32_t idx; /**< Index for the index memory pool. */
+	uint32_t tag_id; /**< Tag ID. */
 };
 
 /*
@@ -509,6 +522,7 @@ struct mlx5_flow_mreg_copy_resource {
 	/* List entry for device flows. */
 	uint32_t idx;
 	uint32_t rix_flow; /* Built flow for copy. */
+	uint32_t mark_id;
 };
 
 /* Table tunnel parameter. */
@@ -532,9 +546,13 @@ struct mlx5_flow_tbl_data_entry {
 	/**< tunnel offload */
 	const struct mlx5_flow_tunnel *tunnel;
 	uint32_t group_id;
-	bool external;
-	bool tunnel_offload; /* Tunnel offlod table or not. */
-	bool is_egress; /**< Egress table. */
+	uint32_t external:1;
+	uint32_t tunnel_offload:1; /* Tunnel offlod table or not. */
+	uint32_t is_egress:1; /**< Egress table. */
+	uint32_t is_transfer:1; /**< Transfer table. */
+	uint32_t dummy:1; /**<  DR table. */
+	uint32_t reserve:27; /**< Reserved to future using. */
+	uint32_t table_id; /**< Table ID. */
 };
 
 /* Sub rdma-core actions list. */
@@ -594,12 +612,6 @@ struct mlx5_flow_dv_dest_array_resource {
 	/**< Action resources. */
 };
 
-/* Verbs specification header. */
-struct ibv_spec_header {
-	enum ibv_flow_spec_type type;
-	uint16_t size;
-};
-
 /* PMD flow priority for tunnel */
 #define MLX5_TUNNEL_PRIO_GET(rss_desc) \
 	((rss_desc)->level >= 2 ? MLX5_PRIORITY_MAP_L2 : MLX5_PRIORITY_MAP_L4)
@@ -646,7 +658,7 @@ struct mlx5_flow_handle {
 		uint32_t rix_srss;
 		/**< Indicates shared RSS fate action. */
 	};
-#ifdef HAVE_IBV_FLOW_DV_SUPPORT
+#if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 	struct mlx5_flow_handle_dv dvh;
 #endif
 } __rte_packed;
@@ -656,7 +668,7 @@ struct mlx5_flow_handle {
  * structure in Verbs. No DV flows attributes will be accessed.
  * Macro offsetof() could also be used here.
  */
-#ifdef HAVE_IBV_FLOW_DV_SUPPORT
+#if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 #define MLX5_FLOW_HANDLE_VERBS_SIZE \
 	(sizeof(struct mlx5_flow_handle) - sizeof(struct mlx5_flow_handle_dv))
 #else
@@ -694,6 +706,7 @@ struct mlx5_flow_dv_workspace {
 	/**< Pointer to the destination array resource. */
 };
 
+#ifdef HAVE_INFINIBAND_VERBS_H
 /*
  * Maximal Verbs flow specifications & actions size.
  * Some elements are mutually exclusive, but enough space should be allocated.
@@ -750,6 +763,7 @@ struct mlx5_flow_verbs_workspace {
 	uint8_t specs[MLX5_VERBS_MAX_SPEC_ACT_SIZE];
 	/**< Specifications & actions buffer of verbs flow. */
 };
+#endif /* HAVE_INFINIBAND_VERBS_H */
 
 /** Maximal number of device sub-flows supported. */
 #define MLX5_NUM_MAX_DEV_FLOWS 32
@@ -767,10 +781,12 @@ struct mlx5_flow {
 	uint8_t skip_scale:1;
 	/**< 1 if skip the scale the table with factor. */
 	union {
-#ifdef HAVE_IBV_FLOW_DV_SUPPORT
+#if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 		struct mlx5_flow_dv_workspace dv;
 #endif
+#ifdef HAVE_INFINIBAND_VERBS_H
 		struct mlx5_flow_verbs_workspace verbs;
+#endif
 	};
 	struct mlx5_flow_handle *handle;
 	uint32_t handle_idx; /* Index of the mlx5 flow handle memory. */
@@ -954,6 +970,8 @@ struct mlx5_flow_tunnel_hub {
 struct tunnel_tbl_entry {
 	struct mlx5_hlist_entry hash;
 	uint32_t flow_table;
+	uint32_t tunnel_id;
+	uint32_t group;
 };
 
 static inline uint32_t
@@ -1040,6 +1058,7 @@ struct rte_flow {
 	uint32_t counter; /**< Holds flow counter. */
 	uint32_t tunnel_id;  /**< Tunnel id */
 	uint32_t age; /**< Holds ASO age bit index. */
+	uint32_t geneve_tlv_option; /**< Holds Geneve TLV option id. > */
 } __rte_packed;
 
 /*
@@ -1389,6 +1408,11 @@ int mlx5_flow_validate_item_geneve(const struct rte_flow_item *item,
 				   uint64_t item_flags,
 				   struct rte_eth_dev *dev,
 				   struct rte_flow_error *error);
+int mlx5_flow_validate_item_geneve_opt(const struct rte_flow_item *item,
+				   uint64_t last_item,
+				   const struct rte_flow_item *geneve_item,
+				   struct rte_eth_dev *dev,
+				   struct rte_flow_error *error);
 int mlx5_flow_validate_item_ecpri(const struct rte_flow_item *item,
 				  uint64_t item_flags,
 				  uint64_t last_item,
@@ -1416,6 +1440,9 @@ int mlx5_alloc_tunnel_hub(struct mlx5_dev_ctx_shared *sh);
 /* Hash list callbacks for flow tables: */
 struct mlx5_hlist_entry *flow_dv_tbl_create_cb(struct mlx5_hlist *list,
 					       uint64_t key, void *entry_ctx);
+int flow_dv_tbl_match_cb(struct mlx5_hlist *list,
+			 struct mlx5_hlist_entry *entry, uint64_t key,
+			 void *cb_ctx);
 void flow_dv_tbl_remove_cb(struct mlx5_hlist *list,
 			   struct mlx5_hlist_entry *entry);
 struct mlx5_flow_tbl_resource *flow_dv_tbl_resource_get(struct rte_eth_dev *dev,
@@ -1425,6 +1452,9 @@ struct mlx5_flow_tbl_resource *flow_dv_tbl_resource_get(struct rte_eth_dev *dev,
 
 struct mlx5_hlist_entry *flow_dv_tag_create_cb(struct mlx5_hlist *list,
 					       uint64_t key, void *cb_ctx);
+int flow_dv_tag_match_cb(struct mlx5_hlist *list,
+			 struct mlx5_hlist_entry *entry, uint64_t key,
+			 void *cb_ctx);
 void flow_dv_tag_remove_cb(struct mlx5_hlist *list,
 			   struct mlx5_hlist_entry *entry);
 
@@ -1438,6 +1468,9 @@ void flow_dv_modify_remove_cb(struct mlx5_hlist *list,
 
 struct mlx5_hlist_entry *flow_dv_mreg_create_cb(struct mlx5_hlist *list,
 						uint64_t key, void *ctx);
+int flow_dv_mreg_match_cb(struct mlx5_hlist *list,
+			  struct mlx5_hlist_entry *entry, uint64_t key,
+			  void *cb_ctx);
 void flow_dv_mreg_remove_cb(struct mlx5_hlist *list,
 			    struct mlx5_hlist_entry *entry);
 
@@ -1488,4 +1521,15 @@ void flow_dv_dest_array_remove_cb(struct mlx5_cache_list *list,
 				  struct mlx5_cache_entry *entry);
 struct mlx5_aso_age_action *flow_aso_age_get_by_idx(struct rte_eth_dev *dev,
 						    uint32_t age_idx);
+int flow_dev_geneve_tlv_option_resource_register(struct rte_eth_dev *dev,
+					     const struct rte_flow_item *item,
+					     struct rte_flow_error *error);
+
+void flow_release_workspace(void *data);
+int mlx5_flow_os_init_workspace_once(void);
+void *mlx5_flow_os_get_specific_workspace(void);
+int mlx5_flow_os_set_specific_workspace(struct mlx5_flow_workspace *data);
+void mlx5_flow_os_release_workspace(void);
+
+
 #endif /* RTE_PMD_MLX5_FLOW_H_ */

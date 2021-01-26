@@ -20,7 +20,9 @@
 
 #define IONIC_LIFS_MAX			1024
 
-#define IONIC_DEVCMD_TIMEOUT	30 /* devcmd_timeout */
+#define IONIC_DEVCMD_TIMEOUT		5	/* devcmd_timeout */
+#define IONIC_DEVCMD_CHECK_PERIOD_US	10	/* devcmd status chk period */
+
 #define	IONIC_ALIGN             4096
 
 struct ionic_adapter;
@@ -118,10 +120,7 @@ struct ionic_dev {
 	union ionic_dev_cmd_regs __iomem *dev_cmd;
 
 	struct ionic_doorbell __iomem *db_pages;
-	rte_iova_t phy_db_pages;
-
 	struct ionic_intr __iomem *intr_ctrl;
-
 	struct ionic_intr_status __iomem *intr_status;
 
 	struct ionic_port_info *port_info;
@@ -161,11 +160,9 @@ struct ionic_queue {
 	uint32_t num_descs;
 	uint32_t desc_size;
 	uint32_t sg_desc_size;
-	uint32_t pid;
 	uint32_t qid;
 	uint32_t qtype;
 	struct ionic_doorbell __iomem *db;
-	void *nop_desc;
 };
 
 #define IONIC_INTR_INDEX_NOT_ASSIGNED	(-1)
@@ -208,6 +205,8 @@ struct ionic_qcq;
 void ionic_intr_init(struct ionic_dev *idev, struct ionic_intr_info *intr,
 	unsigned long index);
 
+const char *ionic_opcode_to_str(enum ionic_cmd_opcode opcode);
+
 int ionic_dev_setup(struct ionic_adapter *adapter);
 
 void ionic_dev_cmd_go(struct ionic_dev *idev, union ionic_dev_cmd *cmd);
@@ -233,15 +232,13 @@ void ionic_dev_cmd_port_loopback(struct ionic_dev *idev,
 
 void ionic_dev_cmd_lif_identify(struct ionic_dev *idev, uint8_t type,
 	uint8_t ver);
-void ionic_dev_cmd_lif_init(struct ionic_dev *idev, uint16_t lif_index,
-	rte_iova_t addr);
-void ionic_dev_cmd_lif_reset(struct ionic_dev *idev, uint16_t lif_index);
+void ionic_dev_cmd_lif_init(struct ionic_dev *idev, rte_iova_t addr);
+void ionic_dev_cmd_lif_reset(struct ionic_dev *idev);
 void ionic_dev_cmd_adminq_init(struct ionic_dev *idev, struct ionic_qcq *qcq,
-	uint16_t lif_index, uint16_t intr_index);
+	uint16_t intr_index);
 
 struct ionic_doorbell __iomem *ionic_db_map(struct ionic_lif *lif,
 	struct ionic_queue *q);
-int ionic_db_page_num(struct ionic_lif *lif, int pid);
 
 int ionic_cq_init(struct ionic_lif *lif, struct ionic_cq *cq,
 	struct ionic_intr_info *intr, uint32_t num_descs,
@@ -255,7 +252,7 @@ uint32_t ionic_cq_service(struct ionic_cq *cq, uint32_t work_to_do,
 
 int ionic_q_init(struct ionic_lif *lif, struct ionic_dev *idev,
 	struct ionic_queue *q, uint32_t index, uint32_t num_descs,
-	size_t desc_size, size_t sg_desc_size, uint32_t pid);
+	size_t desc_size, size_t sg_desc_size);
 void ionic_q_map(struct ionic_queue *q, void *base, rte_iova_t base_pa);
 void ionic_q_sg_map(struct ionic_queue *q, void *base, rte_iova_t base_pa);
 void ionic_q_flush(struct ionic_queue *q);

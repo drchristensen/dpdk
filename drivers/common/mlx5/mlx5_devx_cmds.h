@@ -7,6 +7,7 @@
 
 #include "mlx5_glue.h"
 #include "mlx5_prm.h"
+#include <rte_compat.h>
 
 /*
  * Defines the amount of retries to allocate the first UAR in the page.
@@ -96,6 +97,8 @@ struct mlx5_hca_attr {
 	uint32_t lro_timer_supported_periods[MLX5_LRO_NUM_SUPP_PERIODS];
 	uint16_t lro_min_mss_size;
 	uint32_t flex_parser_protocols;
+	uint32_t max_geneve_tlv_options;
+	uint32_t max_geneve_tlv_option_data_len;
 	uint32_t hairpin:1;
 	uint32_t log_max_hairpin_queues:5;
 	uint32_t log_max_hairpin_wq_data_sz:5;
@@ -115,8 +118,18 @@ struct mlx5_hca_attr {
 	uint32_t regex:1;
 	uint32_t regexp_num_of_engines;
 	uint32_t log_max_ft_sampler_num:8;
+	uint32_t geneve_tlv_opt;
 	struct mlx5_hca_qos_attr qos;
 	struct mlx5_hca_vdpa_attr vdpa;
+	int log_max_qp_sz;
+	int log_max_cq_sz;
+	int log_max_qp;
+	int log_max_cq;
+	uint32_t log_max_pd;
+	uint32_t log_max_mrw_sz;
+	uint32_t log_max_srq;
+	uint32_t log_max_srq_sz;
+	uint32_t rss_ind_tbl_cap;
 };
 
 struct mlx5_devx_wq_attr {
@@ -267,7 +280,6 @@ struct mlx5_devx_cq_attr {
 	uint32_t cqe_comp_en:1;
 	uint32_t mini_cqe_res_format:2;
 	uint32_t mini_cqe_res_format_ext:2;
-	uint32_t cqe_size:3;
 	uint32_t log_cq_size:5;
 	uint32_t log_page_size:5;
 	uint32_t uar_page_id;
@@ -292,6 +304,9 @@ struct mlx5_devx_virtq_attr {
 	uint32_t rx_csum:1;
 	uint32_t event_mode:3;
 	uint32_t state:4;
+	uint32_t hw_latency_mode:2;
+	uint32_t hw_max_latency_us:12;
+	uint32_t hw_max_pending_comp:16;
 	uint32_t dirty_bitmap_dump_enable:1;
 	uint32_t dirty_bitmap_mkey;
 	uint32_t dirty_bitmap_size;
@@ -469,6 +484,12 @@ struct mlx5_devx_obj *mlx5_devx_cmd_create_flex_parser(void *ctx,
 __rte_internal
 int mlx5_devx_cmd_register_read(void *ctx, uint16_t reg_id,
 				uint32_t arg, uint32_t *data, uint32_t dw_cnt);
+
+__rte_internal
+struct mlx5_devx_obj *
+mlx5_devx_cmd_create_geneve_tlv_option(void *ctx,
+		uint16_t class, uint8_t type, uint8_t len);
+
 /**
  * Create virtio queue counters object DevX API.
  *
@@ -495,9 +516,10 @@ struct mlx5_devx_obj *mlx5_devx_cmd_create_virtio_q_counters(void *ctx);
 __rte_internal
 int mlx5_devx_cmd_query_virtio_q_counters(struct mlx5_devx_obj *couners_obj,
 				  struct mlx5_devx_virtio_q_couners_attr *attr);
-
 __rte_internal
 struct mlx5_devx_obj *mlx5_devx_cmd_create_flow_hit_aso_obj(void *ctx,
 							    uint32_t pd);
 
+__rte_internal
+struct mlx5_devx_obj *mlx5_devx_cmd_alloc_pd(void *ctx);
 #endif /* RTE_PMD_MLX5_DEVX_CMDS_H_ */

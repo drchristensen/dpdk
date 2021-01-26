@@ -19,7 +19,8 @@ endif
 libnames = [ 'mlx5', 'ibverbs' ]
 libs = []
 foreach libname:libnames
-	lib = dependency('lib' + libname, static:static_ibverbs, required:false)
+	lib = dependency('lib' + libname, static:static_ibverbs,
+			required:false, method: 'pkg-config')
 	if not lib.found() and not static_ibverbs
 		lib = cc.find_library(libname, required:false)
 	endif
@@ -181,8 +182,10 @@ has_sym_args = [
 	[ 'HAVE_MLX5_DR_CREATE_ACTION_DEST_ARRAY', 'infiniband/mlx5dv.h',
 	'mlx5dv_dr_action_create_dest_array'],
 	[ 'HAVE_DEVLINK', 'linux/devlink.h', 'DEVLINK_GENL_NAME' ],
-        [ 'HAVE_MLX5_DR_CREATE_ACTION_ASO', 'infiniband/mlx5dv.h',
-        'mlx5dv_dr_action_create_aso' ],
+	[ 'HAVE_MLX5_DR_CREATE_ACTION_ASO', 'infiniband/mlx5dv.h',
+	'mlx5dv_dr_action_create_aso' ],
+	[ 'HAVE_INFINIBAND_VERBS_H', 'infiniband/verbs.h',
+	'INFINIBAND_VERBS_H' ],
 ]
 config = configuration_data()
 foreach arg:has_sym_args

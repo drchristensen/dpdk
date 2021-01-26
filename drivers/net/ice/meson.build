@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2018 Intel Corporation
 
+if is_windows
+	build = false
+	reason = 'not supported on Windows'
+	subdir_done()
+endif
+
 subdir('base')
 objs = [base_objs]
 
@@ -61,6 +67,7 @@ if arch_subdir == 'x86'
 endif
 
 sources += files('ice_dcf.c',
+		 'ice_dcf_vf_representor.c',
 		 'ice_dcf_ethdev.c',
 		 'ice_dcf_parent.c')
 

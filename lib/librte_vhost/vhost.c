@@ -106,7 +106,7 @@ __vhost_log_write(struct virtio_net *dev, uint64_t addr, uint64_t len)
 		return;
 
 	/* To make sure guest memory updates are committed before logging */
-	rte_smp_wmb();
+	rte_atomic_thread_fence(__ATOMIC_RELEASE);
 
 	page = addr / VHOST_LOG_PAGE;
 	while (page * VHOST_LOG_PAGE < addr + len) {
@@ -144,7 +144,7 @@ __vhost_log_cache_sync(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	if (unlikely(!dev->log_base))
 		return;
 
-	rte_smp_wmb();
+	rte_atomic_thread_fence(__ATOMIC_RELEASE);
 
 	log_base = (unsigned long *)(uintptr_t)dev->log_base;
 
@@ -163,7 +163,7 @@ __vhost_log_cache_sync(struct virtio_net *dev, struct vhost_virtqueue *vq)
 #endif
 	}
 
-	rte_smp_wmb();
+	rte_atomic_thread_fence(__ATOMIC_RELEASE);
 
 	vq->log_cache_nb_elem = 0;
 }
@@ -190,7 +190,7 @@ vhost_log_cache_page(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		 * No more room for a new log cache entry,
 		 * so write the dirty log map directly.
 		 */
-		rte_smp_wmb();
+		rte_atomic_thread_fence(__ATOMIC_RELEASE);
 		vhost_log_page((uint8_t *)(uintptr_t)dev->log_base, page);
 
 		return;
@@ -327,17 +327,17 @@ cleanup_device(struct virtio_net *dev, int destroy)
 static void
 vhost_free_async_mem(struct vhost_virtqueue *vq)
 {
-	if (vq->async_pkts_pending)
-		rte_free(vq->async_pkts_pending);
 	if (vq->async_pkts_info)
 		rte_free(vq->async_pkts_info);
+	if (vq->async_descs_split)
+		rte_free(vq->async_descs_split);
 	if (vq->it_pool)
 		rte_free(vq->it_pool);
 	if (vq->vec_pool)
 		rte_free(vq->vec_pool);
 
-	vq->async_pkts_pending = NULL;
 	vq->async_pkts_info = NULL;
+	vq->async_descs_split = NULL;
 	vq->it_pool = NULL;
 	vq->vec_pool = NULL;
 }
@@ -1097,11 +1097,11 @@ rte_vhost_clr_inflight_desc_split(int vid, uint16_t vring_idx,
 	if (unlikely(idx >= vq->size))
 		return -1;
 
-	rte_smp_mb();
+	rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
 
 	vq->inflight_split->desc[idx].inflight = 0;
 
-	rte_smp_mb();
+	rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
 
 	vq->inflight_split->used_idx = last_used_idx;
 	return 0;
@@ -1140,11 +1140,11 @@ rte_vhost_clr_inflight_desc_packed(int vid, uint16_t vring_idx,
 	if (unlikely(head >= vq->size))
 		return -1;
 
-	rte_smp_mb();
+	rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
 
 	inflight_info->desc[head].inflight = 0;
 
-	rte_smp_mb();
+	rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
 
 	inflight_info->old_free_head = inflight_info->free_head;
 	inflight_info->old_used_idx = inflight_info->used_idx;
@@ -1330,7 +1330,7 @@ vhost_enable_notify_packed(struct virtio_net *dev,
 			vq->avail_wrap_counter << 15;
 	}
 
-	rte_smp_wmb();
+	rte_atomic_thread_fence(__ATOMIC_RELEASE);
 
 	vq->device_event->flags = flags;
 	return 0;
@@ -1628,9 +1628,6 @@ int rte_vhost_async_channel_register(int vid, uint16_t queue_id,
 	node = SOCKET_ID_ANY;
 #endif
 
-	vq->async_pkts_pending = rte_malloc_socket(NULL,
-			vq->size * sizeof(uintptr_t),
-			RTE_CACHE_LINE_SIZE, node);
 	vq->async_pkts_info = rte_malloc_socket(NULL,
 			vq->size * sizeof(struct async_inflight_info),
 			RTE_CACHE_LINE_SIZE, node);
@@ -1640,7 +1637,10 @@ int rte_vhost_async_channel_register(int vid, uint16_t queue_id,
 	vq->vec_pool = rte_malloc_socket(NULL,
 			VHOST_MAX_ASYNC_VEC * sizeof(struct iovec),
 			RTE_CACHE_LINE_SIZE, node);
-	if (!vq->async_pkts_pending || !vq->async_pkts_info ||
+	vq->async_descs_split = rte_malloc_socket(NULL,
+			vq->size * sizeof(struct vring_used_elem),
+			RTE_CACHE_LINE_SIZE, node);
+	if (!vq->async_descs_split || !vq->async_pkts_info ||
 		!vq->it_pool || !vq->vec_pool) {
 		vhost_free_async_mem(vq);
 		VHOST_LOG_CONFIG(ERR,

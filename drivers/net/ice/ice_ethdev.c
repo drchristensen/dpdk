@@ -216,6 +216,7 @@ static const struct eth_dev_ops ice_eth_dev_ops = {
 	.udp_tunnel_port_add          = ice_dev_udp_tunnel_port_add,
 	.udp_tunnel_port_del          = ice_dev_udp_tunnel_port_del,
 	.tx_done_cleanup              = ice_tx_done_cleanup,
+	.get_monitor_addr             = ice_get_monitor_addr,
 };
 
 /* store statistics names and its offset in stats structure */
@@ -1128,28 +1129,28 @@ ice_vsi_config_qinq_insertion(struct ice_vsi *vsi, bool on)
 	if (vsi->info.valid_sections &
 		rte_cpu_to_le_16(ICE_AQ_VSI_PROP_OUTER_TAG_VALID)) {
 		if (on) {
-			if ((vsi->info.outer_tag_flags &
-			     ICE_AQ_VSI_OUTER_TAG_ACCEPT_HOST) ==
-			    ICE_AQ_VSI_OUTER_TAG_ACCEPT_HOST)
+			if ((vsi->info.outer_vlan_flags &
+			     ICE_AQ_VSI_OUTER_VLAN_PORT_BASED_ACCEPT_HOST) ==
+			    ICE_AQ_VSI_OUTER_VLAN_PORT_BASED_ACCEPT_HOST)
 				return 0; /* already on */
 		} else {
-			if (!(vsi->info.outer_tag_flags &
-			      ICE_AQ_VSI_OUTER_TAG_ACCEPT_HOST))
+			if (!(vsi->info.outer_vlan_flags &
+			      ICE_AQ_VSI_OUTER_VLAN_PORT_BASED_ACCEPT_HOST))
 				return 0; /* already off */
 		}
 	}
 
 	if (on)
-		qinq_flags = ICE_AQ_VSI_OUTER_TAG_ACCEPT_HOST;
+		qinq_flags = ICE_AQ_VSI_OUTER_VLAN_PORT_BASED_ACCEPT_HOST;
 	else
 		qinq_flags = 0;
 	/* clear global insertion and use per packet insertion */
-	vsi->info.outer_tag_flags &= ~(ICE_AQ_VSI_OUTER_TAG_INSERT);
-	vsi->info.outer_tag_flags &= ~(ICE_AQ_VSI_OUTER_TAG_ACCEPT_HOST);
-	vsi->info.outer_tag_flags |= qinq_flags;
+	vsi->info.outer_vlan_flags &= ~(ICE_AQ_VSI_OUTER_VLAN_PORT_BASED_INSERT);
+	vsi->info.outer_vlan_flags &= ~(ICE_AQ_VSI_OUTER_VLAN_PORT_BASED_ACCEPT_HOST);
+	vsi->info.outer_vlan_flags |= qinq_flags;
 	/* use default vlan type 0x8100 */
-	vsi->info.outer_tag_flags &= ~(ICE_AQ_VSI_OUTER_TAG_TYPE_M);
-	vsi->info.outer_tag_flags |= ICE_DFLT_OUTER_TAG_TYPE <<
+	vsi->info.outer_vlan_flags &= ~(ICE_AQ_VSI_OUTER_TAG_TYPE_M);
+	vsi->info.outer_vlan_flags |= ICE_DFLT_OUTER_TAG_TYPE <<
 				     ICE_AQ_VSI_OUTER_TAG_TYPE_S;
 	(void)rte_memcpy(&ctxt.info, &vsi->info, sizeof(vsi->info));
 	ctxt.info.valid_sections =
@@ -1181,27 +1182,27 @@ ice_vsi_config_qinq_stripping(struct ice_vsi *vsi, bool on)
 	if (vsi->info.valid_sections &
 		rte_cpu_to_le_16(ICE_AQ_VSI_PROP_OUTER_TAG_VALID)) {
 		if (on) {
-			if ((vsi->info.outer_tag_flags &
-			     ICE_AQ_VSI_OUTER_TAG_MODE_M) ==
-			    ICE_AQ_VSI_OUTER_TAG_COPY)
+			if ((vsi->info.outer_vlan_flags &
+			     ICE_AQ_VSI_OUTER_VLAN_EMODE_M) ==
+			    ICE_AQ_VSI_OUTER_VLAN_EMODE_SHOW)
 				return 0; /* already on */
 		} else {
-			if ((vsi->info.outer_tag_flags &
-			     ICE_AQ_VSI_OUTER_TAG_MODE_M) ==
-			    ICE_AQ_VSI_OUTER_TAG_NOTHING)
+			if ((vsi->info.outer_vlan_flags &
+			     ICE_AQ_VSI_OUTER_VLAN_EMODE_M) ==
+			    ICE_AQ_VSI_OUTER_VLAN_EMODE_SHOW_BOTH)
 				return 0; /* already off */
 		}
 	}
 
 	if (on)
-		qinq_flags = ICE_AQ_VSI_OUTER_TAG_COPY;
+		qinq_flags = ICE_AQ_VSI_OUTER_VLAN_EMODE_SHOW;
 	else
-		qinq_flags = ICE_AQ_VSI_OUTER_TAG_NOTHING;
-	vsi->info.outer_tag_flags &= ~(ICE_AQ_VSI_OUTER_TAG_MODE_M);
-	vsi->info.outer_tag_flags |= qinq_flags;
+		qinq_flags = ICE_AQ_VSI_OUTER_VLAN_EMODE_SHOW_BOTH;
+	vsi->info.outer_vlan_flags &= ~(ICE_AQ_VSI_OUTER_VLAN_EMODE_M);
+	vsi->info.outer_vlan_flags |= qinq_flags;
 	/* use default vlan type 0x8100 */
-	vsi->info.outer_tag_flags &= ~(ICE_AQ_VSI_OUTER_TAG_TYPE_M);
-	vsi->info.outer_tag_flags |= ICE_DFLT_OUTER_TAG_TYPE <<
+	vsi->info.outer_vlan_flags &= ~(ICE_AQ_VSI_OUTER_TAG_TYPE_M);
+	vsi->info.outer_vlan_flags |= ICE_DFLT_OUTER_TAG_TYPE <<
 				     ICE_AQ_VSI_OUTER_TAG_TYPE_S;
 	(void)rte_memcpy(&ctxt.info, &vsi->info, sizeof(vsi->info));
 	ctxt.info.valid_sections =
@@ -1579,8 +1580,8 @@ ice_setup_vsi(struct ice_pf *pf, enum ice_vsi_type type)
 		vsi_ctx.info.sw_id = hw->port_info->sw_id;
 		vsi_ctx.info.sw_flags2 = ICE_AQ_VSI_SW_FLAG_LAN_ENA;
 		/* Allow all untagged or tagged packets */
-		vsi_ctx.info.vlan_flags = ICE_AQ_VSI_VLAN_MODE_ALL;
-		vsi_ctx.info.vlan_flags |= ICE_AQ_VSI_VLAN_EMOD_NOTHING;
+		vsi_ctx.info.inner_vlan_flags = ICE_AQ_VSI_INNER_VLAN_TX_MODE_ALL;
+		vsi_ctx.info.inner_vlan_flags |= ICE_AQ_VSI_INNER_VLAN_EMODE_NOTHING;
 		vsi_ctx.info.q_opt_rss = ICE_AQ_VSI_Q_OPT_RSS_LUT_PF |
 					 ICE_AQ_VSI_Q_OPT_RSS_TPLZ;
 
@@ -3182,6 +3183,12 @@ static int ice_init_rss(struct ice_pf *pf)
 	vsi->rss_key_size = ICE_AQC_GET_SET_RSS_KEY_DATA_RSS_KEY_SIZE;
 	vsi->rss_lut_size = pf->hash_lut_size;
 
+	if (nb_q == 0) {
+		PMD_DRV_LOG(WARNING,
+			"RSS is not supported as rx queues number is zero\n");
+		return 0;
+	}
+
 	if (is_safe_mode) {
 		PMD_DRV_LOG(WARNING, "RSS is not supported in safe mode\n");
 		return 0;
@@ -3268,10 +3275,12 @@ ice_dev_configure(struct rte_eth_dev *dev)
 	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
 		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
 
-	ret = ice_init_rss(pf);
-	if (ret) {
-		PMD_DRV_LOG(ERR, "Failed to enable rss for PF");
-		return ret;
+	if (dev->data->nb_rx_queues) {
+		ret = ice_init_rss(pf);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Failed to enable rss for PF");
+			return ret;
+		}
 	}
 
 	return 0;
@@ -3840,8 +3849,8 @@ ice_force_phys_link_state(struct ice_hw *hw, bool link_up)
 	if (!pcaps)
 		return ICE_ERR_NO_MEMORY;
 
-	status = ice_aq_get_phy_caps(pi, false, ICE_AQC_REPORT_SW_CFG, pcaps,
-				     NULL);
+	status = ice_aq_get_phy_caps(pi, false, ICE_AQC_REPORT_ACTIVE_CFG,
+				     pcaps, NULL);
 	if (status)
 		goto out;
 
@@ -3904,7 +3913,7 @@ ice_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		return -EBUSY;
 	}
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > ICE_ETH_MAX_LEN)
 		dev_data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -4084,24 +4093,24 @@ ice_vsi_config_vlan_stripping(struct ice_vsi *vsi, bool on)
 	if (vsi->info.valid_sections &
 		rte_cpu_to_le_16(ICE_AQ_VSI_PROP_VLAN_VALID)) {
 		if (on) {
-			if ((vsi->info.vlan_flags &
-			     ICE_AQ_VSI_VLAN_EMOD_M) ==
-			    ICE_AQ_VSI_VLAN_EMOD_STR_BOTH)
+			if ((vsi->info.inner_vlan_flags &
+			     ICE_AQ_VSI_INNER_VLAN_EMODE_M) ==
+			    ICE_AQ_VSI_INNER_VLAN_EMODE_STR_BOTH)
 				return 0; /* already on */
 		} else {
-			if ((vsi->info.vlan_flags &
-			     ICE_AQ_VSI_VLAN_EMOD_M) ==
-			    ICE_AQ_VSI_VLAN_EMOD_NOTHING)
+			if ((vsi->info.inner_vlan_flags &
+			     ICE_AQ_VSI_INNER_VLAN_EMODE_M) ==
+			    ICE_AQ_VSI_INNER_VLAN_EMODE_NOTHING)
 				return 0; /* already off */
 		}
 	}
 
 	if (on)
-		vlan_flags = ICE_AQ_VSI_VLAN_EMOD_STR_BOTH;
+		vlan_flags = ICE_AQ_VSI_INNER_VLAN_EMODE_STR_BOTH;
 	else
-		vlan_flags = ICE_AQ_VSI_VLAN_EMOD_NOTHING;
-	vsi->info.vlan_flags &= ~(ICE_AQ_VSI_VLAN_EMOD_M);
-	vsi->info.vlan_flags |= vlan_flags;
+		vlan_flags = ICE_AQ_VSI_INNER_VLAN_EMODE_NOTHING;
+	vsi->info.inner_vlan_flags &= ~(ICE_AQ_VSI_INNER_VLAN_EMODE_M);
+	vsi->info.inner_vlan_flags |= vlan_flags;
 	(void)rte_memcpy(&ctxt.info, &vsi->info, sizeof(vsi->info));
 	ctxt.info.valid_sections =
 		rte_cpu_to_le_16(ICE_AQ_VSI_PROP_VLAN_VALID);
@@ -4580,24 +4589,24 @@ ice_vsi_vlan_pvid_set(struct ice_vsi *vsi, struct ice_vsi_vlan_pvid_info *info)
 	}
 
 	if (info->on) {
-		vsi->info.pvid = info->config.pvid;
+		vsi->info.port_based_inner_vlan = info->config.pvid;
 		/**
 		 * If insert pvid is enabled, only tagged pkts are
 		 * allowed to be sent out.
 		 */
-		vlan_flags = ICE_AQ_VSI_PVLAN_INSERT_PVID |
-			     ICE_AQ_VSI_VLAN_MODE_UNTAGGED;
+		vlan_flags = ICE_AQ_VSI_INNER_VLAN_INSERT_PVID |
+			     ICE_AQ_VSI_INNER_VLAN_TX_MODE_ACCEPTUNTAGGED;
 	} else {
-		vsi->info.pvid = 0;
+		vsi->info.port_based_inner_vlan = 0;
 		if (info->config.reject.tagged == 0)
-			vlan_flags |= ICE_AQ_VSI_VLAN_MODE_TAGGED;
+			vlan_flags |= ICE_AQ_VSI_INNER_VLAN_TX_MODE_ACCEPTTAGGED;
 
 		if (info->config.reject.untagged == 0)
-			vlan_flags |= ICE_AQ_VSI_VLAN_MODE_UNTAGGED;
+			vlan_flags |= ICE_AQ_VSI_INNER_VLAN_TX_MODE_ACCEPTUNTAGGED;
 	}
-	vsi->info.vlan_flags &= ~(ICE_AQ_VSI_PVLAN_INSERT_PVID |
-				  ICE_AQ_VSI_VLAN_MODE_M);
-	vsi->info.vlan_flags |= vlan_flags;
+	vsi->info.inner_vlan_flags &= ~(ICE_AQ_VSI_INNER_VLAN_INSERT_PVID |
+				  ICE_AQ_VSI_INNER_VLAN_EMODE_M);
+	vsi->info.inner_vlan_flags |= vlan_flags;
 	memset(&ctxt, 0, sizeof(ctxt));
 	rte_memcpy(&ctxt.info, &vsi->info, sizeof(vsi->info));
 	ctxt.info.valid_sections =

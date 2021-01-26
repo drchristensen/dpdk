@@ -560,6 +560,7 @@ static const struct eth_dev_ops ixgbe_eth_dev_ops = {
 	.udp_tunnel_port_del  = ixgbe_dev_udp_tunnel_port_del,
 	.tm_ops_get           = ixgbe_tm_ops_get,
 	.tx_done_cleanup      = ixgbe_dev_tx_done_cleanup,
+	.get_monitor_addr     = ixgbe_get_monitor_addr,
 };
 
 /*
@@ -5173,7 +5174,7 @@ ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	hlreg0 = IXGBE_READ_REG(hw, IXGBE_HLREG0);
 
 	/* switch to jumbo mode if needed */
-	if (frame_size > RTE_ETHER_MAX_LEN) {
+	if (frame_size > IXGBE_ETH_MAX_LEN) {
 		dev->data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 		hlreg0 |= IXGBE_HLREG0_JUMBOEN;
@@ -6555,7 +6556,8 @@ ixgbevf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	 * prior to 3.11.33 which contains the following change:
 	 * "ixgbe: Enable jumbo frames support w/ SR-IOV"
 	 */
-	ixgbevf_rlpml_set_vf(hw, max_frame);
+	if (ixgbevf_rlpml_set_vf(hw, max_frame))
+		return -EINVAL;
 
 	/* update max frame size */
 	dev->data->dev_conf.rxmode.max_rx_pkt_len = max_frame;

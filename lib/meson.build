@@ -45,6 +45,7 @@ if is_windows
 		'mempool', 'mbuf', 'net', 'meter', 'ethdev', 'pci',
 		'cmdline',
 		'hash',
+		'cfgfile',
 	] # only supported libraries for windows
 endif
 
@@ -100,8 +101,7 @@ foreach l:libraries
 		set_variable(name.underscorify() + '_disable_reason', reason)
 	else
 		enabled_libs += name
-		dpdk_conf.set('RTE_LIBRTE_' + name.to_upper(), 1) #old macro
-		dpdk_conf.set('RTE_LIB_' + name.to_upper(), 1) # new macro
+		dpdk_conf.set('RTE_LIB_' + name.to_upper(), 1)
 		install_headers(headers)
 
 		libname = 'rte_' + name

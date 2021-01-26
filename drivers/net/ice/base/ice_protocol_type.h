@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2020 Intel Corporation
+ * Copyright(c) 2001-2021 Intel Corporation
  */
 
 #ifndef _ICE_PROTOCOL_TYPE_H_
@@ -153,6 +153,7 @@ enum ice_prot_id {
 	ICE_PROT_OSPF		= 102,
 	ICE_PROT_PPPOE		= 103,
 	ICE_PROT_L2TPV3		= 104,
+	ICE_PROT_ECPRI		= 105,
 	ICE_PROT_ATAOE_OF	= 114,
 	ICE_PROT_CTRL_OF	= 116,
 	ICE_PROT_LLDP_OF	= 117,

@@ -57,8 +57,8 @@ int bnxt_alloc_ring_grps(struct bnxt *bp)
 	/* THOR does not support ring groups.
 	 * But we will use the array to save RSS context IDs.
 	 */
-	if (BNXT_CHIP_THOR(bp)) {
-		bp->max_ring_grps = BNXT_MAX_RSS_CTXTS_THOR;
+	if (BNXT_CHIP_P5(bp)) {
+		bp->max_ring_grps = BNXT_MAX_RSS_CTXTS_P5;
 	} else if (bp->max_ring_grps < bp->rx_cp_nr_rings) {
 		/* 1 ring is for default completion ring */
 		PMD_DRV_LOG(ERR, "Insufficient resource: Ring Group\n");
@@ -342,13 +342,11 @@ static void bnxt_set_db(struct bnxt *bp,
 			struct bnxt_db_info *db,
 			uint32_t ring_type,
 			uint32_t map_idx,
-			uint32_t fid)
+			uint32_t fid,
+			uint32_t ring_mask)
 {
-	if (BNXT_CHIP_THOR(bp)) {
-		if (BNXT_PF(bp))
-			db->doorbell = (char *)bp->doorbell_base + 0x10000;
-		else
-			db->doorbell = (char *)bp->doorbell_base + 0x4000;
+	if (BNXT_CHIP_P5(bp)) {
+		int db_offset = DB_PF_OFFSET;
 		switch (ring_type) {
 		case HWRM_RING_ALLOC_INPUT_RING_TYPE_TX:
 			db->db_key64 = DBR_PATH_L2 | DBR_TYPE_SQ;
@@ -364,6 +362,14 @@ static void bnxt_set_db(struct bnxt *bp,
 			db->db_key64 = DBR_PATH_L2;
 			break;
 		}
+		if (BNXT_CHIP_SR2(bp)) {
+			db->db_key64 |= DBR_VALID;
+			db_offset = bp->legacy_db_size;
+		} else if (BNXT_VF(bp)) {
+			db_offset = DB_VF_OFFSET;
+		}
+
+		db->doorbell = (char *)bp->doorbell_base + db_offset;
 		db->db_key64 |= (uint64_t)fid << DBR_XID_SFT;
 		db->db_64 = true;
 	} else {
@@ -380,6 +386,13 @@ static void bnxt_set_db(struct bnxt *bp,
 			break;
 		}
 		db->db_64 = false;
+	}
+	db->db_ring_mask = ring_mask;
+
+	if (BNXT_CHIP_SR2(bp)) {
+		db->db_epoch_mask = db->db_ring_mask + 1;
+		db->db_epoch_shift = DBR_EPOCH_SFT -
+					rte_log2_u32(db->db_epoch_mask);
 	}
 }
 
@@ -409,9 +422,9 @@ static int bnxt_alloc_cmpl_ring(struct bnxt *bp, int queue_index,
 	if (rc)
 		return rc;
 
-	cpr->cp_cons = 0;
+	cpr->cp_raw_cons = 0;
 	bnxt_set_db(bp, &cpr->cp_db, ring_type, cp_ring_index,
-		    cp_ring->fw_ring_id);
+		    cp_ring->fw_ring_id, cp_ring->ring_mask);
 	bnxt_db_cq(cpr);
 
 	return 0;
@@ -472,7 +485,7 @@ int bnxt_alloc_rxtx_nq_ring(struct bnxt *bp)
 	}
 
 	bnxt_set_db(bp, &nqr->cp_db, ring_type, ring_index,
-		    ring->fw_ring_id);
+		    ring->fw_ring_id, ring->ring_mask);
 	bnxt_db_nq(nqr);
 
 	bp->rxtx_nq_ring = nqr;
@@ -515,11 +528,12 @@ static int bnxt_alloc_rx_ring(struct bnxt *bp, int queue_index)
 	if (rc)
 		return rc;
 
-	rxr->rx_prod = 0;
+	rxr->rx_raw_prod = 0;
 	if (BNXT_HAS_RING_GRPS(bp))
 		bp->grp_info[queue_index].rx_fw_ring_id = ring->fw_ring_id;
-	bnxt_set_db(bp, &rxr->rx_db, ring_type, queue_index, ring->fw_ring_id);
-	bnxt_db_write(&rxr->rx_db, rxr->rx_prod);
+	bnxt_set_db(bp, &rxr->rx_db, ring_type, queue_index, ring->fw_ring_id,
+		    ring->ring_mask);
+	bnxt_db_write(&rxr->rx_db, rxr->rx_raw_prod);
 
 	return 0;
 }
@@ -538,7 +552,7 @@ static int bnxt_alloc_rx_agg_ring(struct bnxt *bp, int queue_index)
 
 	ring->fw_rx_ring_id = rxr->rx_ring_struct->fw_ring_id;
 
-	if (BNXT_CHIP_THOR(bp)) {
+	if (BNXT_CHIP_P5(bp)) {
 		ring_type = HWRM_RING_ALLOC_INPUT_RING_TYPE_RX_AGG;
 		hw_stats_ctx_id = cpr->hw_stats_ctx_id;
 	} else {
@@ -551,11 +565,12 @@ static int bnxt_alloc_rx_agg_ring(struct bnxt *bp, int queue_index)
 	if (rc)
 		return rc;
 
-	rxr->ag_prod = 0;
+	rxr->ag_raw_prod = 0;
 	if (BNXT_HAS_RING_GRPS(bp))
 		bp->grp_info[queue_index].ag_fw_ring_id = ring->fw_ring_id;
-	bnxt_set_db(bp, &rxr->ag_db, ring_type, map_idx, ring->fw_ring_id);
-	bnxt_db_write(&rxr->ag_db, rxr->ag_prod);
+	bnxt_set_db(bp, &rxr->ag_db, ring_type, map_idx, ring->fw_ring_id,
+		    ring->ring_mask);
+	bnxt_db_write(&rxr->ag_db, rxr->ag_raw_prod);
 
 	return 0;
 }
@@ -599,14 +614,13 @@ int bnxt_alloc_hwrm_rx_ring(struct bnxt *bp, int queue_index)
 
 	if (rxq->rx_started) {
 		if (bnxt_init_one_rx_ring(rxq)) {
-			PMD_DRV_LOG(ERR,
-				"bnxt_init_one_rx_ring failed!\n");
+			PMD_DRV_LOG(ERR, "bnxt_init_one_rx_ring failed!\n");
 			bnxt_rx_queue_release_op(rxq);
 			rc = -ENOMEM;
 			goto err_out;
 		}
-		bnxt_db_write(&rxr->rx_db, rxr->rx_prod);
-		bnxt_db_write(&rxr->ag_db, rxr->ag_prod);
+		bnxt_db_write(&rxr->rx_db, rxr->rx_raw_prod);
+		bnxt_db_write(&rxr->ag_db, rxr->ag_raw_prod);
 	}
 	rxq->index = queue_index;
 #if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
@@ -711,8 +725,8 @@ int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 			bnxt_rx_queue_release_op(rxq);
 			return -ENOMEM;
 		}
-		bnxt_db_write(&rxr->rx_db, rxr->rx_prod);
-		bnxt_db_write(&rxr->ag_db, rxr->ag_prod);
+		bnxt_db_write(&rxr->rx_db, rxr->rx_raw_prod);
+		bnxt_db_write(&rxr->ag_db, rxr->ag_raw_prod);
 		rxq->index = i;
 #if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
 		bnxt_rxq_vec_setup(rxq);
@@ -745,7 +759,8 @@ int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 		if (rc)
 			goto err_out;
 
-		bnxt_set_db(bp, &txr->tx_db, ring_type, i, ring->fw_ring_id);
+		bnxt_set_db(bp, &txr->tx_db, ring_type, i, ring->fw_ring_id,
+			    ring->ring_mask);
 		txq->index = idx;
 		bnxt_hwrm_set_ring_coal(bp, &coal, cp_ring->fw_ring_id);
 	}
@@ -778,10 +793,10 @@ int bnxt_alloc_async_cp_ring(struct bnxt *bp)
 	if (rc)
 		return rc;
 
-	cpr->cp_cons = 0;
+	cpr->cp_raw_cons = 0;
 	cpr->valid = 0;
 	bnxt_set_db(bp, &cpr->cp_db, ring_type, 0,
-		    cp_ring->fw_ring_id);
+		    cp_ring->fw_ring_id, cp_ring->ring_mask);
 
 	if (BNXT_HAS_NQ(bp))
 		bnxt_db_nq(cpr);

@@ -72,6 +72,31 @@
 #define I40E_TX_OFFLOAD_NOTSUP_MASK \
 		(PKT_TX_OFFLOAD_MASK ^ I40E_TX_OFFLOAD_MASK)
 
+int
+i40e_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
+{
+	struct i40e_rx_queue *rxq = rx_queue;
+	volatile union i40e_rx_desc *rxdp;
+	uint16_t desc;
+
+	desc = rxq->rx_tail;
+	rxdp = &rxq->rx_ring[desc];
+	/* watch for changes in status bit */
+	pmc->addr = &rxdp->wb.qword1.status_error_len;
+
+	/*
+	 * we expect the DD bit to be set to 1 if this descriptor was already
+	 * written to.
+	 */
+	pmc->val = rte_cpu_to_le_64(1 << I40E_RX_DESC_STATUS_DD_SHIFT);
+	pmc->mask = rte_cpu_to_le_64(1 << I40E_RX_DESC_STATUS_DD_SHIFT);
+
+	/* registers are 64-bit */
+	pmc->data_sz = sizeof(uint64_t);
+
+	return 0;
+}
+
 static inline void
 i40e_rxd_to_vlan_tci(struct rte_mbuf *mb, volatile union i40e_rx_desc *rxdp)
 {
@@ -1742,6 +1767,10 @@ i40e_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 	    dev->rx_pkt_burst == i40e_recv_scattered_pkts ||
 	    dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec ||
 	    dev->rx_pkt_burst == i40e_recv_pkts_vec ||
+#ifdef CC_AVX512_SUPPORT
+	    dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx512 ||
+	    dev->rx_pkt_burst == i40e_recv_pkts_vec_avx512 ||
+#endif
 	    dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx2 ||
 	    dev->rx_pkt_burst == i40e_recv_pkts_vec_avx2)
 		return ptypes;
@@ -2504,6 +2533,25 @@ i40e_tx_queue_release_mbufs(struct i40e_tx_queue *txq)
 	 *  vPMD tx will not set sw_ring's mbuf to NULL after free,
 	 *  so need to free remains more carefully.
 	 */
+#ifdef CC_AVX512_SUPPORT
+	if (dev->tx_pkt_burst == i40e_xmit_pkts_vec_avx512) {
+		struct i40e_vec_tx_entry *swr = (void *)txq->sw_ring;
+
+		i = txq->tx_next_dd - txq->tx_rs_thresh + 1;
+		if (txq->tx_tail < i) {
+			for (; i < txq->nb_tx_desc; i++) {
+				rte_pktmbuf_free_seg(swr[i].mbuf);
+				swr[i].mbuf = NULL;
+			}
+			i = 0;
+		}
+		for (; i < txq->tx_tail; i++) {
+			rte_pktmbuf_free_seg(swr[i].mbuf);
+			swr[i].mbuf = NULL;
+		}
+		return;
+	}
+#endif
 	if (dev->tx_pkt_burst == i40e_xmit_pkts_vec_avx2 ||
 			dev->tx_pkt_burst == i40e_xmit_pkts_vec) {
 		i = txq->tx_next_dd - txq->tx_rs_thresh + 1;
@@ -2797,23 +2845,23 @@ i40e_rx_queue_config(struct i40e_rx_queue *rxq)
 		RTE_MIN((uint32_t)(hw->func_caps.rx_buf_chain_len *
 			rxq->rx_buf_len), data->dev_conf.rxmode.max_rx_pkt_len);
 	if (data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME) {
-		if (rxq->max_pkt_len <= RTE_ETHER_MAX_LEN ||
+		if (rxq->max_pkt_len <= I40E_ETH_MAX_LEN ||
 			rxq->max_pkt_len > I40E_FRAME_SIZE_MAX) {
 			PMD_DRV_LOG(ERR, "maximum packet length must "
 				    "be larger than %u and smaller than %u,"
 				    "as jumbo frame is enabled",
-				    (uint32_t)RTE_ETHER_MAX_LEN,
+				    (uint32_t)I40E_ETH_MAX_LEN,
 				    (uint32_t)I40E_FRAME_SIZE_MAX);
 			return I40E_ERR_CONFIG;
 		}
 	} else {
 		if (rxq->max_pkt_len < RTE_ETHER_MIN_LEN ||
-			rxq->max_pkt_len > RTE_ETHER_MAX_LEN) {
+			rxq->max_pkt_len > I40E_ETH_MAX_LEN) {
 			PMD_DRV_LOG(ERR, "maximum packet length must be "
 				    "larger than %u and smaller than %u, "
 				    "as jumbo frame is disabled",
 				    (uint32_t)RTE_ETHER_MIN_LEN,
-				    (uint32_t)RTE_ETHER_MAX_LEN);
+				    (uint32_t)I40E_ETH_MAX_LEN);
 			return I40E_ERR_CONFIG;
 		}
 	}
@@ -3095,36 +3143,40 @@ i40e_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	qinfo->conf.offloads = txq->offloads;
 }
 
-static eth_rx_burst_t
-i40e_get_latest_rx_vec(bool scatter)
+static inline bool
+get_avx_supported(bool request_avx512)
 {
-#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) &&
-			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
-		return scatter ? i40e_recv_scattered_pkts_vec_avx2 :
-				 i40e_recv_pkts_vec_avx2;
+#ifdef RTE_ARCH_X86
+	if (request_avx512) {
+		if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_512 &&
+		rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1 &&
+		rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512BW) == 1)
+#ifdef CC_AVX512_SUPPORT
+			return true;
+#else
+		PMD_DRV_LOG(NOTICE,
+			"AVX512 is not supported in build env");
+		return false;
 #endif
-	return scatter ? i40e_recv_scattered_pkts_vec :
-			 i40e_recv_pkts_vec;
+	} else {
+		if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256 &&
+		rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 &&
+		rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1)
+#ifdef CC_AVX2_SUPPORT
+			return true;
+#else
+		PMD_DRV_LOG(NOTICE,
+			"AVX2 is not supported in build env");
+		return false;
+#endif
+	}
+#else
+	RTE_SET_USED(request_avx512);
+#endif /* RTE_ARCH_X86 */
+
+	return false;
 }
 
-static eth_rx_burst_t
-i40e_get_recommend_rx_vec(bool scatter)
-{
-#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
-	/*
-	 * since AVX frequency can be different to base frequency, limit
-	 * use of AVX2 version to later plaforms, not all those that could
-	 * theoretically run it.
-	 */
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) &&
-			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
-		return scatter ? i40e_recv_scattered_pkts_vec_avx2 :
-				 i40e_recv_pkts_vec_avx2;
-#endif
-	return scatter ? i40e_recv_scattered_pkts_vec :
-			 i40e_recv_pkts_vec;
-}
 
 void __rte_cold
 i40e_set_rx_function(struct rte_eth_dev *dev)
@@ -3132,6 +3184,8 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 	struct i40e_adapter *ad =
 		I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	uint16_t rx_using_sse, i;
+	bool use_avx2 = false;
+	bool use_avx512 = false;
 	/* In order to allow Vector Rx there are a few configuration
 	 * conditions to be met and Rx Bulk Allocation should be allowed.
 	 */
@@ -3154,20 +3208,53 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 					break;
 				}
 			}
+
+			use_avx512 = get_avx_supported(1);
+
+			if (!use_avx512)
+				use_avx2 = get_avx_supported(0);
 		}
 	}
 
 	if (ad->rx_vec_allowed  &&
 			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
-		/* Vec Rx path */
-		PMD_INIT_LOG(DEBUG, "Vector Rx path will be used on port=%d.",
-				dev->data->port_id);
-		if (ad->use_latest_vec)
-			dev->rx_pkt_burst =
-			i40e_get_latest_rx_vec(dev->data->scattered_rx);
-		else
-			dev->rx_pkt_burst =
-			i40e_get_recommend_rx_vec(dev->data->scattered_rx);
+		if (dev->data->scattered_rx) {
+			if (use_avx512) {
+#ifdef CC_AVX512_SUPPORT
+				PMD_DRV_LOG(NOTICE,
+					"Using AVX512 Vector Scattered Rx (port %d).",
+					dev->data->port_id);
+				dev->rx_pkt_burst =
+					i40e_recv_scattered_pkts_vec_avx512;
+#endif
+			} else {
+				PMD_INIT_LOG(DEBUG,
+					"Using %sVector Scattered Rx (port %d).",
+					use_avx2 ? "avx2 " : "",
+					dev->data->port_id);
+				dev->rx_pkt_burst = use_avx2 ?
+					i40e_recv_scattered_pkts_vec_avx2 :
+					i40e_recv_scattered_pkts_vec;
+			}
+		} else {
+			if (use_avx512) {
+#ifdef CC_AVX512_SUPPORT
+				PMD_DRV_LOG(NOTICE,
+					"Using AVX512 Vector Rx (port %d).",
+					dev->data->port_id);
+				dev->rx_pkt_burst =
+					i40e_recv_pkts_vec_avx512;
+#endif
+			} else {
+				PMD_INIT_LOG(DEBUG,
+					"Using %sVector Rx (port %d).",
+					use_avx2 ? "avx2 " : "",
+					dev->data->port_id);
+				dev->rx_pkt_burst = use_avx2 ?
+					i40e_recv_pkts_vec_avx2 :
+					i40e_recv_pkts_vec;
+			}
+		}
 	} else if (!dev->data->scattered_rx && ad->rx_bulk_alloc_allowed) {
 		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions are "
 				    "satisfied. Rx Burst Bulk Alloc function "
@@ -3189,6 +3276,10 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 		rx_using_sse =
 			(dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec ||
 			 dev->rx_pkt_burst == i40e_recv_pkts_vec ||
+#ifdef CC_AVX512_SUPPORT
+			 dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx512 ||
+			 dev->rx_pkt_burst == i40e_recv_pkts_vec_avx512 ||
+#endif
 			 dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx2 ||
 			 dev->rx_pkt_burst == i40e_recv_pkts_vec_avx2);
 
@@ -3209,6 +3300,10 @@ static const struct {
 	{ i40e_recv_pkts_bulk_alloc,         "Scalar Bulk Alloc" },
 	{ i40e_recv_pkts,                    "Scalar" },
 #ifdef RTE_ARCH_X86
+#ifdef CC_AVX512_SUPPORT
+	{ i40e_recv_scattered_pkts_vec_avx512, "Vector AVX512 Scattered" },
+	{ i40e_recv_pkts_vec_avx512,           "Vector AVX512" },
+#endif
 	{ i40e_recv_scattered_pkts_vec_avx2, "Vector AVX2 Scattered" },
 	{ i40e_recv_pkts_vec_avx2,           "Vector AVX2" },
 	{ i40e_recv_scattered_pkts_vec,      "Vector SSE Scattered" },
@@ -3268,39 +3363,14 @@ i40e_set_tx_function_flag(struct rte_eth_dev *dev, struct i40e_tx_queue *txq)
 				txq->queue_id);
 }
 
-static eth_tx_burst_t
-i40e_get_latest_tx_vec(void)
-{
-#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) &&
-			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
-		return i40e_xmit_pkts_vec_avx2;
-#endif
-	return i40e_xmit_pkts_vec;
-}
-
-static eth_tx_burst_t
-i40e_get_recommend_tx_vec(void)
-{
-#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
-	/*
-	 * since AVX frequency can be different to base frequency, limit
-	 * use of AVX2 version to later plaforms, not all those that could
-	 * theoretically run it.
-	 */
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) &&
-			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
-		return i40e_xmit_pkts_vec_avx2;
-#endif
-	return i40e_xmit_pkts_vec;
-}
-
 void __rte_cold
 i40e_set_tx_function(struct rte_eth_dev *dev)
 {
 	struct i40e_adapter *ad =
 		I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	int i;
+	bool use_avx2 = false;
+	bool use_avx512 = false;
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 		if (ad->tx_vec_allowed) {
@@ -3313,19 +3383,31 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 					break;
 				}
 			}
+
+			use_avx512 = get_avx_supported(1);
+
+			if (!use_avx512)
+				use_avx2 = get_avx_supported(0);
 		}
 	}
 
 	if (ad->tx_simple_allowed) {
 		if (ad->tx_vec_allowed &&
 				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
-			PMD_INIT_LOG(DEBUG, "Vector tx finally be used.");
-			if (ad->use_latest_vec)
-				dev->tx_pkt_burst =
-					i40e_get_latest_tx_vec();
-			else
-				dev->tx_pkt_burst =
-					i40e_get_recommend_tx_vec();
+			if (use_avx512) {
+#ifdef CC_AVX512_SUPPORT
+				PMD_DRV_LOG(NOTICE, "Using AVX512 Vector Tx (port %d).",
+					    dev->data->port_id);
+				dev->tx_pkt_burst = i40e_xmit_pkts_vec_avx512;
+#endif
+			} else {
+				PMD_INIT_LOG(DEBUG, "Using %sVector Tx (port %d).",
+					     use_avx2 ? "avx2 " : "",
+					     dev->data->port_id);
+				dev->tx_pkt_burst = use_avx2 ?
+						    i40e_xmit_pkts_vec_avx2 :
+						    i40e_xmit_pkts_vec;
+			}
 		} else {
 			PMD_INIT_LOG(DEBUG, "Simple tx finally be used.");
 			dev->tx_pkt_burst = i40e_xmit_pkts_simple;
@@ -3345,6 +3427,9 @@ static const struct {
 	{ i40e_xmit_pkts_simple,   "Scalar Simple" },
 	{ i40e_xmit_pkts,          "Scalar" },
 #ifdef RTE_ARCH_X86
+#ifdef CC_AVX512_SUPPORT
+	{ i40e_xmit_pkts_vec_avx512, "Vector AVX512" },
+#endif
 	{ i40e_xmit_pkts_vec_avx2, "Vector AVX2" },
 	{ i40e_xmit_pkts_vec,      "Vector SSE" },
 #elif defined(RTE_ARCH_ARM64)
@@ -3443,58 +3528,6 @@ i40e_set_default_pctype_table(struct rte_eth_dev *dev)
 		ad->pctypes_mask |= ad->pctypes_tbl[i];
 	}
 }
-
-#ifndef RTE_LIBRTE_I40E_INC_VECTOR
-int
-i40e_rx_vec_dev_conf_condition_check(struct rte_eth_dev __rte_unused *dev)
-{
-	return -1;
-}
-
-uint16_t
-i40e_recv_pkts_vec(
-	void __rte_unused *rx_queue,
-	struct rte_mbuf __rte_unused **rx_pkts,
-	uint16_t __rte_unused nb_pkts)
-{
-	return 0;
-}
-
-uint16_t
-i40e_recv_scattered_pkts_vec(
-	void __rte_unused *rx_queue,
-	struct rte_mbuf __rte_unused **rx_pkts,
-	uint16_t __rte_unused nb_pkts)
-{
-	return 0;
-}
-
-int
-i40e_rxq_vec_setup(struct i40e_rx_queue __rte_unused *rxq)
-{
-	return -1;
-}
-
-int
-i40e_txq_vec_setup(struct i40e_tx_queue __rte_unused *txq)
-{
-	return -1;
-}
-
-void
-i40e_rx_queue_release_mbufs_vec(struct i40e_rx_queue __rte_unused*rxq)
-{
-	return;
-}
-
-uint16_t
-i40e_xmit_fixed_burst_vec(void __rte_unused * tx_queue,
-			  struct rte_mbuf __rte_unused **tx_pkts,
-			  uint16_t __rte_unused nb_pkts)
-{
-	return 0;
-}
-#endif /* ifndef RTE_LIBRTE_I40E_INC_VECTOR */
 
 #ifndef CC_AVX2_SUPPORT
 uint16_t

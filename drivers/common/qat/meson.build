@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017-2018 Intel Corporation
 
-config_flag_fmt = 'RTE_LIBRTE_@0@_COMMON'
-
 qat_crypto = true
 qat_crypto_path = 'crypto/qat'
 qat_crypto_relpath = '../../' + qat_crypto_path
@@ -23,7 +21,7 @@ if disabled_drivers.contains(qat_compress_path)
 			'Explicitly disabled via build config')
 endif
 
-libcrypto = dependency('libcrypto', required: false)
+libcrypto = dependency('libcrypto', required: false, method: 'pkg-config')
 if qat_crypto and not libcrypto.found()
 	qat_crypto = false
 	dpdk_drvs_disabled += qat_crypto_path

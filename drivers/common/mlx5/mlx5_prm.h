@@ -594,13 +594,14 @@ struct mlx5_modification_cmd {
 	};
 };
 
+typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint8_t u8;
 
 #define __mlx5_nullp(typ) ((struct mlx5_ifc_##typ##_bits *)0)
 #define __mlx5_bit_sz(typ, fld) sizeof(__mlx5_nullp(typ)->fld)
-#define __mlx5_bit_off(typ, fld) ((unsigned int)(unsigned long) \
+#define __mlx5_bit_off(typ, fld) ((unsigned int)(uintptr_t) \
 				  (&(__mlx5_nullp(typ)->fld)))
 #define __mlx5_dw_bit_off(typ, fld) (32 - __mlx5_bit_sz(typ, fld) - \
 				    (__mlx5_bit_off(typ, fld) & 0x1f))
@@ -665,6 +666,7 @@ typedef uint8_t u8;
 #define MLX5_GET64(typ, p, fld) rte_be_to_cpu_64(*((rte_be64_t *)(p) + \
 						   __mlx5_64_off(typ, fld)))
 #define MLX5_FLD_SZ_BYTES(typ, fld) (__mlx5_bit_sz(typ, fld) / 8)
+#define MLX5_UN_SZ_BYTES(typ) (sizeof(union mlx5_ifc_##typ##_bits) / 8)
 
 struct mlx5_ifc_fte_match_set_misc_bits {
 	u8 gre_c_present[0x1];
@@ -787,11 +789,16 @@ struct mlx5_ifc_fte_match_set_misc3_bits {
 	u8 icmp_code[0x8];
 	u8 icmpv6_type[0x8];
 	u8 icmpv6_code[0x8];
-	u8 reserved_at_120[0x20];
+	u8 geneve_tlv_option_0_data[0x20];
 	u8 gtpu_teid[0x20];
 	u8 gtpu_msg_type[0x08];
 	u8 gtpu_msg_flags[0x08];
-	u8 reserved_at_170[0x90];
+	u8 reserved_at_170[0x10];
+	u8 gtpu_dw_2[0x20];
+	u8 gtpu_first_ext_dw_0[0x20];
+	u8 gtpu_dw_0[0x20];
+	u8 reserved_at_240[0x20];
+
 };
 
 struct mlx5_ifc_fte_match_set_misc4_bits {
@@ -814,6 +821,19 @@ struct mlx5_ifc_fte_match_param_bits {
 	struct mlx5_ifc_fte_match_set_misc2_bits misc_parameters_2;
 	struct mlx5_ifc_fte_match_set_misc3_bits misc_parameters_3;
 	struct mlx5_ifc_fte_match_set_misc4_bits misc_parameters_4;
+/*
+ * Add reserved bit to match the struct size with the size defined in PRM.
+ * This extension is not required in Linux.
+ */
+#ifndef HAVE_INFINIBAND_VERBS_H
+	u8 reserved_0[0x400];
+#endif
+};
+
+struct mlx5_ifc_dest_format_struct_bits {
+	u8 destination_type[0x8];
+	u8 destination_id[0x18];
+	u8 reserved_0[0x20];
 };
 
 enum {
@@ -843,6 +863,8 @@ enum {
 	MLX5_CMD_OP_SUSPEND_QP = 0x50F,
 	MLX5_CMD_OP_RESUME_QP = 0x510,
 	MLX5_CMD_OP_QUERY_NIC_VPORT_CONTEXT = 0x754,
+	MLX5_CMD_OP_ALLOC_PD = 0x800,
+	MLX5_CMD_OP_DEALLOC_PD = 0x801,
 	MLX5_CMD_OP_ACCESS_REGISTER = 0x805,
 	MLX5_CMD_OP_ALLOC_TRANSPORT_DOMAIN = 0x816,
 	MLX5_CMD_OP_CREATE_TIR = 0x900,
@@ -1065,6 +1087,8 @@ enum {
 			(1ULL << MLX5_GENERAL_OBJ_TYPE_FLEX_PARSE_GRAPH)
 #define MLX5_GENERAL_OBJ_TYPES_CAP_FLOW_HIT_ASO \
 			(1ULL << MLX5_GENERAL_OBJ_TYPE_FLOW_HIT_ASO)
+#define MLX5_GENERAL_OBJ_TYPES_CAP_GENEVE_TLV_OPT \
+			(1ULL << MLX5_OBJ_TYPE_GENEVE_TLV_OPT)
 
 enum {
 	MLX5_HCA_CAP_OPMOD_GET_MAX   = 0,
@@ -1363,8 +1387,10 @@ struct mlx5_ifc_cmd_hca_cap_bits {
 	u8 reserved_at_500[0x20];
 	u8 num_of_uars_per_page[0x20];
 	u8 flex_parser_protocols[0x20];
-	u8 reserved_at_560[0x20];
-	u8 reserved_at_580[0x3c];
+	u8 max_geneve_tlv_options[0x8];
+	u8 reserved_at_568[0x3];
+	u8 max_geneve_tlv_option_data_len[0x5];
+	u8 reserved_at_570[0x4c];
 	u8 mini_cqe_resp_stride_index[0x1];
 	u8 cqe_128_always[0x1];
 	u8 cqe_compression_128[0x1];
@@ -2207,6 +2233,49 @@ struct mlx5_ifc_cqc_bits {
 	u8 dbr_addr[0x40];
 };
 
+struct mlx5_ifc_health_buffer_bits {
+	u8         reserved_0[0x100];
+	u8         assert_existptr[0x20];
+	u8         assert_callra[0x20];
+	u8         reserved_1[0x40];
+	u8         fw_version[0x20];
+	u8         hw_id[0x20];
+	u8         reserved_2[0x20];
+	u8         irisc_index[0x8];
+	u8         synd[0x8];
+	u8         ext_synd[0x10];
+};
+
+struct mlx5_ifc_initial_seg_bits {
+	u8         fw_rev_minor[0x10];
+	u8         fw_rev_major[0x10];
+	u8         cmd_interface_rev[0x10];
+	u8         fw_rev_subminor[0x10];
+	u8         reserved_0[0x40];
+	u8         cmdq_phy_addr_63_32[0x20];
+	u8         cmdq_phy_addr_31_12[0x14];
+	u8         reserved_1[0x2];
+	u8         nic_interface[0x2];
+	u8         log_cmdq_size[0x4];
+	u8         log_cmdq_stride[0x4];
+	u8         command_doorbell_vector[0x20];
+	u8         reserved_2[0xf00];
+	u8         initializing[0x1];
+	u8         nic_interface_supported[0x7];
+	u8         reserved_4[0x18];
+	struct mlx5_ifc_health_buffer_bits health_buffer;
+	u8         no_dram_nic_offset[0x20];
+	u8         reserved_5[0x6de0];
+	u8         internal_timer_h[0x20];
+	u8         internal_timer_l[0x20];
+	u8         reserved_6[0x20];
+	u8         reserved_7[0x1f];
+	u8         clear_int[0x1];
+	u8         health_syndrome[0x8];
+	u8         health_counter[0x18];
+	u8         reserved_8[0x17fc0];
+};
+
 struct mlx5_ifc_create_cq_out_bits {
 	u8 status[0x8];
 	u8 reserved_at_8[0x18];
@@ -2232,6 +2301,7 @@ struct mlx5_ifc_create_cq_in_bits {
 };
 
 enum {
+	MLX5_OBJ_TYPE_GENEVE_TLV_OPT = 0x000b,
 	MLX5_GENERAL_OBJ_TYPE_VIRTQ = 0x000d,
 	MLX5_GENERAL_OBJ_TYPE_VIRTIO_Q_COUNTERS = 0x001c,
 	MLX5_GENERAL_OBJ_TYPE_FLEX_PARSE_GRAPH = 0x0022,
@@ -2266,6 +2336,17 @@ struct mlx5_ifc_virtio_q_counters_bits {
 	u8 reserved_at_180[0x50];
 };
 
+struct mlx5_ifc_geneve_tlv_option_bits {
+	u8 modify_field_select[0x40];
+	u8 reserved_at_40[0x18];
+	u8 geneve_option_fte_index[0x8];
+	u8 option_class[0x10];
+	u8 option_type[0x8];
+	u8 reserved_at_78[0x3];
+	u8 option_data_length[0x5];
+	u8 reserved_at_80[0x180];
+};
+
 struct mlx5_ifc_create_virtio_q_counters_in_bits {
 	struct mlx5_ifc_general_obj_in_cmd_hdr_bits hdr;
 	struct mlx5_ifc_virtio_q_counters_bits virtio_q_counters;
@@ -2275,6 +2356,12 @@ struct mlx5_ifc_query_virtio_q_counters_out_bits {
 	struct mlx5_ifc_general_obj_in_cmd_hdr_bits hdr;
 	struct mlx5_ifc_virtio_q_counters_bits virtio_q_counters;
 };
+
+struct mlx5_ifc_create_geneve_tlv_option_in_bits {
+	struct mlx5_ifc_general_obj_in_cmd_hdr_bits hdr;
+	struct mlx5_ifc_geneve_tlv_option_bits geneve_tlv_opt;
+};
+
 enum {
 	MLX5_VIRTQ_STATE_INIT = 0,
 	MLX5_VIRTQ_STATE_RDY = 1,
@@ -2319,7 +2406,11 @@ struct mlx5_ifc_virtio_q_bits {
 	u8 counter_set_id[0x20];
 	u8 reserved_at_320[0x8];
 	u8 pd[0x18];
-	u8 reserved_at_340[0xc0];
+	u8 reserved_at_340[0x2];
+	u8 queue_period_mode[0x2];
+	u8 queue_period_us[0xc];
+	u8 queue_max_count[0x10];
+	u8 reserved_at_360[0xa0];
 };
 
 struct mlx5_ifc_virtio_net_q_bits {
@@ -2769,6 +2860,40 @@ struct mlx5_ifc_init2init_qp_in_bits {
 	u8 reserved_at_a0[0x20];
 	struct mlx5_ifc_qpc_bits qpc;
 	u8 reserved_at_800[0x80];
+};
+
+struct mlx5_ifc_dealloc_pd_out_bits {
+	u8 status[0x8];
+	u8 reserved_0[0x18];
+	u8 syndrome[0x20];
+	u8 reserved_1[0x40];
+};
+
+struct mlx5_ifc_dealloc_pd_in_bits {
+	u8 opcode[0x10];
+	u8 reserved_0[0x10];
+	u8 reserved_1[0x10];
+	u8 op_mod[0x10];
+	u8 reserved_2[0x8];
+	u8 pd[0x18];
+	u8 reserved_3[0x20];
+};
+
+struct mlx5_ifc_alloc_pd_out_bits {
+	u8 status[0x8];
+	u8 reserved_0[0x18];
+	u8 syndrome[0x20];
+	u8 reserved_1[0x8];
+	u8 pd[0x18];
+	u8 reserved_2[0x20];
+};
+
+struct mlx5_ifc_alloc_pd_in_bits {
+	u8 opcode[0x10];
+	u8 reserved_0[0x10];
+	u8 reserved_1[0x10];
+	u8 op_mod[0x10];
+	u8 reserved_2[0x40];
 };
 
 #ifdef PEDANTIC

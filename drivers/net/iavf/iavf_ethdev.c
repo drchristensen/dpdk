@@ -267,10 +267,6 @@ iavf_init_rss(struct iavf_adapter *adapter)
 		return ret;
 	}
 
-	/* In IAVF, RSS enablement is set by PF driver. It is not supported
-	 * to set based on rss_conf->rss_hf.
-	 */
-
 	/* configure RSS key */
 	if (!rss_conf->rss_key) {
 		/* Calculate the default hash key */
@@ -294,6 +290,13 @@ iavf_init_rss(struct iavf_adapter *adapter)
 	ret = iavf_configure_rss_key(adapter);
 	if (ret)
 		return ret;
+
+	/* Set RSS hash configuration based on rss_conf->rss_hf. */
+	ret = iavf_rss_hash_set(adapter, rss_conf->rss_hf, true);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "fail to set default RSS");
+		return ret;
+	}
 
 	return 0;
 }
@@ -324,12 +327,51 @@ iavf_queues_req_reset(struct rte_eth_dev *dev, uint16_t num)
 }
 
 static int
+iavf_dev_vlan_insert_set(struct rte_eth_dev *dev)
+{
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	bool enable;
+
+	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2))
+		return 0;
+
+	enable = !!(dev->data->dev_conf.txmode.offloads &
+		    DEV_TX_OFFLOAD_VLAN_INSERT);
+	iavf_config_vlan_insert_v2(adapter, enable);
+
+	return 0;
+}
+
+static int
+iavf_dev_init_vlan(struct rte_eth_dev *dev)
+{
+	int err;
+
+	err = iavf_dev_vlan_offload_set(dev,
+					ETH_VLAN_STRIP_MASK |
+					ETH_QINQ_STRIP_MASK |
+					ETH_VLAN_FILTER_MASK |
+					ETH_VLAN_EXTEND_MASK);
+	if (err) {
+		PMD_DRV_LOG(ERR, "Failed to update vlan offload");
+		return err;
+	}
+
+	err = iavf_dev_vlan_insert_set(dev);
+	if (err)
+		PMD_DRV_LOG(ERR, "Failed to update vlan insertion");
+
+	return err;
+}
+
+static int
 iavf_dev_configure(struct rte_eth_dev *dev)
 {
 	struct iavf_adapter *ad =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf =  IAVF_DEV_PRIVATE_TO_VF(ad);
-	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
 	uint16_t num_queue_pairs = RTE_MAX(dev->data->nb_rx_queues,
 		dev->data->nb_tx_queues);
 	int ret;
@@ -372,8 +414,10 @@ iavf_dev_configure(struct rte_eth_dev *dev)
 	} else {
 		/* Check if large VF is already enabled. If so, disable and
 		 * release redundant queue resource.
+		 * Or check if enough queue pairs. If not, request them from PF.
 		 */
-		if (vf->lv_enabled) {
+		if (vf->lv_enabled ||
+		    num_queue_pairs > vf->vsi_res->num_queue_pairs) {
 			ret = iavf_queues_req_reset(dev, num_queue_pairs);
 			if (ret)
 				return ret;
@@ -384,12 +428,10 @@ iavf_dev_configure(struct rte_eth_dev *dev)
 		vf->max_rss_qregion = IAVF_MAX_NUM_QUEUES_DFLT;
 	}
 
-	/* Vlan stripping setting */
-	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN) {
-		if (dev_conf->rxmode.offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
-			iavf_enable_vlan_strip(ad);
-		else
-			iavf_disable_vlan_strip(ad);
+	ret = iavf_dev_init_vlan(dev);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "configure VLAN failed: %d", ret);
+		return -1;
 	}
 
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF) {
@@ -418,23 +460,23 @@ iavf_init_rxq(struct rte_eth_dev *dev, struct iavf_rx_queue *rxq)
 	 * correctly.
 	 */
 	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME) {
-		if (max_pkt_len <= RTE_ETHER_MAX_LEN ||
+		if (max_pkt_len <= IAVF_ETH_MAX_LEN ||
 		    max_pkt_len > IAVF_FRAME_SIZE_MAX) {
 			PMD_DRV_LOG(ERR, "maximum packet length must be "
 				    "larger than %u and smaller than %u, "
 				    "as jumbo frame is enabled",
-				    (uint32_t)RTE_ETHER_MAX_LEN,
+				    (uint32_t)IAVF_ETH_MAX_LEN,
 				    (uint32_t)IAVF_FRAME_SIZE_MAX);
 			return -EINVAL;
 		}
 	} else {
 		if (max_pkt_len < RTE_ETHER_MIN_LEN ||
-		    max_pkt_len > RTE_ETHER_MAX_LEN) {
+		    max_pkt_len > IAVF_ETH_MAX_LEN) {
 			PMD_DRV_LOG(ERR, "maximum packet length must be "
 				    "larger than %u and smaller than %u, "
 				    "as jumbo frame is disabled",
 				    (uint32_t)RTE_ETHER_MIN_LEN,
-				    (uint32_t)RTE_ETHER_MAX_LEN);
+				    (uint32_t)IAVF_ETH_MAX_LEN);
 			return -EINVAL;
 		}
 	}
@@ -779,6 +821,7 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		DEV_RX_OFFLOAD_JUMBO_FRAME |
 		DEV_RX_OFFLOAD_VLAN_FILTER |
 		DEV_RX_OFFLOAD_RSS_HASH;
+
 	dev_info->tx_offload_capa =
 		DEV_TX_OFFLOAD_VLAN_INSERT |
 		DEV_TX_OFFLOAD_QINQ_INSERT |
@@ -794,6 +837,9 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		DEV_TX_OFFLOAD_GENEVE_TNL_TSO |
 		DEV_TX_OFFLOAD_MULTI_SEGS |
 		DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_CRC)
+		dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_KEEP_CRC;
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_free_thresh = IAVF_DEFAULT_RX_FREE_THRESH,
@@ -989,12 +1035,67 @@ iavf_dev_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	int err;
 
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2) {
+		err = iavf_add_del_vlan_v2(adapter, vlan_id, on);
+		if (err)
+			return -EIO;
+		return 0;
+	}
+
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN))
 		return -ENOTSUP;
 
 	err = iavf_add_del_vlan(adapter, vlan_id, on);
 	if (err)
 		return -EIO;
+	return 0;
+}
+
+static void
+iavf_iterate_vlan_filters_v2(struct rte_eth_dev *dev, bool enable)
+{
+	struct rte_vlan_filter_conf *vfc = &dev->data->vlan_filter_conf;
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	uint32_t i, j;
+	uint64_t ids;
+
+	for (i = 0; i < RTE_DIM(vfc->ids); i++) {
+		if (vfc->ids[i] == 0)
+			continue;
+
+		ids = vfc->ids[i];
+		for (j = 0; ids != 0 && j < 64; j++, ids >>= 1) {
+			if (ids & 1)
+				iavf_add_del_vlan_v2(adapter,
+						     64 * i + j, enable);
+		}
+	}
+}
+
+static int
+iavf_dev_vlan_offload_set_v2(struct rte_eth_dev *dev, int mask)
+{
+	struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	bool enable;
+	int err;
+
+	if (mask & ETH_VLAN_FILTER_MASK) {
+		enable = !!(rxmode->offloads & DEV_RX_OFFLOAD_VLAN_FILTER);
+
+		iavf_iterate_vlan_filters_v2(dev, enable);
+	}
+
+	if (mask & ETH_VLAN_STRIP_MASK) {
+		enable = !!(rxmode->offloads & DEV_RX_OFFLOAD_VLAN_STRIP);
+
+		err = iavf_config_vlan_strip_v2(adapter, enable);
+		if (err)
+			return -EIO;
+	}
+
 	return 0;
 }
 
@@ -1006,6 +1107,9 @@ iavf_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
 	int err;
+
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2)
+		return iavf_dev_vlan_offload_set_v2(dev, mask);
 
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN))
 		return -ENOTSUP;
@@ -1102,31 +1206,68 @@ iavf_dev_rss_reta_query(struct rte_eth_dev *dev,
 }
 
 static int
+iavf_set_rss_key(struct iavf_adapter *adapter, uint8_t *key, uint8_t key_len)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+
+	/* HENA setting, it is enabled by default, no change */
+	if (!key || key_len == 0) {
+		PMD_DRV_LOG(DEBUG, "No key to be configured");
+		return 0;
+	} else if (key_len != vf->vf_res->rss_key_size) {
+		PMD_DRV_LOG(ERR, "The size of hash key configured "
+			"(%d) doesn't match the size of hardware can "
+			"support (%d)", key_len,
+			vf->vf_res->rss_key_size);
+		return -EINVAL;
+	}
+
+	rte_memcpy(vf->rss_key, key, key_len);
+
+	return iavf_configure_rss_key(adapter);
+}
+
+static int
 iavf_dev_rss_hash_update(struct rte_eth_dev *dev,
 			struct rte_eth_rss_conf *rss_conf)
 {
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	int ret;
+
+	adapter->eth_dev->data->dev_conf.rx_adv_conf.rss_conf = *rss_conf;
 
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF))
 		return -ENOTSUP;
 
-	/* HENA setting, it is enabled by default, no change */
-	if (!rss_conf->rss_key || rss_conf->rss_key_len == 0) {
-		PMD_DRV_LOG(DEBUG, "No key to be configured");
+	/* Set hash key. */
+	ret = iavf_set_rss_key(adapter, rss_conf->rss_key,
+			       rss_conf->rss_key_len);
+	if (ret)
+		return ret;
+
+	if (rss_conf->rss_hf == 0)
 		return 0;
-	} else if (rss_conf->rss_key_len != vf->vf_res->rss_key_size) {
-		PMD_DRV_LOG(ERR, "The size of hash key configured "
-			"(%d) doesn't match the size of hardware can "
-			"support (%d)", rss_conf->rss_key_len,
-			vf->vf_res->rss_key_size);
-		return -EINVAL;
+
+	/* Clear existing RSS. */
+	ret = iavf_set_hena(adapter, 0);
+
+	/* It is a workaround, temporarily allow error to be returned
+	 * due to possible lack of PF handling for hena = 0.
+	 */
+	if (ret)
+		PMD_DRV_LOG(WARNING, "fail to clean existing RSS,"
+			    "lack PF support");
+
+	/* Set new RSS configuration. */
+	ret = iavf_rss_hash_set(adapter, rss_conf->rss_hf, true);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "fail to set new RSS");
+		return ret;
 	}
 
-	rte_memcpy(vf->rss_key, rss_conf->rss_key, rss_conf->rss_key_len);
-
-	return iavf_configure_rss_key(adapter);
+	return 0;
 }
 
 static int
@@ -1140,8 +1281,7 @@ iavf_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF))
 		return -ENOTSUP;
 
-	 /* Just set it to default value now. */
-	rss_conf->rss_hf = IAVF_RSS_OFFLOAD_ALL;
+	rss_conf->rss_hf = vf->rss_hf;
 
 	if (!rss_conf->rss_key)
 		return 0;
@@ -1167,7 +1307,7 @@ iavf_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		return -EBUSY;
 	}
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > IAVF_ETH_MAX_LEN)
 		dev->data->dev_conf.rxmode.offloads |=
 				DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -1277,6 +1417,9 @@ iavf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 	ret = iavf_query_stats(adapter, &pstats);
 	if (ret == 0) {
+		uint8_t crc_stats_len = (dev->data->dev_conf.rxmode.offloads &
+					 DEV_RX_OFFLOAD_KEEP_CRC) ? 0 :
+					 RTE_ETHER_CRC_LEN;
 		iavf_update_stats(vsi, pstats);
 		stats->ipackets = pstats->rx_unicast + pstats->rx_multicast +
 				pstats->rx_broadcast - pstats->rx_discards;
@@ -1285,7 +1428,7 @@ iavf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		stats->imissed = pstats->rx_discards;
 		stats->oerrors = pstats->tx_errors + pstats->tx_discards;
 		stats->ibytes = pstats->rx_bytes;
-		stats->ibytes -= stats->ipackets * RTE_ETHER_CRC_LEN;
+		stats->ibytes -= stats->ipackets * crc_stats_len;
 		stats->obytes = pstats->tx_bytes;
 	} else {
 		PMD_DRV_LOG(ERR, "Get statistics failed");
@@ -1858,6 +2001,13 @@ iavf_init_vf(struct rte_eth_dev *dev)
 		}
 	}
 
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2) {
+		if (iavf_get_vlan_offload_caps_v2(adapter) != 0) {
+			PMD_INIT_LOG(ERR, "failed to do get VLAN offload v2 capabilities");
+			goto err_rss;
+		}
+	}
+
 	iavf_init_proto_xtr(dev);
 
 	return 0;
@@ -2028,6 +2178,15 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 		PMD_INIT_LOG(ERR, "Failed to initialize flow");
 		return ret;
 	}
+
+	/* Set hena = 0 to ask PF to cleanup all existing RSS. */
+	ret = iavf_set_hena(adapter, 0);
+	if (ret)
+		/* It is a workaround, temporarily allow error to be returned
+		 * due to possible lack of PF handling for hena = 0.
+		 */
+		PMD_DRV_LOG(WARNING, "fail to disable default RSS,"
+			    "lack PF support");
 
 	return 0;
 }

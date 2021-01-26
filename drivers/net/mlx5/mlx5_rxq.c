@@ -49,77 +49,6 @@ static_assert(MLX5_RSS_HASH_KEY_LEN ==
 	      "wrong RSS default key size.");
 
 /**
- * Check whether Multi-Packet RQ can be enabled for the device.
- *
- * @param dev
- *   Pointer to Ethernet device.
- *
- * @return
- *   1 if supported, negative errno value if not.
- */
-inline int
-mlx5_check_mprq_support(struct rte_eth_dev *dev)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-
-	if (priv->config.mprq.enabled &&
-	    priv->rxqs_n >= priv->config.mprq.min_rxqs_num)
-		return 1;
-	return -ENOTSUP;
-}
-
-/**
- * Check whether Multi-Packet RQ is enabled for the Rx queue.
- *
- *  @param rxq
- *     Pointer to receive queue structure.
- *
- * @return
- *   0 if disabled, otherwise enabled.
- */
-inline int
-mlx5_rxq_mprq_enabled(struct mlx5_rxq_data *rxq)
-{
-	return rxq->strd_num_n > 0;
-}
-
-/**
- * Check whether Multi-Packet RQ is enabled for the device.
- *
- * @param dev
- *   Pointer to Ethernet device.
- *
- * @return
- *   0 if disabled, otherwise enabled.
- */
-inline int
-mlx5_mprq_enabled(struct rte_eth_dev *dev)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	uint32_t i;
-	uint16_t n = 0;
-	uint16_t n_ibv = 0;
-
-	if (mlx5_check_mprq_support(dev) < 0)
-		return 0;
-	/* All the configured queues should be enabled. */
-	for (i = 0; i < priv->rxqs_n; ++i) {
-		struct mlx5_rxq_data *rxq = (*priv->rxqs)[i];
-		struct mlx5_rxq_ctrl *rxq_ctrl = container_of
-			(rxq, struct mlx5_rxq_ctrl, rxq);
-
-		if (rxq == NULL || rxq_ctrl->type != MLX5_RXQ_TYPE_STANDARD)
-			continue;
-		n_ibv++;
-		if (mlx5_rxq_mprq_enabled(rxq))
-			++n;
-	}
-	/* Multi-Packet RQ can't be partially configured. */
-	MLX5_ASSERT(n == 0 || n == n_ibv);
-	return n == n_ibv;
-}
-
-/**
  * Calculate the number of CQEs in CQ for the Rx queue.
  *
  *  @param rxq_data
@@ -346,7 +275,9 @@ rxq_free_elts_sprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 		(1 << rxq->elts_n) * (1 << rxq->strd_num_n) :
 		(1 << rxq->elts_n);
 	const uint16_t q_mask = q_n - 1;
-	uint16_t used = q_n - (rxq->rq_ci - rxq->rq_pi);
+	uint16_t elts_ci = mlx5_rxq_mprq_enabled(&rxq_ctrl->rxq) ?
+		rxq->elts_ci : rxq->rq_ci;
+	uint16_t used = q_n - (elts_ci - rxq->rq_pi);
 	uint16_t i;
 
 	DRV_LOG(DEBUG, "port %u Rx queue %u freeing %d WRs",
@@ -359,8 +290,8 @@ rxq_free_elts_sprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 	 */
 	if (mlx5_rxq_check_vec_support(rxq) > 0) {
 		for (i = 0; i < used; ++i)
-			(*rxq->elts)[(rxq->rq_ci + i) & q_mask] = NULL;
-		rxq->rq_pi = rxq->rq_ci;
+			(*rxq->elts)[(elts_ci + i) & q_mask] = NULL;
+		rxq->rq_pi = elts_ci;
 	}
 	for (i = 0; i != q_n; ++i) {
 		if ((*rxq->elts)[i] != NULL)
@@ -402,14 +333,14 @@ mlx5_get_rx_queue_offloads(struct rte_eth_dev *dev)
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_dev_config *config = &priv->config;
 	uint64_t offloads = (DEV_RX_OFFLOAD_SCATTER |
-			     RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT |
 			     DEV_RX_OFFLOAD_TIMESTAMP |
 			     DEV_RX_OFFLOAD_JUMBO_FRAME |
 			     DEV_RX_OFFLOAD_RSS_HASH);
 
+	if (!config->mprq.enabled)
+		offloads |= RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT;
 	if (config->hw_fcs_strip)
 		offloads |= DEV_RX_OFFLOAD_KEEP_CRC;
-
 	if (config->hw_csum)
 		offloads |= (DEV_RX_OFFLOAD_IPV4_CKSUM |
 			     DEV_RX_OFFLOAD_UDP_CKSUM |
@@ -1689,6 +1620,7 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	LIST_INSERT_HEAD(&priv->rxqsctrl, tmpl, next);
 	return tmpl;
 error:
+	mlx5_mr_btree_free(&tmpl->rxq.mr_ctrl.cache_bh);
 	mlx5_free(tmpl);
 	return NULL;
 }

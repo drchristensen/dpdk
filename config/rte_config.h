@@ -13,7 +13,6 @@
 #define _RTE_CONFIG_H_
 
 #include <rte_build_config.h>
-#include "rte_compatibility_defines.h"
 
 /* legacy defines */
 #ifdef RTE_EXEC_ENV_LINUX
@@ -62,6 +61,7 @@
 /* cryptodev defines */
 #define RTE_CRYPTO_MAX_DEVS 64
 #define RTE_CRYPTODEV_NAME_LEN 64
+#define RTE_CRYPTO_CALLBACKS 1
 
 /* compressdev defines */
 #define RTE_COMPRESS_MAX_DEVS 64

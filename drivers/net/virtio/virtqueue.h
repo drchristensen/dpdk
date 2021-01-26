@@ -26,7 +26,7 @@ struct rte_mbuf;
 /*
  * Per virtio_ring.h in Linux.
  *     For virtio_pci on SMP, we don't need to order with respect to MMIO
- *     accesses through relaxed memory I/O windows, so smp_mb() et al are
+ *     accesses through relaxed memory I/O windows, so thread_fence is
  *     sufficient.
  *
  *     For using virtio to talk to real devices (eg. vDPA) we do need real
@@ -36,7 +36,7 @@ static inline void
 virtio_mb(uint8_t weak_barriers)
 {
 	if (weak_barriers)
-		rte_smp_mb();
+		rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
 	else
 		rte_mb();
 }
@@ -45,7 +45,7 @@ static inline void
 virtio_rmb(uint8_t weak_barriers)
 {
 	if (weak_barriers)
-		rte_smp_rmb();
+		rte_atomic_thread_fence(__ATOMIC_ACQUIRE);
 	else
 		rte_io_rmb();
 }
@@ -54,7 +54,7 @@ static inline void
 virtio_wmb(uint8_t weak_barriers)
 {
 	if (weak_barriers)
-		rte_smp_wmb();
+		rte_atomic_thread_fence(__ATOMIC_RELEASE);
 	else
 		rte_io_wmb();
 }
@@ -66,16 +66,15 @@ virtqueue_fetch_flags_packed(struct vring_packed_desc *dp,
 	uint16_t flags;
 
 	if (weak_barriers) {
-/* x86 prefers to using rte_smp_rmb over __atomic_load_n as it reports
+/* x86 prefers to using rte_io_rmb over __atomic_load_n as it reports
  * a better perf(~1.5%), which comes from the saved branch by the compiler.
- * The if and else branch are identical with the smp and io barriers both
- * defined as compiler barriers on x86.
+ * The if and else branch are identical  on the platforms except Arm.
  */
-#ifdef RTE_ARCH_X86_64
-		flags = dp->flags;
-		rte_smp_rmb();
-#else
+#ifdef RTE_ARCH_ARM
 		flags = __atomic_load_n(&dp->flags, __ATOMIC_ACQUIRE);
+#else
+		flags = dp->flags;
+		rte_io_rmb();
 #endif
 	} else {
 		flags = dp->flags;
@@ -90,22 +89,22 @@ virtqueue_store_flags_packed(struct vring_packed_desc *dp,
 			      uint16_t flags, uint8_t weak_barriers)
 {
 	if (weak_barriers) {
-/* x86 prefers to using rte_smp_wmb over __atomic_store_n as it reports
+/* x86 prefers to using rte_io_wmb over __atomic_store_n as it reports
  * a better perf(~1.5%), which comes from the saved branch by the compiler.
- * The if and else branch are identical with the smp and io barriers both
- * defined as compiler barriers on x86.
+ * The if and else branch are identical on the platforms except Arm.
  */
-#ifdef RTE_ARCH_X86_64
-		rte_smp_wmb();
-		dp->flags = flags;
-#else
+#ifdef RTE_ARCH_ARM
 		__atomic_store_n(&dp->flags, flags, __ATOMIC_RELEASE);
+#else
+		rte_io_wmb();
+		dp->flags = flags;
 #endif
 	} else {
 		rte_io_wmb();
 		dp->flags = flags;
 	}
 }
+
 #ifdef RTE_PMD_PACKET_PREFETCH
 #define rte_packet_prefetch(p)  rte_prefetch1(p)
 #else

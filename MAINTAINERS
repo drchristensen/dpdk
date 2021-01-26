@@ -99,7 +99,6 @@ F: meson.build
 F: meson_options.txt
 F: config/
 F: buildtools/call-sphinx-build.py
-F: buildtools/gen-pmdinfo-cfile.sh
 F: buildtools/list-dir-globs.py
 F: buildtools/pkg-config/
 F: buildtools/symlink-drivers-solibs.sh
@@ -109,6 +108,7 @@ Public CI
 M: Aaron Conole <aconole@redhat.com>
 M: Michael Santana <maicolgabriel@hotmail.com>
 F: .travis.yml
+F: .github/workflows/build.yml
 F: .ci/
 
 ABI Policy & Versioning
@@ -132,7 +132,10 @@ F: lib/*/*.map
 
 Driver information
 M: Neil Horman <nhorman@tuxdriver.com>
-F: buildtools/pmdinfogen/
+M: Dmitry Kozlyuk <dmitry.kozliuk@gmail.com>
+F: buildtools/coff.py
+F: buildtools/gen-pmdinfo-cfile.py
+F: buildtools/pmdinfogen.py
 F: usertools/dpdk-pmdinfo.py
 F: doc/guides/tools/pmdinfo.rst
 
@@ -647,7 +650,6 @@ F: doc/guides/nics/enic.rst
 F: doc/guides/nics/features/enic.ini
 
 Hisilicon hns3
-M: Wei Hu (Xavier) <xavier.huwei@huawei.com>
 M: Min Hu (Connor) <humin29@huawei.com>
 M: Yisen Zhuang <yisen.zhuang@huawei.com>
 M: Lijun Ou <oulijun@huawei.com>
@@ -840,8 +842,8 @@ F: doc/guides/nics/pfe.rst
 F: drivers/net/pfe/
 F: doc/guides/nics/features/pfe.ini
 
-Pensando ionic - UNMAINTAINED
-M: Alfredo Cardigliano <cardigliano@ntop.org>
+Pensando ionic
+M: Andrew Boyer <aboyer@pensando.io>
 F: drivers/net/ionic/
 F: doc/guides/nics/ionic.rst
 F: doc/guides/nics/features/ionic.ini
@@ -1567,7 +1569,7 @@ F: app/test/sample_packet_forward.h
 
 Driver testing tool
 M: Wenzhuo Lu <wenzhuo.lu@intel.com>
-M: Beilei Xing <beilei.xing@intel.com>
+M: Xiaoyun Li <xiaoyun.li@intel.com>
 M: Bernard Iremonger <bernard.iremonger@intel.com>
 T: git://dpdk.org/next/dpdk-next-net
 F: app/test-pmd/

@@ -15,10 +15,14 @@
 #define TXGBE_FRAME_SIZE_DFT	(1518) /* Default frame size, +FCS */
 #define TXGBE_NUM_POOL		(64)
 #define TXGBE_PBTXSIZE_MAX	0x00028000 /* 160KB Packet Buffer */
+#define TXGBE_MAX_FTQF_FILTERS	128
 #define TXGBE_TXPKT_SIZE_MAX	0xA /* Max Tx Packet size */
 #define TXGBE_MAX_UP		8
 #define TXGBE_MAX_QP		(128)
 #define TXGBE_MAX_UTA		128
+
+#define TXGBE_FDIR_INIT_DONE_POLL		10
+#define TXGBE_FDIRCMD_CMD_POLL			10
 
 #define TXGBE_ALIGN		128 /* as intel did */
 
@@ -64,7 +68,68 @@ enum {
 #define TXGBE_PHYSICAL_LAYER_10BASE_T		0x08000
 #define TXGBE_PHYSICAL_LAYER_2500BASE_KX	0x10000
 
+/* Software ATR hash keys */
+#define TXGBE_ATR_BUCKET_HASH_KEY		0x3DAD14E2
+#define TXGBE_ATR_SIGNATURE_HASH_KEY		0x174D3614
+
+/* Software ATR input stream values and masks */
 #define TXGBE_ATR_HASH_MASK			0x7fff
+#define TXGBE_ATR_L3TYPE_MASK			0x4
+#define TXGBE_ATR_L3TYPE_IPV4			0x0
+#define TXGBE_ATR_L3TYPE_IPV6			0x4
+#define TXGBE_ATR_L4TYPE_MASK			0x3
+#define TXGBE_ATR_L4TYPE_UDP			0x1
+#define TXGBE_ATR_L4TYPE_TCP			0x2
+#define TXGBE_ATR_L4TYPE_SCTP			0x3
+#define TXGBE_ATR_TUNNEL_MASK			0x10
+#define TXGBE_ATR_TUNNEL_ANY			0x10
+enum txgbe_atr_flow_type {
+	TXGBE_ATR_FLOW_TYPE_IPV4		= 0x0,
+	TXGBE_ATR_FLOW_TYPE_UDPV4		= 0x1,
+	TXGBE_ATR_FLOW_TYPE_TCPV4		= 0x2,
+	TXGBE_ATR_FLOW_TYPE_SCTPV4		= 0x3,
+	TXGBE_ATR_FLOW_TYPE_IPV6		= 0x4,
+	TXGBE_ATR_FLOW_TYPE_UDPV6		= 0x5,
+	TXGBE_ATR_FLOW_TYPE_TCPV6		= 0x6,
+	TXGBE_ATR_FLOW_TYPE_SCTPV6		= 0x7,
+	TXGBE_ATR_FLOW_TYPE_TUNNELED_IPV4	= 0x10,
+	TXGBE_ATR_FLOW_TYPE_TUNNELED_UDPV4	= 0x11,
+	TXGBE_ATR_FLOW_TYPE_TUNNELED_TCPV4	= 0x12,
+	TXGBE_ATR_FLOW_TYPE_TUNNELED_SCTPV4	= 0x13,
+	TXGBE_ATR_FLOW_TYPE_TUNNELED_IPV6	= 0x14,
+	TXGBE_ATR_FLOW_TYPE_TUNNELED_UDPV6	= 0x15,
+	TXGBE_ATR_FLOW_TYPE_TUNNELED_TCPV6	= 0x16,
+	TXGBE_ATR_FLOW_TYPE_TUNNELED_SCTPV6	= 0x17,
+};
+
+/* Flow Director ATR input struct. */
+struct txgbe_atr_input {
+	/*
+	 * Byte layout in order, all values with MSB first:
+	 *
+	 * vm_pool	- 1 byte
+	 * flow_type	- 1 byte
+	 * vlan_id	- 2 bytes
+	 * src_ip	- 16 bytes
+	 * inner_mac	- 6 bytes
+	 * cloud_mode	- 2 bytes
+	 * tni_vni	- 4 bytes
+	 * dst_ip	- 16 bytes
+	 * src_port	- 2 bytes
+	 * dst_port	- 2 bytes
+	 * flex_bytes	- 2 bytes
+	 * bkt_hash	- 2 bytes
+	 */
+	u8 vm_pool;
+	u8 flow_type;
+	__be16 pkt_type;
+	__be32 dst_ip[4];
+	__be32 src_ip[4];
+	__be16 src_port;
+	__be16 dst_port;
+	__be16 flex_bytes;
+	__be16 bkt_hash;
+};
 
 enum txgbe_eeprom_type {
 	txgbe_eeprom_unknown = 0,

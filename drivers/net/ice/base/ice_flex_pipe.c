@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2020 Intel Corporation
+ * Copyright(c) 2001-2021 Intel Corporation
  */
 
 #include "ice_common.h"
@@ -13,6 +13,7 @@
 static const struct ice_tunnel_type_scan tnls[] = {
 	{ TNL_VXLAN,		"TNL_VXLAN_PF" },
 	{ TNL_GENEVE,		"TNL_GENEVE_PF" },
+	{ TNL_ECPRI,		"TNL_UDP_ECPRI_PF" },
 	{ TNL_LAST,		"" }
 };
 
@@ -313,6 +314,84 @@ ice_pkg_enum_entry(struct ice_seg *ice_seg, struct ice_pkg_enum *state,
 	}
 
 	return entry;
+}
+
+/**
+ * ice_hw_ptype_ena - check if the PTYPE is enabled or not
+ * @hw: pointer to the HW structure
+ * @ptype: the hardware PTYPE
+ */
+bool ice_hw_ptype_ena(struct ice_hw *hw, u16 ptype)
+{
+	return ptype < ICE_FLOW_PTYPE_MAX &&
+	       ice_is_bit_set(hw->hw_ptype, ptype);
+}
+
+/**
+ * ice_marker_ptype_tcam_handler
+ * @sect_type: section type
+ * @section: pointer to section
+ * @index: index of the Marker PType TCAM entry to be returned
+ * @offset: pointer to receive absolute offset, always 0 for ptype TCAM sections
+ *
+ * This is a callback function that can be passed to ice_pkg_enum_entry.
+ * Handles enumeration of individual Marker PType TCAM entries.
+ */
+static void *
+ice_marker_ptype_tcam_handler(u32 sect_type, void *section, u32 index,
+			      u32 *offset)
+{
+	struct ice_marker_ptype_tcam_section *marker_ptype;
+
+	if (!section)
+		return NULL;
+
+	if (sect_type != ICE_SID_RXPARSER_MARKER_PTYPE)
+		return NULL;
+
+	/* cppcheck-suppress nullPointer */
+	if (index > ICE_MAX_MARKER_PTYPE_TCAMS_IN_BUF)
+		return NULL;
+
+	if (offset)
+		*offset = 0;
+
+	marker_ptype = (struct ice_marker_ptype_tcam_section *)section;
+	if (index >= LE16_TO_CPU(marker_ptype->count))
+		return NULL;
+
+	return marker_ptype->tcam + index;
+}
+
+/**
+ * ice_fill_hw_ptype - fill the enabled PTYPE bit information
+ * @hw: pointer to the HW structure
+ */
+static void
+ice_fill_hw_ptype(struct ice_hw *hw)
+{
+	struct ice_marker_ptype_tcam_entry *tcam;
+	struct ice_seg *seg = hw->seg;
+	struct ice_pkg_enum state;
+
+	ice_zero_bitmap(hw->hw_ptype, ICE_FLOW_PTYPE_MAX);
+	if (!seg)
+		return;
+
+	ice_memset(&state, 0, sizeof(state), ICE_NONDMA_MEM);
+
+	do {
+		tcam = (struct ice_marker_ptype_tcam_entry *)
+			ice_pkg_enum_entry(seg, &state,
+					   ICE_SID_RXPARSER_MARKER_PTYPE, NULL,
+					   ice_marker_ptype_tcam_handler);
+		if (tcam &&
+		    LE16_TO_CPU(tcam->addr) < ICE_MARKER_PTYPE_TCAM_ADDR_MAX &&
+		    LE16_TO_CPU(tcam->ptype) < ICE_FLOW_PTYPE_MAX)
+			ice_set_bit(LE16_TO_CPU(tcam->ptype), hw->hw_ptype);
+
+		seg = NULL;
+	} while (tcam);
 }
 
 /**
@@ -808,6 +887,28 @@ ice_aq_download_pkg(struct ice_hw *hw, struct ice_buf_hdr *pkg_buf,
 }
 
 /**
+ * ice_aq_upload_section
+ * @hw: pointer to the hardware structure
+ * @pkg_buf: the package buffer which will receive the section
+ * @buf_size: the size of the package buffer
+ * @cd: pointer to command details structure or NULL
+ *
+ * Upload Section (0x0C41)
+ */
+enum ice_status
+ice_aq_upload_section(struct ice_hw *hw, struct ice_buf_hdr *pkg_buf,
+		      u16 buf_size, struct ice_sq_cd *cd)
+{
+	struct ice_aq_desc desc;
+
+	ice_debug(hw, ICE_DBG_TRACE, "%s\n", __func__);
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_upload_section);
+	desc.flags |= CPU_TO_LE16(ICE_AQ_FLAG_RD);
+
+	return ice_aq_send_cmd(hw, &desc, pkg_buf, buf_size, cd);
+}
+
+/**
  * ice_aq_update_pkg
  * @hw: pointer to the hardware structure
  * @pkg_buf: the package cmd buffer
@@ -1004,6 +1105,13 @@ ice_dwnld_cfg_bufs(struct ice_hw *hw, struct ice_buf *bufs, u32 count)
 
 		if (last)
 			break;
+	}
+
+	if (!status) {
+		status = ice_set_vlan_mode(hw);
+		if (status)
+			ice_debug(hw, ICE_DBG_PKG, "Failed to set VLAN mode: err %d\n",
+				  status);
 	}
 
 	ice_release_global_cfg_lock(hw);
@@ -1511,6 +1619,7 @@ enum ice_status ice_init_pkg(struct ice_hw *hw, u8 *buf, u32 len)
 		 */
 		ice_init_pkg_regs(hw);
 		ice_fill_blk_tbls(hw);
+		ice_fill_hw_ptype(hw);
 		ice_get_prof_index_max(hw);
 	} else {
 		ice_debug(hw, ICE_DBG_INIT, "package load failed, %d\n",
@@ -1793,7 +1902,7 @@ void ice_init_prof_result_bm(struct ice_hw *hw)
  *
  * Frees a package buffer
  */
-static void ice_pkg_buf_free(struct ice_hw *hw, struct ice_buf_build *bld)
+void ice_pkg_buf_free(struct ice_hw *hw, struct ice_buf_build *bld)
 {
 	ice_free(hw, bld);
 }
@@ -1893,6 +2002,43 @@ ice_pkg_buf_alloc_section(struct ice_buf_build *bld, u32 type, u16 size)
 }
 
 /**
+ * ice_pkg_buf_alloc_single_section
+ * @hw: pointer to the HW structure
+ * @type: the section type value
+ * @size: the size of the section to reserve (in bytes)
+ * @section: returns pointer to the section
+ *
+ * Allocates a package buffer with a single section.
+ * Note: all package contents must be in Little Endian form.
+ */
+struct ice_buf_build *
+ice_pkg_buf_alloc_single_section(struct ice_hw *hw, u32 type, u16 size,
+				 void **section)
+{
+	struct ice_buf_build *buf;
+
+	if (!section)
+		return NULL;
+
+	buf = ice_pkg_buf_alloc(hw);
+	if (!buf)
+		return NULL;
+
+	if (ice_pkg_buf_reserve_section(buf, 1))
+		goto ice_pkg_buf_alloc_single_section_err;
+
+	*section = ice_pkg_buf_alloc_section(buf, type, size);
+	if (!*section)
+		goto ice_pkg_buf_alloc_single_section_err;
+
+	return buf;
+
+ice_pkg_buf_alloc_single_section_err:
+	ice_pkg_buf_free(hw, buf);
+	return NULL;
+}
+
+/**
  * ice_pkg_buf_get_active_sections
  * @bld: pointer to pkg build (allocated by ice_pkg_buf_alloc())
  *
@@ -1919,7 +2065,7 @@ static u16 ice_pkg_buf_get_active_sections(struct ice_buf_build *bld)
  *
  * Return a pointer to the buffer's header
  */
-static struct ice_buf *ice_pkg_buf(struct ice_buf_build *bld)
+struct ice_buf *ice_pkg_buf(struct ice_buf_build *bld)
 {
 	if (!bld)
 		return NULL;
@@ -2156,7 +2302,7 @@ enum ice_status ice_destroy_tunnel(struct ice_hw *hw, u16 port, bool all)
 	u16 count = 0;
 	u16 index;
 	u16 size;
-	u16 i;
+	u16 i, j;
 
 	ice_acquire_lock(&hw->tnl_lock);
 
@@ -2196,30 +2342,31 @@ enum ice_status ice_destroy_tunnel(struct ice_hw *hw, u16 port, bool all)
 					  size);
 	if (!sect_rx)
 		goto ice_destroy_tunnel_err;
-	sect_rx->count = CPU_TO_LE16(1);
+	sect_rx->count = CPU_TO_LE16(count);
 
 	sect_tx = (struct ice_boost_tcam_section *)
 		ice_pkg_buf_alloc_section(bld, ICE_SID_TXPARSER_BOOST_TCAM,
 					  size);
 	if (!sect_tx)
 		goto ice_destroy_tunnel_err;
-	sect_tx->count = CPU_TO_LE16(1);
+	sect_tx->count = CPU_TO_LE16(count);
 
 	/* copy original boost entry to update package buffer, one copy to Rx
 	 * section, another copy to the Tx section
 	 */
-	for (i = 0; i < hw->tnl.count && i < ICE_TUNNEL_MAX_ENTRIES; i++)
+	for (i = 0, j = 0; i < hw->tnl.count && i < ICE_TUNNEL_MAX_ENTRIES; i++)
 		if (hw->tnl.tbl[i].valid && hw->tnl.tbl[i].in_use &&
 		    (all || hw->tnl.tbl[i].port == port)) {
-			ice_memcpy(sect_rx->tcam + i,
+			ice_memcpy(sect_rx->tcam + j,
 				   hw->tnl.tbl[i].boost_entry,
 				   sizeof(*sect_rx->tcam),
 				   ICE_NONDMA_TO_NONDMA);
-			ice_memcpy(sect_tx->tcam + i,
+			ice_memcpy(sect_tx->tcam + j,
 				   hw->tnl.tbl[i].boost_entry,
 				   sizeof(*sect_tx->tcam),
 				   ICE_NONDMA_TO_NONDMA);
 			hw->tnl.tbl[i].marked = true;
+			j++;
 		}
 
 	status = ice_update_pkg(hw, ice_pkg_buf(bld), 1);

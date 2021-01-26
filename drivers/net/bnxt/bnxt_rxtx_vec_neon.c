@@ -27,11 +27,11 @@
 	uint32_t tmp, of;						       \
 									       \
 	of = vgetq_lane_u32((rss_flags), (pi)) |			       \
-		   bnxt_ol_flags_table[vgetq_lane_u32((ol_idx), (pi))];	       \
+		   rxr->ol_flags_table[vgetq_lane_u32((ol_idx), (pi))];	       \
 									       \
 	tmp = vgetq_lane_u32((errors), (pi));				       \
 	if (tmp)							       \
-		of |= bnxt_ol_flags_err_table[tmp];			       \
+		of |= rxr->ol_flags_err_table[tmp];			       \
 	(ol_flags) = of;						       \
 }
 
@@ -58,7 +58,8 @@
 
 static void
 descs_to_mbufs(uint32x4_t mm_rxcmp[4], uint32x4_t mm_rxcmp1[4],
-	       uint64x2_t mb_init, struct rte_mbuf **mbuf)
+	       uint64x2_t mb_init, struct rte_mbuf **mbuf,
+	       struct bnxt_rx_ring_info *rxr)
 {
 	const uint8x16_t shuf_msk = {
 		0xFF, 0xFF, 0xFF, 0xFF,    /* pkt_type (zeroes) */
@@ -79,7 +80,7 @@ descs_to_mbufs(uint32x4_t mm_rxcmp[4], uint32x4_t mm_rxcmp1[4],
 	const uint32x4_t flags2_index_mask = vdupq_n_u32(0x1F);
 	const uint32x4_t flags2_error_mask = vdupq_n_u32(0x0F);
 	uint32x4_t flags_type, flags2, index, errors, rss_flags;
-	uint32x4_t tmp, ptype_idx;
+	uint32x4_t tmp, ptype_idx, is_tunnel;
 	uint64x2_t t0, t1;
 	uint32_t ol_flags;
 
@@ -116,10 +117,14 @@ descs_to_mbufs(uint32x4_t mm_rxcmp[4], uint32x4_t mm_rxcmp1[4],
 						    vget_low_u64(t1)));
 
 	/* Compute ol_flags and checksum error indexes for four packets. */
+	is_tunnel = vandq_u32(flags2, vdupq_n_u32(4));
+	is_tunnel = vshlq_n_u32(is_tunnel, 3);
 	errors = vandq_u32(vshrq_n_u32(errors, 4), flags2_error_mask);
 	errors = vandq_u32(errors, flags2);
 
 	index = vbicq_u32(flags2, errors);
+	errors = vorrq_u32(errors, vshrq_n_u32(is_tunnel, 1));
+	index = vorrq_u32(index, is_tunnel);
 
 	/* Update mbuf rearm_data for four packets. */
 	GET_OL_FLAGS(rss_flags, index, errors, 0, ol_flags);
@@ -286,7 +291,8 @@ bnxt_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 			goto out;
 		}
 
-		descs_to_mbufs(rxcmp, rxcmp1, mb_init, &rx_pkts[nb_rx_pkts]);
+		descs_to_mbufs(rxcmp, rxcmp1, mb_init, &rx_pkts[nb_rx_pkts],
+			       rxr);
 		nb_rx_pkts += num_valid;
 
 		if (num_valid < RTE_BNXT_DESCS_PER_LOOP)
@@ -295,8 +301,7 @@ bnxt_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 out:
 	if (nb_rx_pkts) {
-		rxr->rx_prod =
-			RING_ADV(rxr->rx_ring_struct, rxr->rx_prod, nb_rx_pkts);
+		rxr->rx_raw_prod = RING_ADV(rxr->rx_raw_prod, nb_rx_pkts);
 
 		rxq->rxrearm_nb += nb_rx_pkts;
 		cpr->cp_raw_cons += 2 * nb_rx_pkts;
@@ -353,7 +358,7 @@ bnxt_xmit_fixed_burst_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 {
 	struct bnxt_tx_queue *txq = tx_queue;
 	struct bnxt_tx_ring_info *txr = txq->tx_ring;
-	uint16_t prod = txr->tx_prod;
+	uint16_t tx_prod, tx_raw_prod = txr->tx_raw_prod;
 	struct rte_mbuf *tx_mbuf;
 	struct tx_bd_long *txbd = NULL;
 	struct bnxt_sw_tx_bd *tx_buf;
@@ -370,16 +375,17 @@ bnxt_xmit_fixed_burst_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 		tx_mbuf = *tx_pkts++;
 		rte_prefetch0(tx_mbuf);
 
-		tx_buf = &txr->tx_buf_ring[prod];
+		tx_prod = RING_IDX(txr->tx_ring_struct, tx_raw_prod);
+		tx_buf = &txr->tx_buf_ring[tx_prod];
 		tx_buf->mbuf = tx_mbuf;
 		tx_buf->nr_bds = 1;
 
-		txbd = &txr->tx_desc_ring[prod];
+		txbd = &txr->tx_desc_ring[tx_prod];
 		txbd->address = tx_mbuf->buf_iova + tx_mbuf->data_off;
 		txbd->len = tx_mbuf->data_len;
 		txbd->flags_type = bnxt_xmit_flags_len(tx_mbuf->data_len,
 						       TX_BD_FLAGS_NOCMPL);
-		prod = RING_NEXT(txr->tx_ring_struct, prod);
+		tx_raw_prod = RING_NEXT(tx_raw_prod);
 		to_send--;
 	}
 
@@ -390,9 +396,9 @@ bnxt_xmit_fixed_burst_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 	}
 
 	rte_compiler_barrier();
-	bnxt_db_write(&txr->tx_db, prod);
+	bnxt_db_write(&txr->tx_db, tx_raw_prod);
 
-	txr->tx_prod = prod;
+	txr->tx_raw_prod = tx_raw_prod;
 
 	return nb_pkts;
 }

@@ -98,9 +98,22 @@ Features
 - Hardware LRO.
 - Hairpin.
 - Multiple-thread flow insertion.
+- Matching on GTP extension header with raw encap/decap action.
+- Matching on Geneve TLV option header with raw encap/decap action.
+- RSS support in sample action.
 
 Limitations
 -----------
+
+- Windows support:
+
+  On Windows, the features are limited:
+
+  - Promiscuous mode is not supported
+  - The following rules are supported:
+
+    - IPv4/UDP with CVLAN filtering
+    - Unicast MAC filtering
 
 - For secondary process:
 
@@ -175,7 +188,19 @@ Limitations
      - OAM
      - protocol type
      - options length
-       Currently, the only supported options length value is 0.
+
+- Match on Geneve TLV option is supported on the following fields:
+
+     - Class
+     - Type
+     - Length
+     - Data
+
+  Only one Class/Type/Length Geneve TLV option is supported per shared device.
+  Class/Type/Length fields must be specified as well as masks.
+  Class/Type/Length specified masks must be full.
+  Matching Geneve TLV option without specifying data is not supported.
+  Matching Geneve TLV option with ``data & mask == 0`` is not supported.
 
 - VF: flow rules created on VF devices can only match traffic targeted at the
   configured MAC addresses (see ``rte_eth_dev_mac_addr_add()``).
@@ -185,6 +210,10 @@ Limitations
      - v_pt_rsv_flags: E flag, S flag, PN flag
      - msg_type
      - teid
+
+- Match on GTP extension header only for GTP PDU session container (next
+  extension header type = 0x85).
+- Match on GTP extension header is not supported in group 0.
 
 - No Tx metadata go to the E-Switch steering domain for the Flow group 0.
   The flows within group 0 and set metadata action are rejected by hardware.
@@ -447,24 +476,6 @@ Driver options
     ConnectX-6 Lx, BlueField and BlueField-2.
   - POWER9 and ARMv8 with ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
     ConnectX-6 Lx, BlueField and BlueField-2.
-
-- ``rxq_cqe_pad_en`` parameter [int]
-
-  A nonzero value enables 128B padding of CQE on RX side. The size of CQE
-  is aligned with the size of a cacheline of the core. If cacheline size is
-  128B, the CQE size is configured to be 128B even though the device writes
-  only 64B data on the cacheline. This is to avoid unnecessary cache
-  invalidation by device's two consecutive writes on to one cacheline.
-  However in some architecture, it is more beneficial to update entire
-  cacheline with padding the rest 64B rather than striding because
-  read-modify-write could drop performance a lot. On the other hand,
-  writing extra data will consume more PCIe bandwidth and could also drop
-  the maximum throughput. It is recommended to empirically set this
-  parameter. Disabled by default.
-
-  Supported on:
-
-  - CPU having 128B cacheline with ConnectX-5 and BlueField.
 
 - ``rxq_pkt_pad_en`` parameter [int]
 
@@ -1022,6 +1033,10 @@ Below are some firmware configurations listed.
    or
    FLEX_PARSER_PROFILE_ENABLE=1
 
+- enable Geneve TLV option flow matching::
+
+   FLEX_PARSER_PROFILE_ENABLE=0
+
 - enable GTP flow matching::
 
    FLEX_PARSER_PROFILE_ENABLE=3
@@ -1031,8 +1046,8 @@ Below are some firmware configurations listed.
    FLEX_PARSER_PROFILE_ENABLE=4
    PROG_PARSE_GRAPH=1
 
-Prerequisites
--------------
+Linux Prerequisites
+-------------------
 
 This driver relies on external libraries and kernel drivers for resources
 allocations and initialization. The following dependencies are not part of
@@ -1145,7 +1160,44 @@ required from that distribution.
 
    Several versions of Mellanox OFED/EN are available. Installing the version
    this DPDK release was developed and tested against is strongly
-   recommended. Please check the `prerequisites`_.
+   recommended. Please check the `linux prerequisites`_.
+
+Windows Prerequisites
+---------------------
+
+This driver relies on external libraries and kernel drivers for resources
+allocations and initialization. The dependencies in the following sub-sections
+are not part of DPDK, and must be installed separately.
+
+Compilation Prerequisites
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+DevX SDK installation
+^^^^^^^^^^^^^^^^^^^^^
+
+The DevX SDK must be installed on the machine building the Windows PMD.
+Additional information can be found at
+`How to Integrate Windows DevX in Your Development Environment
+<https://docs.mellanox.com/display/winof2v250/RShim+Drivers+and+Usage#RShimDriversandUsage-DevXInterface>`__.
+
+Runtime Prerequisites
+~~~~~~~~~~~~~~~~~~~~~
+
+WinOF2 version 2.60 or higher must be installed on the machine.
+
+WinOF2 installation
+^^^^^^^^^^^^^^^^^^^
+
+The driver can be downloaded from the following site:
+`WINOF2
+<https://www.mellanox.com/products/adapter-software/ethernet/windows/winof-2>`__
+
+DevX Enablement
+^^^^^^^^^^^^^^^
+
+DevX for Windows must be enabled in the Windows registry.
+The keys ``DevxEnabled`` and ``DevxFsRules`` must be set.
+Additional information can be found in the WinOF2 user manual.
 
 Supported NICs
 --------------
@@ -1194,7 +1246,7 @@ Below are detailed device names:
 Quick Start Guide on OFED/EN
 ----------------------------
 
-1. Download latest Mellanox OFED/EN. For more info check the  `prerequisites`_.
+1. Download latest Mellanox OFED/EN. For more info check the `linux prerequisites`_.
 
 
 2. Install the required libraries and kernel modules either by installing
@@ -1500,6 +1552,16 @@ Supported hardware offloads
    |                       | |  OFED 5.2     | | OFED 5.2      |
    |                       | |  rdma-core 32 | | rdma-core 32  |
    |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
+   | Encapsulation         | |  DPDK 21.02   | | DPDK 21.02    |
+   | GTP PSC               | |  OFED 5.2     | | OFED 5.2      |
+   |                       | |  rdma-core 35 | | rdma-core 35  |
+   |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
+   | Encapsulation         | | DPDK 21.02    | | DPDK 21.02    |
+   | GENEVE TLV option     | | OFED 5.2      | | OFED 5.2      |
+   |                       | | rdma-core 34  | | rdma-core 34  |
+   |                       | | ConnectX-6 Dx | | ConnectX-6 Dx |
    +-----------------------+-----------------+-----------------+
 
 Notes for metadata
