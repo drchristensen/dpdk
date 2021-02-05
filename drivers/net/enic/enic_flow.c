@@ -5,7 +5,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <rte_log.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_flow_driver.h>
 #include <rte_ether.h>
 #include <rte_ip.h>
@@ -1392,7 +1392,7 @@ enic_dump_filter(const struct filter_v2 *filt)
 
 		if (gp->mask_flags & FILTER_GENERIC_1_IPV6)
 			sprintf(ip6, "%s ",
-				(gp->val_flags & FILTER_GENERIC_1_IPV4)
+				(gp->val_flags & FILTER_GENERIC_1_IPV6)
 				 ? "ip6(y)" : "ip6(n)");
 		else
 			sprintf(ip6, "%s ", "ip6(x)");
@@ -1598,6 +1598,8 @@ enic_flow_parse(struct rte_eth_dev *dev,
 		return -rte_errno;
 	}
 	enic_filter->type = enic->flow_filter_mode;
+	if (enic->adv_filters)
+		enic_filter->type = FILTER_DPDK_1;
 	ret = enic_copy_filter(pattern, enic_filter_cap, enic,
 				       enic_filter, error);
 	return ret;

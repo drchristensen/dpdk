@@ -227,7 +227,7 @@ default_machine='nehalem'
 if ! check_cc_flags "-march=$default_machine" ; then
 	default_machine='corei7'
 fi
-build build-x86-default cc skipABI \
+build build-x86-default cc skipABI -Dcheck_includes=true \
 	-Dlibdir=lib -Dmachine=$default_machine $use_shared
 
 # 32-bit with default compiler
@@ -276,10 +276,7 @@ done
 load_env cc
 build_path=$(readlink -f $builds_dir/build-x86-default)
 export DESTDIR=$build_path/install
-# No need to reinstall if ABI checks are enabled
-if [ -z "$DPDK_ABI_REF_VERSION" ]; then
-	install_target $build_path $DESTDIR
-fi
+install_target $build_path $DESTDIR
 pc_file=$(find $DESTDIR -name libdpdk.pc)
 export PKG_CONFIG_PATH=$(dirname $pc_file):$PKG_CONFIG_PATH
 libdir=$(dirname $(find $DESTDIR -name librte_eal.so))

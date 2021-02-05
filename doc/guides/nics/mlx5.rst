@@ -74,6 +74,7 @@ Features
 - RX VLAN stripping.
 - TX VLAN insertion.
 - RX CRC stripping configuration.
+- TX mbuf fast free offload.
 - Promiscuous mode on PF and VF.
 - Multicast promiscuous mode on PF and VF.
 - Hardware checksum offloads.
@@ -101,6 +102,10 @@ Features
 - Matching on GTP extension header with raw encap/decap action.
 - Matching on Geneve TLV option header with raw encap/decap action.
 - RSS support in sample action.
+- E-Switch mirroring and jump.
+- E-Switch mirroring and modify.
+- 21844 flow priorities for ingress or egress flow groups greater than 0 and for any transfer
+  flow group.
 
 Limitations
 -----------
@@ -349,11 +354,29 @@ Limitations
     for some NICs (such as ConnectX-6 Dx, ConnectX-6 Lx, and BlueField-2).
     The capability bit ``scatter_fcs_w_decap_disable`` shows NIC support.
 
+- TX mbuf fast free:
+
+  - fast free offload assumes the all mbufs being sent are originated from the
+    same memory pool and there is no any extra references to the mbufs (the
+    reference counter for each mbuf is equal 1 on tx_burst call). The latter
+    means there should be no any externally attached buffers in mbufs. It is
+    an application responsibility to provide the correct mbufs if the fast
+    free offload is engaged. The mlx5 PMD implicitly produces the mbufs with
+    externally attached buffers if MPRQ option is enabled, hence, the fast
+    free offload is neither supported nor advertised if there is MPRQ enabled.
+
 - Sample flow:
 
   - Supports ``RTE_FLOW_ACTION_TYPE_SAMPLE`` action only within NIC Rx and E-Switch steering domain.
   - The E-Switch Sample flow must have the eswitch_manager VPORT destination (PF or ECPF) and no additional actions.
   - For ConnectX-5, the ``RTE_FLOW_ACTION_TYPE_SAMPLE`` is typically used as first action in the E-Switch egress flow if with header modify or encapsulation actions.
+
+- Modify Field flow:
+
+  - Supports the 'set' operation only for ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD`` action.
+  - Modification of an arbitrary place in a packet via the special ``RTE_FLOW_FIELD_START`` Field ID is not supported.
+  - Encapsulation levels are not supported, can modify outermost header fields only.
+  - Offsets must be 32-bits aligned, cannot skip past the boundary of a field.
 
 - IPv6 header item 'proto' field, indicating the next header protocol, should
   not be set as extension header.
@@ -462,13 +485,17 @@ Driver options
   A nonzero value enables the compression of CQE on RX side. This feature
   allows to save PCI bandwidth and improve performance. Enabled by default.
   Different compression formats are supported in order to achieve the best
-  performance for different traffic patterns. Hash RSS format is the default.
+  performance for different traffic patterns. Default format depends on
+  Multi-Packet Rx queue configuration: Hash RSS format is used in case
+  MPRQ is disabled, Checksum format is used in case MPRQ is enabled.
 
   Specifying 2 as a ``rxq_cqe_comp_en`` value selects Flow Tag format for
   better compression rate in case of RTE Flow Mark traffic.
   Specifying 3 as a ``rxq_cqe_comp_en`` value selects Checksum format.
   Specifying 4 as a ``rxq_cqe_comp_en`` value selects L3/L4 Header format for
   better compression rate in case of mixed TCP/UDP and IPv4/IPv6 traffic.
+  CQE compression format selection requires DevX to be enabled. If there is
+  no DevX enabled/supported the value is reset to 1 by default.
 
   Supported on:
 
@@ -836,7 +863,7 @@ Driver options
   +------+-----------+-----------+-------------+-------------+
   | 1    | 24 bits   | vary 0-32 | 32 bits     | yes         |
   +------+-----------+-----------+-------------+-------------+
-  | 2    | vary 0-32 | 32 bits   | 32 bits     | yes         |
+  | 2    | vary 0-24 | 32 bits   | 32 bits     | yes         |
   +------+-----------+-----------+-------------+-------------+
 
   If there is no E-Switch configuration the ``dv_xmeta_en`` parameter is
@@ -847,6 +874,15 @@ Driver options
   The Direct Verbs/Rules (engaged with ``dv_flow_en`` = 1) supports all
   of the extensive metadata features. The legacy Verbs supports FLAG and
   MARK metadata actions over NIC Rx steering domain only.
+
+  The setting MARK or META value to zero means there is no item provided and
+  receiving datapath will not report in mbufs these items are present.
+
+  For the MARK action the last 16 values in the full range are reserved for
+  internal PMD purposes (to emulate FLAG action). The valid range for the
+  MARK action values is 0-0xFFEF for the 16-bit mode and 0-xFFFFEF
+  for the 24-bit mode, the flows with the MARK action value outside
+  the specified range will be rejected.
 
 - ``dv_flow_en`` parameter [int]
 
@@ -1442,7 +1478,8 @@ Supported hardware offloads
    Rx timestamp   17.11  4.14    16     4.2-1 12.21.1000 ConnectX-4
    TSO            17.11  4.14    16     4.2-1 12.21.1000 ConnectX-4
    LRO            19.08  N/A     N/A    4.6-4 16.25.6406 ConnectX-5
-   Buffer Split   20.11  N/A     N/A    5.1-2 22.28.2006 ConnectX-6 Dx
+   Tx scheduling  20.08  N/A     N/A    5.1-2 22.28.2006 ConnectX-6 Dx
+   Buffer Split   20.11  N/A     N/A    5.1-2 16.28.2006 ConnectX-5
    ============== ===== ===== ========= ===== ========== =============
 
 .. table:: Minimal SW/HW versions for rte_flow offloads
@@ -1465,10 +1502,10 @@ Supported hardware offloads
    |                       | |               | | rdma-core 23  |
    |                       | |               | | ConnectX-4    |
    +-----------------------+-----------------+-----------------+
-   | RSS shared action     | |               | | DPDK 20.11    |
-   |                       | |     N/A       | | OFED 5.2      |
-   |                       | |               | | rdma-core 33  |
-   |                       | |               | | ConnectX-5    |
+   | Shared action         | |               | |               |
+   |                       | | :numref:`sact`| | :numref:`sact`|
+   |                       | |               | |               |
+   |                       | |               | |               |
    +-----------------------+-----------------+-----------------+
    | | VLAN                | | DPDK 19.11    | | DPDK 19.11    |
    | | (of_pop_vlan /      | | OFED 4.7-1    | | OFED 4.7-1    |
@@ -1548,11 +1585,6 @@ Supported hardware offloads
    |                       | |  rdma-core 32 | | N/A           |
    |                       | |  ConnectX-5   | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
-   | Age shared action     | |  DPDK 20.11   | | DPDK 20.11    |
-   |                       | |  OFED 5.2     | | OFED 5.2      |
-   |                       | |  rdma-core 32 | | rdma-core 32  |
-   |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
-   +-----------------------+-----------------+-----------------+
    | Encapsulation         | |  DPDK 21.02   | | DPDK 21.02    |
    | GTP PSC               | |  OFED 5.2     | | OFED 5.2      |
    |                       | |  rdma-core 35 | | rdma-core 35  |
@@ -1562,6 +1594,28 @@ Supported hardware offloads
    | GENEVE TLV option     | | OFED 5.2      | | OFED 5.2      |
    |                       | | rdma-core 34  | | rdma-core 34  |
    |                       | | ConnectX-6 Dx | | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
+   | Modify Field          | | DPDK 21.02    | | DPDK 21.02    |
+   |                       | | OFED 5.2      | | OFED 5.2      |
+   |                       | | rdma-core 35  | | rdma-core 35  |
+   |                       | | ConnectX-5    | | ConnectX-5    |
+   +-----------------------+-----------------+-----------------+
+
+.. table:: Minimal SW/HW versions for shared action offload
+   :name: sact
+
+   +-----------------------+-----------------+-----------------+
+   | Shared Action         | with E-Switch   | with NIC        |
+   +=======================+=================+=================+
+   | RSS                   | |               | | DPDK 20.11    |
+   |                       | |     N/A       | | OFED 5.2      |
+   |                       | |               | | rdma-core 33  |
+   |                       | |               | | ConnectX-5    |
+   +-----------------------+-----------------+-----------------+
+   | Age                   | |  DPDK 20.11   | | DPDK 20.11    |
+   |                       | |  OFED 5.2     | | OFED 5.2      |
+   |                       | |  rdma-core 32 | | rdma-core 32  |
+   |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
    +-----------------------+-----------------+-----------------+
 
 Notes for metadata

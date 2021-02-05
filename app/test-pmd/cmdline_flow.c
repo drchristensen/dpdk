@@ -583,6 +583,7 @@ struct rte_flow_action_count sample_count[RAW_SAMPLE_CONFS_MAX_NUM];
 struct rte_flow_action_port_id sample_port_id[RAW_SAMPLE_CONFS_MAX_NUM];
 struct rte_flow_action_raw_encap sample_encap[RAW_SAMPLE_CONFS_MAX_NUM];
 struct action_rss_data sample_rss_data[RAW_SAMPLE_CONFS_MAX_NUM];
+struct rte_flow_action_vf sample_vf[RAW_SAMPLE_CONFS_MAX_NUM];
 
 static const char *const modify_field_ops[] = {
 	"set", "add", "sub", NULL
@@ -592,7 +593,7 @@ static const char *const modify_field_ids[] = {
 	"start", "mac_dst", "mac_src",
 	"vlan_type", "vlan_id", "mac_type",
 	"ipv4_dscp", "ipv4_ttl", "ipv4_src", "ipv4_dst",
-	"ipv6_hoplimit", "ipv6_src", "ipv6_dst",
+	"ipv6_dscp", "ipv6_hoplimit", "ipv6_src", "ipv6_dst",
 	"tcp_port_src", "tcp_port_dst",
 	"tcp_seq_num", "tcp_ack_num", "tcp_flags",
 	"udp_port_src", "udp_port_dst",
@@ -3541,7 +3542,10 @@ static const struct token token_list[] = {
 		.name = "key",
 		.help = "RSS hash key",
 		.next = NEXT(action_rss, NEXT_ENTRY(HEX)),
-		.args = ARGS(ARGS_ENTRY_ARB(0, 0),
+		.args = ARGS(ARGS_ENTRY_ARB
+			     (offsetof(struct action_rss_data, conf) +
+			      offsetof(struct rte_flow_action_rss, key),
+			      sizeof(((struct rte_flow_action_rss *)0)->key)),
 			     ARGS_ENTRY_ARB
 			     (offsetof(struct action_rss_data, conf) +
 			      offsetof(struct rte_flow_action_rss, key_len),
@@ -7885,7 +7889,7 @@ cmd_set_raw_parsed_sample(const struct buffer *in)
 			rss = action->conf;
 			rte_memcpy(&sample_rss_data[idx].conf,
 				   (const void *)rss, size);
-			if (rss->key_len) {
+			if (rss->key_len && rss->key) {
 				sample_rss_data[idx].conf.key =
 						sample_rss_data[idx].key;
 				rte_memcpy((void *)((uintptr_t)
@@ -7893,7 +7897,7 @@ cmd_set_raw_parsed_sample(const struct buffer *in)
 					   (const void *)rss->key,
 					   sizeof(uint8_t) * rss->key_len);
 			}
-			if (rss->queue_num) {
+			if (rss->queue_num && rss->queue) {
 				sample_rss_data[idx].conf.queue =
 						sample_rss_data[idx].queue;
 				rte_memcpy((void *)((uintptr_t)
@@ -7914,6 +7918,14 @@ cmd_set_raw_parsed_sample(const struct buffer *in)
 			rte_memcpy(&sample_port_id[idx],
 				(const void *)action->conf, size);
 			action->conf = &sample_port_id[idx];
+			break;
+		case RTE_FLOW_ACTION_TYPE_PF:
+			break;
+		case RTE_FLOW_ACTION_TYPE_VF:
+			size = sizeof(struct rte_flow_action_vf);
+			rte_memcpy(&sample_vf[idx],
+					(const void *)action->conf, size);
+			action->conf = &sample_vf[idx];
 			break;
 		default:
 			printf("Error - Not supported action\n");

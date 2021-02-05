@@ -1,5 +1,7 @@
 # Please keep these options sorted alphabetically.
 
+option('check_includes', type: 'boolean', value: false,
+	description: 'build "chkincs" to verify each header file can compile alone')
 option('disable_drivers', type: 'string', value: '',
 	description: 'Comma-separated list of drivers to explicitly disable.')
 option('drivers_install_subdir', type: 'string', value: 'dpdk/pmds-<VERSION>',
@@ -24,7 +26,7 @@ option('max_ethports', type: 'integer', value: 32,
 	description: 'maximum number of Ethernet devices')
 option('max_lcores', type: 'integer', value: 128,
 	description: 'maximum number of cores/threads supported by EAL')
-option('max_numa_nodes', type: 'integer', value: 4,
+option('max_numa_nodes', type: 'integer', value: 32,
 	description: 'maximum number of NUMA nodes supported by EAL')
 option('enable_trace_fp', type: 'boolean', value: false,
 	description: 'enable fast path trace points.')

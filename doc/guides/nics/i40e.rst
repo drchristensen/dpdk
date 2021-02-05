@@ -46,8 +46,8 @@ Features of the i40e PMD are:
 - Malicious Device Drive event catch and notify
 - Generic flow API
 
-Prerequisites
--------------
+Linux Prerequisites
+-------------------
 
 - Identifying your adapter using `Intel Support
   <http://www.intel.com/support>`_ and get the latest NVM/FW images.
@@ -74,6 +74,18 @@ Prerequisites
 
       * In all cases Intel recommends using Intel Ethernet Optics; other modules
         may function but are not validated by Intel. Contact Intel for supported media types.
+
+Windows Prerequisites
+---------------------
+
+- Follow the DPDK `Getting Started Guide for Windows <https://doc.dpdk.org/guides/windows_gsg/index.html>`_ to setup the basic DPDK environment.
+
+- Identify the Intel® Ethernet adapter and get the latest NVM/FW version.
+
+- To access any Intel® Ethernet hardware, load the NetUIO driver in place of existing built-in (inbox) driver.
+
+- To load NetUIO driver, follow the steps mentioned in `dpdk-kmods repository
+  <https://git.dpdk.org/dpdk-kmods/tree/windows/netuio/README.rst>`_.
 
 Recommended Matching List
 -------------------------
@@ -722,6 +734,11 @@ Cloud Filter
 When programming cloud filters for IPv4/6_UDP/TCP/SCTP with SRC port only or DST port only,
 it will make any cloud filter using inner_vlan or tunnel key invalid. Default configuration will be
 recovered only by NIC core reset.
+
+Mirror rule limitation for X722
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Due to firmware restriction of X722, the same VSI cannot have more than one mirror rule.
 
 High Performance of Small Packets on 40GbE NIC
 ----------------------------------------------

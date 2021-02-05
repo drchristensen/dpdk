@@ -81,7 +81,6 @@ F: devtools/check-dup-includes.sh
 F: devtools/check-maintainers.sh
 F: devtools/check-forbidden-tokens.awk
 F: devtools/check-git-log.sh
-F: devtools/check-includes.sh
 F: devtools/check-spdx-tag.sh
 F: devtools/check-symbol-maps.sh
 F: devtools/checkpatches.sh
@@ -98,6 +97,7 @@ F: Makefile
 F: meson.build
 F: meson_options.txt
 F: config/
+F: buildtools/chkincs/
 F: buildtools/call-sphinx-build.py
 F: buildtools/list-dir-globs.py
 F: buildtools/pkg-config/
@@ -763,6 +763,15 @@ T: git://dpdk.org/next/dpdk-next-crypto
 F: drivers/common/octeontx2/otx2_sec*
 F: drivers/net/octeontx2/otx2_ethdev_sec*
 
+Marvell OCTEON TX EP - endpoint
+M: Nalla Pradeep <pnalla@marvell.com>
+M: Radha Mohan Chintakuntla <radhac@marvell.com>
+M: Veerasenareddy Burru <vburru@marvell.com>
+T: git://dpdk.org/next/dpdk-next-net-mrvl
+F: drivers/net/octeontx_ep/
+F: doc/guides/nics/features/octeontx_ep.ini
+F: doc/guides/nics/octeontx_ep.rst
+
 Mellanox mlx4
 M: Matan Azrad <matan@nvidia.com>
 M: Shahaf Shuler <shahafs@nvidia.com>
@@ -806,7 +815,7 @@ F: drivers/net/nfb/
 F: doc/guides/nics/nfb.rst
 F: doc/guides/nics/features/nfb.ini
 
-Netronome nfp - UNMAINTAINED
+Netronome nfp
 M: Heinrich Kuhn <heinrich.kuhn@netronome.com>
 F: drivers/net/nfp/
 F: doc/guides/nics/nfp.rst
@@ -1127,6 +1136,10 @@ M: Lee Daly <lee.daly@intel.com>
 F: drivers/compress/isal/
 F: doc/guides/compressdevs/isal.rst
 F: doc/guides/compressdevs/features/isal.ini
+
+Mellanox mlx5
+M: Matan Azrad <matan@nvidia.com>
+F: drivers/compress/mlx5/
 
 ZLIB
 M: Sunila Sahu <ssahu@marvell.com>
@@ -1568,9 +1581,7 @@ F: app/test/sample_packet_forward.c
 F: app/test/sample_packet_forward.h
 
 Driver testing tool
-M: Wenzhuo Lu <wenzhuo.lu@intel.com>
 M: Xiaoyun Li <xiaoyun.li@intel.com>
-M: Bernard Iremonger <bernard.iremonger@intel.com>
 T: git://dpdk.org/next/dpdk-next-net
 F: app/test-pmd/
 F: doc/guides/testpmd_app_ug/
@@ -1587,6 +1598,7 @@ F: doc/guides/tools/comp_perf.rst
 
 Crypto performance test application
 M: Declan Doherty <declan.doherty@intel.com>
+M: Ciara Power <ciara.power@intel.com>
 T: git://dpdk.org/next/dpdk-next-crypto
 F: app/test-crypto-perf/
 F: doc/guides/tools/cryptoperf.rst
