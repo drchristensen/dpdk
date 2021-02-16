@@ -20,6 +20,16 @@ DPDK Release 21.02
       make doc-guides-html
       xdg-open build/doc/html/guides/rel_notes/release_21_02.html
 
+.. note::
+
+   A **dependency** has been added for building DPDK on Linux or FreeBSD:
+   the Python module **pyelftools** (version **0.22** or greater),
+   often packaged as python3-pyelftools, is required.
+
+   If not available as a distribution package, it can be installed with::
+
+      pip3 install pyelftools
+
 
 New Features
 ------------
@@ -74,9 +84,9 @@ New Features
 
   Added support for matching and raw encap/decap of GENEVE TLV option.
 
-* **Added support of modify field action in the flow API.**
+* **Added support for Modify field action in the flow API.**
 
-  Added modify action support to perform various operations on
+  Added "modify" action support to rte_flow to perform various operations on
   any arbitrary header field (as well as mark, metadata or tag values):
   ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD``.
   Supported operations are: overwriting a field with the content from
@@ -90,22 +100,22 @@ New Features
 
 * **Updated Cisco enic driver.**
 
-  * Added support for 64B completion queue entries
+  * Added support for 64B completion queue entries.
 
 * **Updated Hisilicon hns3 driver.**
 
-  * Added support for traffic management
+  * Added support for traffic management.
 
 * **Updated Intel i40e driver.**
 
-  * Added support on Windows.
+  * Added Intel i40e support on Windows.
 
 * **Updated Intel ice driver.**
 
   Updated the Intel ice driver with new features and improvements, including:
 
   * Added Double VLAN support for DCF switch QinQ filtering.
-  * Added support for UDP dynamic port assignment for eCPRI tunnel in DCF.
+  * Added support for UDP dynamic port assignment for eCPRI tunnels in DCF.
 
 * **Updated Intel iavf driver.**
 
@@ -120,9 +130,9 @@ New Features
 
   * Introduced basic support on Windows.
   * Added GTP PDU session container matching and raw encap/decap.
-  * Added support for RSS action in the sample sub-actions list.
+  * Added support for a RSS action in the sample sub-actions list.
   * Added support for E-Switch mirroring and jump action in the same flow.
-  * Added support to handle modify action in correct order regarding the
+  * Added support to handle the modify action in correct order regarding the
     mirroring action on E-Switch.
   * Enlarged the number of flow priorities to 21844 (0 - 21843) for ingress or
     egress flow groups greater than 0 and for any transfer flow group.
@@ -152,10 +162,10 @@ New Features
 
   * Added inner UDP/IPv4 support for VXLAN IPv4 GSO.
 
-* **Added enqueue & dequeue callback APIs for cryptodev library.**
+* **Added enqueue and dequeue callback APIs for cryptodev library.**
 
-  Cryptodev library is added with enqueue & dequeue callback APIs to
-  enable applications to add/remove user callbacks which gets called
+  The Cryptodev library has been enhanced with enqueue and dequeue callback APIs to
+  enable applications to add/remove user callbacks which get called
   for every enqueue/dequeue operation.
 
 * **Updated the OCTEON TX2 crypto PMD.**
@@ -176,9 +186,16 @@ New Features
 
 * **Added python script to run crypto perf tests and graph the results.**
 
-  A new python script has been added to automate running crypto performance
+  A new Python script has been added to automate running crypto performance
   tests and output graphed results to PDF files.
   See the :doc:`../tools/cryptoperf` guide for more details.
+
+* **Added Windows support to pmdinfogen.**
+
+  PMD information strings were added for Windows as well as for other OS.
+  Extracting them from Windows DLL is not yet supported.
+  The build-time tool pmdinfogen was rewritten in Python,
+  thus libelf dependency was replaced with pyelftools as new build dependency.
 
 * **Added support for build-time checking of header includes.**
 
@@ -270,21 +287,6 @@ ABI Changes
   public API and is now an internal-only function. Where telemetry library is
   available, it is called automatically from ``rte_eal_init()`` and so no end
   application need use it.
-
-
-Known Issues
-------------
-
-.. This section should contain new known issues in this release. Sample format:
-
-   * **Add title in present tense with full stop.**
-
-     Add a short 1-2 sentence description of the known issue
-     in the present tense. Add information on any known workarounds.
-
-   This section is a comment. Do not overwrite or remove it.
-   Also, make sure to start the actual text at the margin.
-   =======================================================
 
 
 Tested Platforms
