@@ -529,7 +529,7 @@ bnxt_init_ol_flags_tables(struct bnxt_rx_queue *rxq)
 					pt[i] |= PKT_RX_IP_CKSUM_BAD;
 
 				if (i & (RX_PKT_CMPL_ERRORS_T_IP_CS_ERROR >> 4))
-					pt[i] |= PKT_RX_EIP_CKSUM_BAD;
+					pt[i] |= PKT_RX_OUTER_IP_CKSUM_BAD;
 
 				if (i & (RX_PKT_CMPL_ERRORS_L4_CS_ERROR >> 4))
 					pt[i] |= PKT_RX_L4_CKSUM_BAD;
@@ -827,8 +827,7 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 		goto next_rx;
 	}
 
-	agg_buf = (rxcmp->agg_bufs_v1 & RX_PKT_CMPL_AGG_BUFS_MASK)
-			>> RX_PKT_CMPL_AGG_BUFS_SFT;
+	agg_buf = BNXT_RX_L2_AGG_BUFS(rxcmp);
 	if (agg_buf && !bnxt_agg_bufs_valid(cpr, agg_buf, tmp_raw_cons))
 		return -EBUSY;
 

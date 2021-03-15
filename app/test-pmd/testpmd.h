@@ -137,6 +137,8 @@ struct fwd_stream {
 	uint64_t rx_bad_l4_csum ; /**< received packets has bad l4 checksum */
 	uint64_t rx_bad_outer_l4_csum;
 	/**< received packets has bad outer l4 checksum */
+	uint64_t rx_bad_outer_ip_csum;
+	/**< received packets having bad outer ip checksum */
 	unsigned int gro_times;	/**< GRO operation times */
 	uint64_t     core_cycles; /**< used for RX and TX processing */
 	struct pkt_burst_stats rx_burst_stats;
@@ -247,7 +249,6 @@ struct fwd_lcore {
 	streamid_t stream_idx;   /**< index of 1st stream in "fwd_streams" */
 	streamid_t stream_nb;    /**< number of streams in "fwd_streams" */
 	lcoreid_t  cpuid_idx;    /**< index of logical core in CPU id table */
-	queueid_t  tx_queue;     /**< TX queue to send forwarded packets */
 	volatile char stopped;   /**< stop forwarding when set */
 };
 
@@ -341,6 +342,7 @@ extern uint8_t no_flush_rx; /**<set by "--no-flush-rx" parameter */
 extern uint8_t flow_isolate_all; /**< set by "--flow-isolate-all */
 extern uint8_t  mp_alloc_type;
 /**< set by "--mp-anon" or "--mp-alloc" parameter */
+extern uint32_t eth_link_speed;
 extern uint8_t no_link_check; /**<set by "--disable-link-check" parameter */
 extern uint8_t no_device_start; /**<set by "--disable-device-start" parameter */
 extern volatile int test_done; /* stop packet forwarding when set to 1. */
@@ -776,7 +778,6 @@ void port_summary_display(portid_t port_id);
 void port_eeprom_display(portid_t port_id);
 void port_module_eeprom_display(portid_t port_id);
 void port_summary_header_display(void);
-void port_offload_cap_display(portid_t port_id);
 void rx_queue_infos_display(portid_t port_idi, uint16_t queue_id);
 void tx_queue_infos_display(portid_t port_idi, uint16_t queue_id);
 void fwd_lcores_config_display(void);

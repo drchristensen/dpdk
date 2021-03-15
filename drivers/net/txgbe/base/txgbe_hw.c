@@ -6,6 +6,7 @@
 #include "txgbe_mbx.h"
 #include "txgbe_phy.h"
 #include "txgbe_dcb.h"
+#include "txgbe_vf.h"
 #include "txgbe_eeprom.h"
 #include "txgbe_mng.h"
 #include "txgbe_hw.h"
@@ -2491,6 +2492,9 @@ s32 txgbe_init_shared_code(struct txgbe_hw *hw)
 	case txgbe_mac_raptor:
 		status = txgbe_init_ops_pf(hw);
 		break;
+	case txgbe_mac_raptor_vf:
+		status = txgbe_init_ops_vf(hw);
+		break;
 	default:
 		status = TXGBE_ERR_DEVICE_NOT_SUPPORTED;
 		break;
@@ -2804,6 +2808,7 @@ s32 txgbe_init_ops_pf(struct txgbe_hw *hw)
 	mac->acquire_swfw_sync = txgbe_acquire_swfw_sync;
 	mac->release_swfw_sync = txgbe_release_swfw_sync;
 	mac->reset_hw = txgbe_reset_hw;
+	mac->update_mc_addr_list = txgbe_update_mc_addr_list;
 
 	mac->disable_sec_rx_path = txgbe_disable_sec_rx_path;
 	mac->enable_sec_rx_path = txgbe_enable_sec_rx_path;

@@ -180,6 +180,11 @@ struct hns3_mac {
 	uint8_t link_autoneg : 1; /* ETH_LINK_[AUTONEG/FIXED] */
 	uint8_t link_status  : 1; /* ETH_LINK_[DOWN/UP] */
 	uint32_t link_speed;      /* ETH_SPEED_NUM_ */
+	uint32_t supported_capa;  /* supported capability for current media */
+	uint32_t advertising;     /* advertised capability in the local part */
+	/* advertised capability in the link partner */
+	uint32_t lp_advertising;
+	uint8_t support_autoneg;
 };
 
 struct hns3_fake_queue_data {
@@ -434,6 +439,7 @@ struct hns3_hw {
 	struct hns3_tqp_stats tqp_stats;
 	/* Include Mac stats | Rx stats | Tx stats */
 	struct hns3_mac_stats mac_stats;
+	struct hns3_rx_missed_stats imissed_stats;
 	uint32_t fw_version;
 
 	uint16_t num_msi;
@@ -661,8 +667,13 @@ struct hns3_mp_param {
 #define HNS3_OL2TBL_NUM	4
 #define HNS3_OL3TBL_NUM	16
 #define HNS3_OL4TBL_NUM	16
+#define HNS3_PTYPE_NUM	256
 
 struct hns3_ptype_table {
+	/*
+	 * The next fields used to calc packet-type by the
+	 * L3_ID/L4_ID/OL3_ID/OL4_ID from the Rx descriptor.
+	 */
 	uint32_t l2l3table[HNS3_L2TBL_NUM][HNS3_L3TBL_NUM];
 	uint32_t l4table[HNS3_L4TBL_NUM];
 	uint32_t inner_l2table[HNS3_L2TBL_NUM];
@@ -671,6 +682,13 @@ struct hns3_ptype_table {
 	uint32_t ol2table[HNS3_OL2TBL_NUM];
 	uint32_t ol3table[HNS3_OL3TBL_NUM];
 	uint32_t ol4table[HNS3_OL4TBL_NUM];
+
+	/*
+	 * The next field used to calc packet-type by the PTYPE from the Rx
+	 * descriptor, it functions only when firmware report the capability of
+	 * HNS3_CAPS_RXD_ADV_LAYOUT_B and driver enabled it.
+	 */
+	uint32_t ptype[HNS3_PTYPE_NUM] __rte_cache_min_aligned;
 };
 
 #define HNS3_FIXED_MAX_TQP_NUM_MODE		0
@@ -765,6 +783,7 @@ struct hns3_adapter {
 #define HNS3_DEV_SUPPORT_TX_PUSH_B		0x5
 #define HNS3_DEV_SUPPORT_INDEP_TXRX_B		0x6
 #define HNS3_DEV_SUPPORT_STASH_B		0x7
+#define HNS3_DEV_SUPPORT_RXD_ADV_LAYOUT_B	0x9
 
 #define hns3_dev_dcb_supported(hw) \
 	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_DCB_B)
@@ -794,6 +813,9 @@ struct hns3_adapter {
 
 #define hns3_dev_stash_supported(hw) \
 	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_STASH_B)
+
+#define hns3_dev_rxd_adv_layout_supported(hw) \
+	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_RXD_ADV_LAYOUT_B)
 
 #define HNS3_DEV_PRIVATE_TO_HW(adapter) \
 	(&((struct hns3_adapter *)adapter)->hw)
@@ -887,7 +909,7 @@ static inline uint32_t hns3_read_reg(void *base, uint32_t reg)
 #define hns3_read_dev(a, reg) \
 	hns3_read_reg((a)->io_base, (reg))
 
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#define ARRAY_SIZE(x) RTE_DIM(x)
 
 #define NEXT_ITEM_OF_ACTION(act, actions, index)                        \
 	do {								\

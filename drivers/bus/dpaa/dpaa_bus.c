@@ -521,16 +521,18 @@ rte_dpaa_bus_dev_build(void)
 	/* Get the interface configurations from device-tree */
 	dpaa_netcfg = netcfg_acquire();
 	if (!dpaa_netcfg) {
-		DPAA_BUS_LOG(ERR, "netcfg_acquire failed");
+		DPAA_BUS_LOG(ERR,
+			"netcfg failed: /dev/fsl_usdpaa device not available");
+		DPAA_BUS_WARN(
+			"Check if you are using USDPAA based device tree");
 		return -EINVAL;
 	}
 
 	RTE_LOG(NOTICE, EAL, "DPAA Bus Detected\n");
 
 	if (!dpaa_netcfg->num_ethports) {
-		DPAA_BUS_LOG(INFO, "no network interfaces available");
+		DPAA_BUS_LOG(INFO, "NO DPDK mapped net interfaces available");
 		/* This is not an error */
-		return 0;
 	}
 
 #ifdef RTE_LIBRTE_DPAA_DEBUG_DRIVER
@@ -582,20 +584,18 @@ rte_dpaa_bus_probe(void)
 	/* Device list creation is only done once */
 	if (!process_once) {
 		rte_dpaa_bus_dev_build();
-		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-			/* One time load of Qman/Bman drivers */
-			ret = qman_global_init();
-			if (ret) {
-				DPAA_BUS_ERR("QMAN initialization failed: %d",
-					     ret);
-				return ret;
-			}
-			ret = bman_global_init();
-			if (ret) {
-				DPAA_BUS_ERR("BMAN initialization failed: %d",
-					     ret);
-				return ret;
-			}
+		/* One time load of Qman/Bman drivers */
+		ret = qman_global_init();
+		if (ret) {
+			DPAA_BUS_ERR("QMAN initialization failed: %d",
+				     ret);
+			return ret;
+		}
+		ret = bman_global_init();
+		if (ret) {
+			DPAA_BUS_ERR("BMAN initialization failed: %d",
+				     ret);
+			return ret;
 		}
 	}
 	process_once = 1;

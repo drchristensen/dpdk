@@ -2080,6 +2080,7 @@ txgbe_read_stats_registers(struct txgbe_hw *hw,
 
 	hw_stats->rx_bytes += rd64(hw, TXGBE_DMARXOCTL);
 	hw_stats->tx_bytes += rd64(hw, TXGBE_DMATXOCTL);
+	hw_stats->rx_dma_drop += rd32(hw, TXGBE_DMARXDROP);
 	hw_stats->rx_drop_packets += rd32(hw, TXGBE_PBRXDROP);
 
 	/* MAC Stats */
@@ -2228,7 +2229,8 @@ txgbe_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	}
 
 	/* Rx Errors */
-	stats->imissed  = hw_stats->rx_total_missed_packets;
+	stats->imissed  = hw_stats->rx_total_missed_packets +
+			  hw_stats->rx_dma_drop;
 	stats->ierrors  = hw_stats->rx_crc_errors +
 			  hw_stats->rx_mac_short_packet_dropped +
 			  hw_stats->rx_length_errors +
@@ -3257,7 +3259,7 @@ txgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
 		if (!mask)
 			continue;
 
-		reta = rd32a(hw, TXGBE_REG_RSSTBL, i >> 2);
+		reta = rd32at(hw, TXGBE_REG_RSSTBL, i >> 2);
 		for (j = 0; j < 4; j++) {
 			if (RS8(mask, j, 0x1)) {
 				reta  &= ~(MS32(8 * j, 0xFF));
@@ -3265,7 +3267,7 @@ txgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
 						8 * j, 0xFF);
 			}
 		}
-		wr32a(hw, TXGBE_REG_RSSTBL, i >> 2, reta);
+		wr32at(hw, TXGBE_REG_RSSTBL, i >> 2, reta);
 	}
 	adapter->rss_reta_updated = 1;
 
@@ -3298,7 +3300,7 @@ txgbe_dev_rss_reta_query(struct rte_eth_dev *dev,
 		if (!mask)
 			continue;
 
-		reta = rd32a(hw, TXGBE_REG_RSSTBL, i >> 2);
+		reta = rd32at(hw, TXGBE_REG_RSSTBL, i >> 2);
 		for (j = 0; j < 4; j++) {
 			if (RS8(mask, j, 0x1))
 				reta_conf[idx].reta[shift + j] =
@@ -4121,7 +4123,7 @@ txgbe_dev_set_mc_addr_list(struct rte_eth_dev *dev,
 
 	hw = TXGBE_DEV_HW(dev);
 	mc_addr_list = (u8 *)mc_addr_set;
-	return txgbe_update_mc_addr_list(hw, mc_addr_list, nb_mc_addr,
+	return hw->mac.update_mc_addr_list(hw, mc_addr_list, nb_mc_addr,
 					 txgbe_dev_addr_list_itr, TRUE);
 }
 
@@ -4524,6 +4526,7 @@ txgbe_rss_update_sp(enum txgbe_mac_type mac_type)
 {
 	switch (mac_type) {
 	case txgbe_mac_raptor:
+	case txgbe_mac_raptor_vf:
 		return 1;
 	default:
 		return 0;

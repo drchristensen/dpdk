@@ -1802,6 +1802,7 @@ hns3_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t nb_desc,
 				       HNS3_PORT_BASE_VLAN_ENABLE;
 	else
 		rxq->pvid_sw_discard_en = false;
+	rxq->ptype_en = hns3_dev_rxd_adv_layout_supported(hw) ? true : false;
 	rxq->configured = true;
 	rxq->io_base = (void *)((char *)hw->io_base + HNS3_TQP_REG_OFFSET +
 				idx * HNS3_TQP_REG_SIZE);
@@ -1987,6 +1988,193 @@ hns3_init_tunnel_ptype_tbl(struct hns3_ptype_table *tbl)
 	tbl->ol4table[2] = RTE_PTYPE_TUNNEL_NVGRE;
 }
 
+static void
+hns3_init_adv_layout_ptype(struct hns3_ptype_table *tbl)
+{
+	uint32_t *ptype = tbl->ptype;
+
+	/* Non-tunnel L2 */
+	ptype[1] = RTE_PTYPE_L2_ETHER_ARP;
+	ptype[3] = RTE_PTYPE_L2_ETHER_LLDP;
+	ptype[8] = RTE_PTYPE_L2_ETHER_TIMESYNC;
+
+	/* Non-tunnel IPv4 */
+	ptype[17] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_FRAG;
+	ptype[18] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_NONFRAG;
+	ptype[19] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_UDP;
+	ptype[20] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_TCP;
+	/* The next ptype is GRE over IPv4 */
+	ptype[21] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN;
+	ptype[22] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_SCTP;
+	ptype[23] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_IGMP;
+	ptype[24] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_ICMP;
+	/* The next ptype is PTP over IPv4 + UDP */
+	ptype[25] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_UDP;
+
+	/* IPv4 --> GRE/Teredo/VXLAN */
+	ptype[29] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT;
+	/* IPv4 --> GRE/Teredo/VXLAN --> MAC */
+	ptype[30] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER;
+
+	/* IPv4 --> GRE/Teredo/VXLAN --> MAC --> IPv4 */
+	ptype[31] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_FRAG;
+	ptype[32] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_NONFRAG;
+	ptype[33] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_UDP;
+	ptype[34] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_TCP;
+	ptype[35] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_SCTP;
+	/* The next ptype's inner L4 is IGMP */
+	ptype[36] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN;
+	ptype[37] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_ICMP;
+
+	/* IPv4 --> GRE/Teredo/VXLAN --> MAC --> IPv6 */
+	ptype[39] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_FRAG;
+	ptype[40] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_NONFRAG;
+	ptype[41] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_UDP;
+	ptype[42] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_TCP;
+	ptype[43] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_SCTP;
+	/* The next ptype's inner L4 is IGMP */
+	ptype[44] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN;
+	ptype[45] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_ICMP;
+
+	/* Non-tunnel IPv6 */
+	ptype[111] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_FRAG;
+	ptype[112] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_NONFRAG;
+	ptype[113] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_UDP;
+	ptype[114] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_TCP;
+	/* The next ptype is GRE over IPv6 */
+	ptype[115] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN;
+	ptype[116] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_SCTP;
+	ptype[117] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_IGMP;
+	ptype[118] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_ICMP;
+	/* Special for PTP over IPv6 + UDP */
+	ptype[119] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_UDP;
+
+	/* IPv6 --> GRE/Teredo/VXLAN */
+	ptype[123] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT;
+	/* IPv6 --> GRE/Teredo/VXLAN --> MAC */
+	ptype[124] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER;
+
+	/* IPv6 --> GRE/Teredo/VXLAN --> MAC --> IPv4 */
+	ptype[125] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_FRAG;
+	ptype[126] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_NONFRAG;
+	ptype[127] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_UDP;
+	ptype[128] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_TCP;
+	ptype[129] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_SCTP;
+	/* The next ptype's inner L4 is IGMP */
+	ptype[130] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN;
+	ptype[131] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_ICMP;
+
+	/* IPv6 --> GRE/Teredo/VXLAN --> MAC --> IPv6 */
+	ptype[133] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_FRAG;
+	ptype[134] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_NONFRAG;
+	ptype[135] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_UDP;
+	ptype[136] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_TCP;
+	ptype[137] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_SCTP;
+	/* The next ptype's inner L4 is IGMP */
+	ptype[138] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN;
+	ptype[139] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_ICMP;
+}
+
 void
 hns3_init_rx_ptype_tble(struct rte_eth_dev *dev)
 {
@@ -1997,6 +2185,7 @@ hns3_init_rx_ptype_tble(struct rte_eth_dev *dev)
 
 	hns3_init_non_tunnel_ptype_tbl(tbl);
 	hns3_init_tunnel_ptype_tbl(tbl);
+	hns3_init_adv_layout_ptype(tbl);
 }
 
 static inline void
@@ -2180,6 +2369,9 @@ hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			hns3_rx_set_cksum_flag(rxm, rxm->packet_type,
 					       cksum_err);
 		hns3_rxd_to_vlan_tci(rxq, rxm, l234_info, &rxd);
+
+		/* Increment bytes counter  */
+		rxq->basic_stats.bytes += rxm->pkt_len;
 
 		rx_pkts[nb_rx++] = rxm;
 		continue;
@@ -2400,6 +2592,9 @@ hns3_recv_scattered_pkts(void *rx_queue,
 					       first_seg->packet_type,
 					       cksum_err);
 		hns3_rxd_to_vlan_tci(rxq, first_seg, l234_info, &rxd);
+
+		/* Increment bytes counter */
+		rxq->basic_stats.bytes += first_seg->pkt_len;
 
 		rx_pkts[nb_rx++] = first_seg;
 		first_seg = NULL;
@@ -3516,6 +3711,11 @@ hns3_tx_fill_hw_ring(struct hns3_tx_queue *txq,
 	for (i = 0; i < mainpart; i += PER_LOOP_NUM) {
 		hns3_tx_backup_4mbuf(tx_entry + i, pkts + i);
 		hns3_tx_setup_4bd(txdp + i, pkts + i);
+
+		/* Increment bytes counter */
+		uint32_t j;
+		for (j = 0; j < PER_LOOP_NUM; j++)
+			txq->basic_stats.bytes += pkts[i + j]->pkt_len;
 	}
 	if (unlikely(leftover > 0)) {
 		for (i = 0; i < leftover; i++) {
@@ -3523,6 +3723,9 @@ hns3_tx_fill_hw_ring(struct hns3_tx_queue *txq,
 					     pkts + mainpart + i);
 			hns3_tx_setup_1bd(txdp + mainpart + i,
 					  pkts + mainpart + i);
+
+			/* Increment bytes counter */
+			txq->basic_stats.bytes += pkts[mainpart + i]->pkt_len;
 		}
 	}
 }
@@ -3661,6 +3864,8 @@ hns3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		desc->tx.tp_fe_sc_vld_ra_ri |=
 				 rte_cpu_to_le_16(BIT(HNS3_TXD_FE_B));
 
+		/* Increment bytes counter */
+		txq->basic_stats.bytes += tx_pkt->pkt_len;
 		nb_hold += i;
 		txq->next_to_use = tx_next_use;
 		txq->tx_bd_ready -= i;
@@ -3913,6 +4118,65 @@ hns3_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	return 0;
 }
 
+static int
+hns3_tx_done_cleanup_full(struct hns3_tx_queue *txq, uint32_t free_cnt)
+{
+	uint16_t next_to_clean = txq->next_to_clean;
+	uint16_t next_to_use   = txq->next_to_use;
+	uint16_t tx_bd_ready   = txq->tx_bd_ready;
+	struct hns3_entry *tx_pkt = &txq->sw_ring[next_to_clean];
+	struct hns3_desc *desc = &txq->tx_ring[next_to_clean];
+	uint32_t idx;
+
+	if (free_cnt == 0 || free_cnt > txq->nb_tx_desc)
+		free_cnt = txq->nb_tx_desc;
+
+	for (idx = 0; idx < free_cnt; idx++) {
+		if (next_to_clean == next_to_use)
+			break;
+
+		if (desc->tx.tp_fe_sc_vld_ra_ri &
+		    rte_cpu_to_le_16(BIT(HNS3_TXD_VLD_B)))
+			break;
+
+		if (tx_pkt->mbuf != NULL) {
+			rte_pktmbuf_free_seg(tx_pkt->mbuf);
+			tx_pkt->mbuf = NULL;
+		}
+
+		next_to_clean++;
+		tx_bd_ready++;
+		tx_pkt++;
+		desc++;
+		if (next_to_clean == txq->nb_tx_desc) {
+			tx_pkt = txq->sw_ring;
+			desc = txq->tx_ring;
+			next_to_clean = 0;
+		}
+	}
+
+	if (idx > 0) {
+		txq->next_to_clean = next_to_clean;
+		txq->tx_bd_ready = tx_bd_ready;
+	}
+
+	return (int)idx;
+}
+
+int
+hns3_tx_done_cleanup(void *txq, uint32_t free_cnt)
+{
+	struct hns3_tx_queue *q = (struct hns3_tx_queue *)txq;
+	struct rte_eth_dev *dev = &rte_eth_devices[q->port_id];
+
+	if (dev->tx_pkt_burst == hns3_xmit_pkts)
+		return hns3_tx_done_cleanup_full(q, free_cnt);
+	else if (dev->tx_pkt_burst == hns3_dummy_rxtx_burst)
+		return 0;
+	else
+		return -ENOTSUP;
+}
+
 uint32_t
 hns3_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
@@ -3936,4 +4200,15 @@ hns3_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		return 0;
 	else
 		return fbd_num - driver_hold_bd_num;
+}
+
+void
+hns3_enable_rxd_adv_layout(struct hns3_hw *hw)
+{
+	/*
+	 * If the hardware support rxd advanced layout, then driver enable it
+	 * default.
+	 */
+	if (hns3_dev_rxd_adv_layout_supported(hw))
+		hns3_write_dev(hw, HNS3_RXD_ADV_LAYOUT_EN_REG, 1);
 }

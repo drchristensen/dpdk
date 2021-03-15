@@ -1653,7 +1653,7 @@ mlx5_flow_field_id_to_modify_info
 		break;
 	case RTE_FLOW_FIELD_TCP_FLAGS:
 		info[idx] = (struct field_modify_info){1, 0,
-					MLX5_MODI_IN_TCP_FLAGS};
+					MLX5_MODI_OUT_TCP_FLAGS};
 		if (mask) {
 			mask[idx] = 0x0000003f;
 			if (width < 6)
@@ -1960,13 +1960,20 @@ flow_dv_validate_item_meta(struct rte_eth_dev *dev __rte_unused,
 					  "isn't supported");
 		if (reg != REG_A)
 			nic_mask.data = priv->sh->dv_meta_mask;
-	} else if (attr->transfer) {
-		return rte_flow_error_set(error, ENOTSUP,
+	} else {
+		if (attr->transfer)
+			return rte_flow_error_set(error, ENOTSUP,
 					RTE_FLOW_ERROR_TYPE_ITEM, item,
 					"extended metadata feature "
 					"should be enabled when "
 					"meta item is requested "
 					"with e-switch mode ");
+		if (attr->ingress)
+			return rte_flow_error_set(error, ENOTSUP,
+					RTE_FLOW_ERROR_TYPE_ITEM, item,
+					"match on metadata for ingress "
+					"is not supported in legacy "
+					"metadata mode");
 	}
 	if (!mask)
 		mask = &rte_flow_item_meta_mask;

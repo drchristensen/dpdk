@@ -513,6 +513,11 @@ uint8_t gro_flush_cycles = GRO_DEFAULT_FLUSH_CYCLES;
  */
 enum rte_eth_rx_mq_mode rx_mq_mode = ETH_MQ_RX_VMDQ_DCB_RSS;
 
+/*
+ * Used to set forced link speed
+ */
+uint32_t eth_link_speed;
+
 /* Forward function declarations */
 static void setup_attached_port(portid_t pi);
 static void check_all_ports_link_status(uint32_t port_mask);
@@ -1484,6 +1489,9 @@ init_config(void)
 			port->tx_conf[k].offloads =
 				port->dev_conf.txmode.offloads;
 
+		if (eth_link_speed)
+			port->dev_conf.link_speeds = eth_link_speed;
+
 		/* set flag to initialize port/queue */
 		port->need_reconfig = 1;
 		port->need_reconfig_queues = 1;
@@ -1796,6 +1804,8 @@ fwd_stream_stats_display(streamid_t stream_id)
 		       " Rx- bad outer L4 checksum: %-14"PRIu64"\n",
 			fs->rx_bad_ip_csum, fs->rx_bad_l4_csum,
 			fs->rx_bad_outer_l4_csum);
+		printf(" RX- bad outer IP checksum: %-14"PRIu64"\n",
+			fs->rx_bad_outer_ip_csum);
 	} else {
 		printf("\n");
 	}
@@ -1818,6 +1828,7 @@ fwd_stats_display(void)
 		uint64_t rx_bad_ip_csum;
 		uint64_t rx_bad_l4_csum;
 		uint64_t rx_bad_outer_l4_csum;
+		uint64_t rx_bad_outer_ip_csum;
 	} ports_stats[RTE_MAX_ETHPORTS];
 	uint64_t total_rx_dropped = 0;
 	uint64_t total_tx_dropped = 0;
@@ -1850,6 +1861,8 @@ fwd_stats_display(void)
 		ports_stats[fs->rx_port].rx_bad_l4_csum += fs->rx_bad_l4_csum;
 		ports_stats[fs->rx_port].rx_bad_outer_l4_csum +=
 				fs->rx_bad_outer_l4_csum;
+		ports_stats[fs->rx_port].rx_bad_outer_ip_csum +=
+				fs->rx_bad_outer_ip_csum;
 
 		if (record_core_cycles)
 			fwd_cycles += fs->core_cycles;
@@ -1881,13 +1894,16 @@ fwd_stats_display(void)
 		       "RX-total: %-"PRIu64"\n", stats.ipackets, stats.imissed,
 		       stats.ipackets + stats.imissed);
 
-		if (cur_fwd_eng == &csum_fwd_engine)
+		if (cur_fwd_eng == &csum_fwd_engine) {
 			printf("  Bad-ipcsum: %-14"PRIu64
 			       " Bad-l4csum: %-14"PRIu64
 			       "Bad-outer-l4csum: %-14"PRIu64"\n",
 			       ports_stats[pt_id].rx_bad_ip_csum,
 			       ports_stats[pt_id].rx_bad_l4_csum,
 			       ports_stats[pt_id].rx_bad_outer_l4_csum);
+			printf("  Bad-outer-ipcsum: %-14"PRIu64"\n",
+			       ports_stats[pt_id].rx_bad_outer_ip_csum);
+		}
 		if (stats.ierrors + stats.rx_nombuf > 0) {
 			printf("  RX-error: %-"PRIu64"\n", stats.ierrors);
 			printf("  RX-nombufs: %-14"PRIu64"\n", stats.rx_nombuf);
@@ -1965,6 +1981,7 @@ fwd_stats_reset(void)
 		fs->rx_bad_ip_csum = 0;
 		fs->rx_bad_l4_csum = 0;
 		fs->rx_bad_outer_l4_csum = 0;
+		fs->rx_bad_outer_ip_csum = 0;
 
 		memset(&fs->rx_burst_stats, 0, sizeof(fs->rx_burst_stats));
 		memset(&fs->tx_burst_stats, 0, sizeof(fs->tx_burst_stats));

@@ -55,6 +55,34 @@ New Features
      Also, make sure to start the actual text at the margin.
      =======================================================
 
+* **Updated Hisilicon hns3 driver.**
+
+  * Added support for module EEPROM dumping.
+  * Added support for freeing Tx mbuf on demand.
+  * Added support for copper port in Kunpeng930.
+
+* **Updated NXP DPAA driver.**
+
+  * Added support for shared ethernet interface.
+  * Added support for external buffers in Tx.
+
+* **Updated NXP DPAA2 driver.**
+
+  * Added support for traffic management.
+  * Added support for configurable Tx confirmation.
+  * Added support for external buffers in Tx.
+
+* **Updated Wangxun txgbe driver.**
+
+  * Added support for txgbevf PMD.
+
+* **Updated testpmd.**
+
+  * Added a command line option to configure forced speed for Ethernet port.
+    ``dpdk-testpmd -- --eth-link-speed N``
+  * Added command to display Rx queue used descriptor count.
+    ``show port (port_id) rxq (queue_id) desc used count``
+
 
 Removed Items
 -------------

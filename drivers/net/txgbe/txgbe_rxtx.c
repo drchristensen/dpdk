@@ -1134,7 +1134,7 @@ rx_desc_error_to_pkt_flags(uint32_t rx_status)
 
 	if (rx_status & TXGBE_RXD_STAT_EIPCS &&
 	    rx_status & TXGBE_RXD_ERR_EIPCS) {
-		pkt_flags |= PKT_RX_EIP_CKSUM_BAD;
+		pkt_flags |= PKT_RX_OUTER_IP_CKSUM_BAD;
 	}
 
 #ifdef RTE_LIB_SECURITY
@@ -2837,8 +2837,10 @@ txgbe_rss_disable(struct rte_eth_dev *dev)
 	struct txgbe_hw *hw;
 
 	hw = TXGBE_DEV_HW(dev);
-
-	wr32m(hw, TXGBE_RACTL, TXGBE_RACTL_RSSENA, 0);
+	if (hw->mac.type == txgbe_mac_raptor_vf)
+		wr32m(hw, TXGBE_VFPLCFG, TXGBE_VFPLCFG_RSSENA, 0);
+	else
+		wr32m(hw, TXGBE_RACTL, TXGBE_RACTL_RSSENA, 0);
 }
 
 int
@@ -2866,36 +2868,68 @@ txgbe_dev_rss_hash_update(struct rte_eth_dev *dev,
 			rss_key |= LS32(hash_key[(i * 4) + 1], 8, 0xFF);
 			rss_key |= LS32(hash_key[(i * 4) + 2], 16, 0xFF);
 			rss_key |= LS32(hash_key[(i * 4) + 3], 24, 0xFF);
-			wr32a(hw, TXGBE_REG_RSSKEY, i, rss_key);
+			wr32at(hw, TXGBE_REG_RSSKEY, i, rss_key);
 		}
 	}
 
 	/* Set configured hashing protocols */
 	rss_hf = rss_conf->rss_hf & TXGBE_RSS_OFFLOAD_ALL;
-	mrqc = rd32(hw, TXGBE_RACTL);
-	mrqc &= ~TXGBE_RACTL_RSSMASK;
-	if (rss_hf & ETH_RSS_IPV4)
-		mrqc |= TXGBE_RACTL_RSSIPV4;
-	if (rss_hf & ETH_RSS_NONFRAG_IPV4_TCP)
-		mrqc |= TXGBE_RACTL_RSSIPV4TCP;
-	if (rss_hf & ETH_RSS_IPV6 ||
-	    rss_hf & ETH_RSS_IPV6_EX)
-		mrqc |= TXGBE_RACTL_RSSIPV6;
-	if (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP ||
-	    rss_hf & ETH_RSS_IPV6_TCP_EX)
-		mrqc |= TXGBE_RACTL_RSSIPV6TCP;
-	if (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP)
-		mrqc |= TXGBE_RACTL_RSSIPV4UDP;
-	if (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP ||
-	    rss_hf & ETH_RSS_IPV6_UDP_EX)
-		mrqc |= TXGBE_RACTL_RSSIPV6UDP;
+	if (hw->mac.type == txgbe_mac_raptor_vf) {
+		mrqc = rd32(hw, TXGBE_VFPLCFG);
+		mrqc &= ~TXGBE_VFPLCFG_RSSMASK;
+		if (rss_hf & ETH_RSS_IPV4)
+			mrqc |= TXGBE_VFPLCFG_RSSIPV4;
+		if (rss_hf & ETH_RSS_NONFRAG_IPV4_TCP)
+			mrqc |= TXGBE_VFPLCFG_RSSIPV4TCP;
+		if (rss_hf & ETH_RSS_IPV6 ||
+		    rss_hf & ETH_RSS_IPV6_EX)
+			mrqc |= TXGBE_VFPLCFG_RSSIPV6;
+		if (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP ||
+		    rss_hf & ETH_RSS_IPV6_TCP_EX)
+			mrqc |= TXGBE_VFPLCFG_RSSIPV6TCP;
+		if (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP)
+			mrqc |= TXGBE_VFPLCFG_RSSIPV4UDP;
+		if (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP ||
+		    rss_hf & ETH_RSS_IPV6_UDP_EX)
+			mrqc |= TXGBE_VFPLCFG_RSSIPV6UDP;
 
-	if (rss_hf)
-		mrqc |= TXGBE_RACTL_RSSENA;
-	else
-		mrqc &= ~TXGBE_RACTL_RSSENA;
+		if (rss_hf)
+			mrqc |= TXGBE_VFPLCFG_RSSENA;
+		else
+			mrqc &= ~TXGBE_VFPLCFG_RSSENA;
 
-	wr32(hw, TXGBE_RACTL, mrqc);
+		if (dev->data->nb_rx_queues > 3)
+			mrqc |= TXGBE_VFPLCFG_RSSHASH(2);
+		else if (dev->data->nb_rx_queues > 1)
+			mrqc |= TXGBE_VFPLCFG_RSSHASH(1);
+
+		wr32(hw, TXGBE_VFPLCFG, mrqc);
+	} else {
+		mrqc = rd32(hw, TXGBE_RACTL);
+		mrqc &= ~TXGBE_RACTL_RSSMASK;
+		if (rss_hf & ETH_RSS_IPV4)
+			mrqc |= TXGBE_RACTL_RSSIPV4;
+		if (rss_hf & ETH_RSS_NONFRAG_IPV4_TCP)
+			mrqc |= TXGBE_RACTL_RSSIPV4TCP;
+		if (rss_hf & ETH_RSS_IPV6 ||
+		    rss_hf & ETH_RSS_IPV6_EX)
+			mrqc |= TXGBE_RACTL_RSSIPV6;
+		if (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP ||
+		    rss_hf & ETH_RSS_IPV6_TCP_EX)
+			mrqc |= TXGBE_RACTL_RSSIPV6TCP;
+		if (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP)
+			mrqc |= TXGBE_RACTL_RSSIPV4UDP;
+		if (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP ||
+		    rss_hf & ETH_RSS_IPV6_UDP_EX)
+			mrqc |= TXGBE_RACTL_RSSIPV6UDP;
+
+		if (rss_hf)
+			mrqc |= TXGBE_RACTL_RSSENA;
+		else
+			mrqc &= ~TXGBE_RACTL_RSSENA;
+
+		wr32(hw, TXGBE_RACTL, mrqc);
+	}
 
 	return 0;
 }
@@ -2915,7 +2949,7 @@ txgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 	if (hash_key) {
 		/* Return RSS hash key */
 		for (i = 0; i < 10; i++) {
-			rss_key = rd32a(hw, TXGBE_REG_RSSKEY, i);
+			rss_key = rd32at(hw, TXGBE_REG_RSSKEY, i);
 			hash_key[(i * 4) + 0] = RS32(rss_key, 0, 0xFF);
 			hash_key[(i * 4) + 1] = RS32(rss_key, 8, 0xFF);
 			hash_key[(i * 4) + 2] = RS32(rss_key, 16, 0xFF);
@@ -2924,24 +2958,45 @@ txgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 	}
 
 	rss_hf = 0;
-	mrqc = rd32(hw, TXGBE_RACTL);
-	if (mrqc & TXGBE_RACTL_RSSIPV4)
-		rss_hf |= ETH_RSS_IPV4;
-	if (mrqc & TXGBE_RACTL_RSSIPV4TCP)
-		rss_hf |= ETH_RSS_NONFRAG_IPV4_TCP;
-	if (mrqc & TXGBE_RACTL_RSSIPV6)
-		rss_hf |= ETH_RSS_IPV6 |
-			  ETH_RSS_IPV6_EX;
-	if (mrqc & TXGBE_RACTL_RSSIPV6TCP)
-		rss_hf |= ETH_RSS_NONFRAG_IPV6_TCP |
-			  ETH_RSS_IPV6_TCP_EX;
-	if (mrqc & TXGBE_RACTL_RSSIPV4UDP)
-		rss_hf |= ETH_RSS_NONFRAG_IPV4_UDP;
-	if (mrqc & TXGBE_RACTL_RSSIPV6UDP)
-		rss_hf |= ETH_RSS_NONFRAG_IPV6_UDP |
-			  ETH_RSS_IPV6_UDP_EX;
-	if (!(mrqc & TXGBE_RACTL_RSSENA))
-		rss_hf = 0;
+	if (hw->mac.type == txgbe_mac_raptor_vf) {
+		mrqc = rd32(hw, TXGBE_VFPLCFG);
+		if (mrqc & TXGBE_VFPLCFG_RSSIPV4)
+			rss_hf |= ETH_RSS_IPV4;
+		if (mrqc & TXGBE_VFPLCFG_RSSIPV4TCP)
+			rss_hf |= ETH_RSS_NONFRAG_IPV4_TCP;
+		if (mrqc & TXGBE_VFPLCFG_RSSIPV6)
+			rss_hf |= ETH_RSS_IPV6 |
+				  ETH_RSS_IPV6_EX;
+		if (mrqc & TXGBE_VFPLCFG_RSSIPV6TCP)
+			rss_hf |= ETH_RSS_NONFRAG_IPV6_TCP |
+				  ETH_RSS_IPV6_TCP_EX;
+		if (mrqc & TXGBE_VFPLCFG_RSSIPV4UDP)
+			rss_hf |= ETH_RSS_NONFRAG_IPV4_UDP;
+		if (mrqc & TXGBE_VFPLCFG_RSSIPV6UDP)
+			rss_hf |= ETH_RSS_NONFRAG_IPV6_UDP |
+				  ETH_RSS_IPV6_UDP_EX;
+		if (!(mrqc & TXGBE_VFPLCFG_RSSENA))
+			rss_hf = 0;
+	} else {
+		mrqc = rd32(hw, TXGBE_RACTL);
+		if (mrqc & TXGBE_RACTL_RSSIPV4)
+			rss_hf |= ETH_RSS_IPV4;
+		if (mrqc & TXGBE_RACTL_RSSIPV4TCP)
+			rss_hf |= ETH_RSS_NONFRAG_IPV4_TCP;
+		if (mrqc & TXGBE_RACTL_RSSIPV6)
+			rss_hf |= ETH_RSS_IPV6 |
+				  ETH_RSS_IPV6_EX;
+		if (mrqc & TXGBE_RACTL_RSSIPV6TCP)
+			rss_hf |= ETH_RSS_NONFRAG_IPV6_TCP |
+				  ETH_RSS_IPV6_TCP_EX;
+		if (mrqc & TXGBE_RACTL_RSSIPV4UDP)
+			rss_hf |= ETH_RSS_NONFRAG_IPV4_UDP;
+		if (mrqc & TXGBE_RACTL_RSSIPV6UDP)
+			rss_hf |= ETH_RSS_NONFRAG_IPV6_UDP |
+				  ETH_RSS_IPV6_UDP_EX;
+		if (!(mrqc & TXGBE_RACTL_RSSENA))
+			rss_hf = 0;
+	}
 
 	rss_hf &= TXGBE_RSS_OFFLOAD_ALL;
 
@@ -2973,7 +3028,7 @@ txgbe_rss_configure(struct rte_eth_dev *dev)
 				j = 0;
 			reta = (reta >> 8) | LS32(j, 24, 0xFF);
 			if ((i & 3) == 3)
-				wr32a(hw, TXGBE_REG_RSSTBL, i >> 2, reta);
+				wr32at(hw, TXGBE_REG_RSSTBL, i >> 2, reta);
 		}
 	}
 	/*
@@ -4722,6 +4777,224 @@ txgbe_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	qinfo->conf.tx_deferred_start = txq->tx_deferred_start;
 }
 
+/*
+ * [VF] Initializes Receive Unit.
+ */
+int __rte_cold
+txgbevf_dev_rx_init(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw     *hw;
+	struct txgbe_rx_queue *rxq;
+	struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
+	uint64_t bus_addr;
+	uint32_t srrctl, psrtype;
+	uint16_t buf_size;
+	uint16_t i;
+	int ret;
+
+	PMD_INIT_FUNC_TRACE();
+	hw = TXGBE_DEV_HW(dev);
+
+	if (rte_is_power_of_2(dev->data->nb_rx_queues) == 0) {
+		PMD_INIT_LOG(ERR, "The number of Rx queue invalid, "
+			"it should be power of 2");
+		return -1;
+	}
+
+	if (dev->data->nb_rx_queues > hw->mac.max_rx_queues) {
+		PMD_INIT_LOG(ERR, "The number of Rx queue invalid, "
+			"it should be equal to or less than %d",
+			hw->mac.max_rx_queues);
+		return -1;
+	}
+
+	/*
+	 * When the VF driver issues a TXGBE_VF_RESET request, the PF driver
+	 * disables the VF receipt of packets if the PF MTU is > 1500.
+	 * This is done to deal with limitations that imposes
+	 * the PF and all VFs to share the same MTU.
+	 * Then, the PF driver enables again the VF receipt of packet when
+	 * the VF driver issues a TXGBE_VF_SET_LPE request.
+	 * In the meantime, the VF device cannot be used, even if the VF driver
+	 * and the Guest VM network stack are ready to accept packets with a
+	 * size up to the PF MTU.
+	 * As a work-around to this PF behaviour, force the call to
+	 * txgbevf_rlpml_set_vf even if jumbo frames are not used. This way,
+	 * VF packets received can work in all cases.
+	 */
+	if (txgbevf_rlpml_set_vf(hw,
+	    (uint16_t)dev->data->dev_conf.rxmode.max_rx_pkt_len)) {
+		PMD_INIT_LOG(ERR, "Set max packet length to %d failed.",
+			     dev->data->dev_conf.rxmode.max_rx_pkt_len);
+		return -EINVAL;
+	}
+
+	/*
+	 * Assume no header split and no VLAN strip support
+	 * on any Rx queue first .
+	 */
+	rxmode->offloads &= ~DEV_RX_OFFLOAD_VLAN_STRIP;
+
+	/* Set PSR type for VF RSS according to max Rx queue */
+	psrtype = TXGBE_VFPLCFG_PSRL4HDR |
+		  TXGBE_VFPLCFG_PSRL4HDR |
+		  TXGBE_VFPLCFG_PSRL2HDR |
+		  TXGBE_VFPLCFG_PSRTUNHDR |
+		  TXGBE_VFPLCFG_PSRTUNMAC;
+	wr32(hw, TXGBE_VFPLCFG, TXGBE_VFPLCFG_PSR(psrtype));
+
+	/* Setup RX queues */
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+
+		/* Allocate buffers for descriptor rings */
+		ret = txgbe_alloc_rx_queue_mbufs(rxq);
+		if (ret)
+			return ret;
+
+		/* Setup the Base and Length of the Rx Descriptor Rings */
+		bus_addr = rxq->rx_ring_phys_addr;
+
+		wr32(hw, TXGBE_RXBAL(i),
+				(uint32_t)(bus_addr & BIT_MASK32));
+		wr32(hw, TXGBE_RXBAH(i),
+				(uint32_t)(bus_addr >> 32));
+		wr32(hw, TXGBE_RXRP(i), 0);
+		wr32(hw, TXGBE_RXWP(i), 0);
+
+		/* Configure the RXCFG register */
+		srrctl = TXGBE_RXCFG_RNGLEN(rxq->nb_rx_desc);
+
+		/* Set if packets are dropped when no descriptors available */
+		if (rxq->drop_en)
+			srrctl |= TXGBE_RXCFG_DROP;
+
+		/*
+		 * Configure the RX buffer size in the PKTLEN field of
+		 * the RXCFG register of the queue.
+		 * The value is in 1 KB resolution. Valid values can be from
+		 * 1 KB to 16 KB.
+		 */
+		buf_size = (uint16_t)(rte_pktmbuf_data_room_size(rxq->mb_pool) -
+			RTE_PKTMBUF_HEADROOM);
+		buf_size = ROUND_UP(buf_size, 1 << 10);
+		srrctl |= TXGBE_RXCFG_PKTLEN(buf_size);
+
+		/*
+		 * VF modification to write virtual function RXCFG register
+		 */
+		wr32(hw, TXGBE_RXCFG(i), srrctl);
+
+		if (rxmode->offloads & DEV_RX_OFFLOAD_SCATTER ||
+		    /* It adds dual VLAN length for supporting dual VLAN */
+		    (rxmode->max_rx_pkt_len +
+				2 * TXGBE_VLAN_TAG_SIZE) > buf_size) {
+			if (!dev->data->scattered_rx)
+				PMD_INIT_LOG(DEBUG, "forcing scatter mode");
+			dev->data->scattered_rx = 1;
+		}
+
+		if (rxq->offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
+			rxmode->offloads |= DEV_RX_OFFLOAD_VLAN_STRIP;
+	}
+
+	/*
+	 * Device configured with multiple RX queues.
+	 */
+	txgbe_dev_mq_rx_configure(dev);
+
+	txgbe_set_rx_function(dev);
+
+	return 0;
+}
+
+/*
+ * [VF] Initializes Transmit Unit.
+ */
+void __rte_cold
+txgbevf_dev_tx_init(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw     *hw;
+	struct txgbe_tx_queue *txq;
+	uint64_t bus_addr;
+	uint16_t i;
+
+	PMD_INIT_FUNC_TRACE();
+	hw = TXGBE_DEV_HW(dev);
+
+	/* Setup the Base and Length of the Tx Descriptor Rings */
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		txq = dev->data->tx_queues[i];
+		bus_addr = txq->tx_ring_phys_addr;
+		wr32(hw, TXGBE_TXBAL(i),
+				(uint32_t)(bus_addr & BIT_MASK32));
+		wr32(hw, TXGBE_TXBAH(i),
+				(uint32_t)(bus_addr >> 32));
+		wr32m(hw, TXGBE_TXCFG(i), TXGBE_TXCFG_BUFLEN_MASK,
+			TXGBE_TXCFG_BUFLEN(txq->nb_tx_desc));
+		/* Setup the HW Tx Head and TX Tail descriptor pointers */
+		wr32(hw, TXGBE_TXRP(i), 0);
+		wr32(hw, TXGBE_TXWP(i), 0);
+	}
+}
+
+/*
+ * [VF] Start Transmit and Receive Units.
+ */
+void __rte_cold
+txgbevf_dev_rxtx_start(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw     *hw;
+	struct txgbe_tx_queue *txq;
+	struct txgbe_rx_queue *rxq;
+	uint32_t txdctl;
+	uint32_t rxdctl;
+	uint16_t i;
+	int poll_ms;
+
+	PMD_INIT_FUNC_TRACE();
+	hw = TXGBE_DEV_HW(dev);
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		txq = dev->data->tx_queues[i];
+		/* Setup Transmit Threshold Registers */
+		wr32m(hw, TXGBE_TXCFG(txq->reg_idx),
+		      TXGBE_TXCFG_HTHRESH_MASK |
+		      TXGBE_TXCFG_WTHRESH_MASK,
+		      TXGBE_TXCFG_HTHRESH(txq->hthresh) |
+		      TXGBE_TXCFG_WTHRESH(txq->wthresh));
+	}
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		wr32m(hw, TXGBE_TXCFG(i), TXGBE_TXCFG_ENA, TXGBE_TXCFG_ENA);
+
+		poll_ms = 10;
+		/* Wait until TX Enable ready */
+		do {
+			rte_delay_ms(1);
+			txdctl = rd32(hw, TXGBE_TXCFG(i));
+		} while (--poll_ms && !(txdctl & TXGBE_TXCFG_ENA));
+		if (!poll_ms)
+			PMD_INIT_LOG(ERR, "Could not enable Tx Queue %d", i);
+	}
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+
+		wr32m(hw, TXGBE_RXCFG(i), TXGBE_RXCFG_ENA, TXGBE_RXCFG_ENA);
+
+		/* Wait until RX Enable ready */
+		poll_ms = 10;
+		do {
+			rte_delay_ms(1);
+			rxdctl = rd32(hw, TXGBE_RXCFG(i));
+		} while (--poll_ms && !(rxdctl & TXGBE_RXCFG_ENA));
+		if (!poll_ms)
+			PMD_INIT_LOG(ERR, "Could not enable Rx Queue %d", i);
+		rte_wmb();
+		wr32(hw, TXGBE_RXWP(i), rxq->nb_rx_desc - 1);
+	}
+}
+
 int
 txgbe_rss_conf_init(struct txgbe_rte_flow_rss_conf *out,
 		    const struct rte_flow_action_rss *in)
@@ -4798,7 +5071,7 @@ txgbe_config_rss_filter(struct rte_eth_dev *dev,
 			j = 0;
 		reta = (reta >> 8) | LS32(conf->conf.queue[j], 24, 0xFF);
 		if ((i & 3) == 3)
-			wr32a(hw, TXGBE_REG_RSSTBL, i >> 2, reta);
+			wr32at(hw, TXGBE_REG_RSSTBL, i >> 2, reta);
 	}
 
 	/* Configure the RSS key and the RSS protocols used to compute

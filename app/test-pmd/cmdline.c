@@ -163,7 +163,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"Display:\n"
 			"--------\n\n"
 
-			"show port (info|stats|summary|xstats|fdir|dcb_tc|cap) (port_id|all)\n"
+			"show port (info|stats|summary|xstats|fdir|dcb_tc) (port_id|all)\n"
 			"    Display information for port_id, or all.\n\n"
 
 			"show port port_id (module_eeprom|eeprom)\n"
@@ -245,6 +245,10 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"show port (port_id) rxq|txq (queue_id) desc (desc_id) status"
 			"       Show status of rx|tx descriptor.\n\n"
+
+			"show port (port_id) rxq (queue_id) desc used count\n"
+			"    Show current number of filled receive"
+			" packet descriptors.\n\n"
 
 			"show port (port_id) macs|mcast_macs"
 			"       Display list of mac addresses added to port.\n\n"
@@ -7569,9 +7573,6 @@ static void cmd_showportall_parsed(void *parsed_result,
 	else if (!strcmp(res->what, "dcb_tc"))
 		RTE_ETH_FOREACH_DEV(i)
 			port_dcb_info_display(i);
-	else if (!strcmp(res->what, "cap"))
-		RTE_ETH_FOREACH_DEV(i)
-			port_offload_cap_display(i);
 }
 
 cmdline_parse_token_string_t cmd_showportall_show =
@@ -7581,14 +7582,14 @@ cmdline_parse_token_string_t cmd_showportall_port =
 	TOKEN_STRING_INITIALIZER(struct cmd_showportall_result, port, "port");
 cmdline_parse_token_string_t cmd_showportall_what =
 	TOKEN_STRING_INITIALIZER(struct cmd_showportall_result, what,
-				 "info#summary#stats#xstats#fdir#dcb_tc#cap");
+				 "info#summary#stats#xstats#fdir#dcb_tc");
 cmdline_parse_token_string_t cmd_showportall_all =
 	TOKEN_STRING_INITIALIZER(struct cmd_showportall_result, all, "all");
 cmdline_parse_inst_t cmd_showportall = {
 	.f = cmd_showportall_parsed,
 	.data = NULL,
 	.help_str = "show|clear port "
-		"info|summary|stats|xstats|fdir|dcb_tc|cap all",
+		"info|summary|stats|xstats|fdir|dcb_tc all",
 	.tokens = {
 		(void *)&cmd_showportall_show,
 		(void *)&cmd_showportall_port,
@@ -7632,8 +7633,6 @@ static void cmd_showport_parsed(void *parsed_result,
 #endif
 	else if (!strcmp(res->what, "dcb_tc"))
 		port_dcb_info_display(res->portnum);
-	else if (!strcmp(res->what, "cap"))
-		port_offload_cap_display(res->portnum);
 }
 
 cmdline_parse_token_string_t cmd_showport_show =
@@ -7643,7 +7642,7 @@ cmdline_parse_token_string_t cmd_showport_port =
 	TOKEN_STRING_INITIALIZER(struct cmd_showport_result, port, "port");
 cmdline_parse_token_string_t cmd_showport_what =
 	TOKEN_STRING_INITIALIZER(struct cmd_showport_result, what,
-				 "info#summary#stats#xstats#fdir#dcb_tc#cap");
+				 "info#summary#stats#xstats#fdir#dcb_tc");
 cmdline_parse_token_num_t cmd_showport_portnum =
 	TOKEN_NUM_INITIALIZER(struct cmd_showport_result, portnum, RTE_UINT16);
 
@@ -7651,7 +7650,7 @@ cmdline_parse_inst_t cmd_showport = {
 	.f = cmd_showport_parsed,
 	.data = NULL,
 	.help_str = "show|clear port "
-		"info|summary|stats|xstats|fdir|dcb_tc|cap "
+		"info|summary|stats|xstats|fdir|dcb_tc "
 		"<port_id>",
 	.tokens = {
 		(void *)&cmd_showport_show,
@@ -9098,7 +9097,7 @@ cmdline_parse_inst_t cmd_vf_rate_limit = {
 
 /* *** CONFIGURE TUNNEL UDP PORT *** */
 struct cmd_tunnel_udp_config {
-	cmdline_fixed_string_t cmd;
+	cmdline_fixed_string_t rx_vxlan_port;
 	cmdline_fixed_string_t what;
 	uint16_t udp_port;
 	portid_t port_id;
@@ -9114,9 +9113,7 @@ cmd_tunnel_udp_config_parsed(void *parsed_result,
 	int ret;
 
 	tunnel_udp.udp_port = res->udp_port;
-
-	if (!strcmp(res->cmd, "rx_vxlan_port"))
-		tunnel_udp.prot_type = RTE_TUNNEL_TYPE_VXLAN;
+	tunnel_udp.prot_type = RTE_TUNNEL_TYPE_VXLAN;
 
 	if (!strcmp(res->what, "add"))
 		ret = rte_eth_dev_udp_tunnel_port_add(res->port_id,
@@ -9129,9 +9126,9 @@ cmd_tunnel_udp_config_parsed(void *parsed_result,
 		printf("udp tunneling add error: (%s)\n", strerror(-ret));
 }
 
-cmdline_parse_token_string_t cmd_tunnel_udp_config_cmd =
+cmdline_parse_token_string_t cmd_tunnel_udp_config_rx_vxlan_port =
 	TOKEN_STRING_INITIALIZER(struct cmd_tunnel_udp_config,
-				cmd, "rx_vxlan_port");
+				rx_vxlan_port, "rx_vxlan_port");
 cmdline_parse_token_string_t cmd_tunnel_udp_config_what =
 	TOKEN_STRING_INITIALIZER(struct cmd_tunnel_udp_config,
 				what, "add#rm");
@@ -9148,7 +9145,7 @@ cmdline_parse_inst_t cmd_tunnel_udp_config = {
 	.help_str = "rx_vxlan_port add|rm <udp_port> <port_id>: "
 		"Add/Remove a tunneling UDP port filter",
 	.tokens = {
-		(void *)&cmd_tunnel_udp_config_cmd,
+		(void *)&cmd_tunnel_udp_config_rx_vxlan_port,
 		(void *)&cmd_tunnel_udp_config_what,
 		(void *)&cmd_tunnel_udp_config_udp_port,
 		(void *)&cmd_tunnel_udp_config_port_id,
@@ -16699,6 +16696,88 @@ cmdline_parse_inst_t cmd_show_rx_tx_desc_status = {
 	},
 };
 
+/* *** display rx queue desc used count *** */
+struct cmd_show_rx_queue_desc_used_count_result {
+	cmdline_fixed_string_t cmd_show;
+	cmdline_fixed_string_t cmd_port;
+	cmdline_fixed_string_t cmd_rxq;
+	cmdline_fixed_string_t cmd_desc;
+	cmdline_fixed_string_t cmd_used;
+	cmdline_fixed_string_t cmd_count;
+	portid_t cmd_pid;
+	portid_t cmd_qid;
+};
+
+static void
+cmd_show_rx_queue_desc_used_count_parsed(void *parsed_result,
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
+{
+	struct cmd_show_rx_queue_desc_used_count_result *res = parsed_result;
+	int rc;
+
+	if (!rte_eth_dev_is_valid_port(res->cmd_pid)) {
+		printf("invalid port id %u\n", res->cmd_pid);
+		return;
+	}
+
+	rc = rte_eth_rx_queue_count(res->cmd_pid, res->cmd_qid);
+	if (rc < 0) {
+		printf("Invalid queueid = %d\n", res->cmd_qid);
+		return;
+	}
+	printf("Used desc count = %d\n", rc);
+}
+
+cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_show =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_show_rx_queue_desc_used_count_result,
+		 cmd_show, "show");
+cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_port =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_show_rx_queue_desc_used_count_result,
+		 cmd_port, "port");
+cmdline_parse_token_num_t cmd_show_rx_queue_desc_used_count_pid =
+	TOKEN_NUM_INITIALIZER
+		(struct cmd_show_rx_queue_desc_used_count_result,
+		 cmd_pid, RTE_UINT16);
+cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_rxq =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_show_rx_queue_desc_used_count_result,
+		 cmd_rxq, "rxq");
+cmdline_parse_token_num_t cmd_show_rx_queue_desc_used_count_qid =
+	TOKEN_NUM_INITIALIZER
+		(struct cmd_show_rx_queue_desc_used_count_result,
+		 cmd_qid, RTE_UINT16);
+cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_desc =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_show_rx_queue_desc_used_count_result,
+		 cmd_count, "desc");
+cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_used =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_show_rx_queue_desc_used_count_result,
+		 cmd_count, "used");
+cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_count =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_show_rx_queue_desc_used_count_result,
+		 cmd_count, "count");
+cmdline_parse_inst_t cmd_show_rx_queue_desc_used_count = {
+	.f = cmd_show_rx_queue_desc_used_count_parsed,
+	.data = NULL,
+	.help_str = "show port <port_id> rxq <queue_id> desc used count",
+	.tokens = {
+		(void *)&cmd_show_rx_queue_desc_used_count_show,
+		(void *)&cmd_show_rx_queue_desc_used_count_port,
+		(void *)&cmd_show_rx_queue_desc_used_count_pid,
+		(void *)&cmd_show_rx_queue_desc_used_count_rxq,
+		(void *)&cmd_show_rx_queue_desc_used_count_qid,
+		(void *)&cmd_show_rx_queue_desc_used_count_desc,
+		(void *)&cmd_show_rx_queue_desc_used_count_used,
+		(void *)&cmd_show_rx_queue_desc_used_count_count,
+		NULL,
+	},
+};
+
 /* Common result structure for set port ptypes */
 struct cmd_set_port_ptypes_result {
 	cmdline_fixed_string_t set;
@@ -17098,6 +17177,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_config_tx_metadata_specific,
 	(cmdline_parse_inst_t *)&cmd_show_tx_metadata,
 	(cmdline_parse_inst_t *)&cmd_show_rx_tx_desc_status,
+	(cmdline_parse_inst_t *)&cmd_show_rx_queue_desc_used_count,
 	(cmdline_parse_inst_t *)&cmd_set_raw,
 	(cmdline_parse_inst_t *)&cmd_show_set_raw,
 	(cmdline_parse_inst_t *)&cmd_show_set_raw_all,
