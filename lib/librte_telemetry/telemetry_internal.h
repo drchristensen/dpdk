@@ -2,19 +2,18 @@
  * Copyright(c) 2020 Intel Corporation
  */
 
-#ifndef _RTE_TELEMETRY_LEGACY_H_
-#define _RTE_TELEMETRY_LEGACY_H_
+#ifndef _RTE_TELEMETRY_INTERNAL_H_
+#define _RTE_TELEMETRY_INTERNAL_H_
 
 #include <rte_compat.h>
+#include <rte_os.h>
 #include "rte_telemetry.h"
 
 /**
  * @internal
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
-
+ *
  * @file
- * RTE Telemetry Legacy
+ * RTE Telemetry Legacy and internal definitions
  *
  ***/
 
@@ -78,10 +77,39 @@ legacy_client_handler(void *sock_id);
  *  @return
  *  -ENOENT if max callbacks limit has been reached.
  */
-__rte_experimental
+__rte_internal
 int
 rte_telemetry_legacy_register(const char *cmd,
 		enum rte_telemetry_legacy_data_req data_req,
 		telemetry_legacy_cb fn);
+
+/**
+ * @internal
+ * Log function type, to allow passing as parameter if necessary
+ */
+typedef int (*rte_log_fn)(uint32_t level, uint32_t logtype, const char *format, ...);
+
+/**
+ * @internal
+ * Initialize Telemetry.
+ *
+ * @param runtime_dir
+ * The runtime directory of DPDK.
+ * @param cpuset
+ * The CPU set to be used for setting the thread affinity.
+ * @param log_fn
+ * Function pointer to the rte_log function for logging use
+ * @param registered_logtype
+ * The registered log type to use for logging
+ *
+ * @return
+ *  0 on success.
+ * @return
+ *  -1 on failure.
+ */
+__rte_internal
+int
+rte_telemetry_init(const char *runtime_dir, const char *rte_version, rte_cpuset_t *cpuset,
+		rte_log_fn log_fn, uint32_t registered_logtype);
 
 #endif

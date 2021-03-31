@@ -256,22 +256,8 @@ bnxt_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 		valid = _mm_cvtsi128_si64(_mm_packs_epi32(info3_v, info3_v));
 		num_valid = __builtin_popcountll(valid & desc_valid_mask);
 
-		switch (num_valid) {
-		case 4:
-			rxr->rx_buf_ring[mbcons + 3] = NULL;
-			/* FALLTHROUGH */
-		case 3:
-			rxr->rx_buf_ring[mbcons + 2] = NULL;
-			/* FALLTHROUGH */
-		case 2:
-			rxr->rx_buf_ring[mbcons + 1] = NULL;
-			/* FALLTHROUGH */
-		case 1:
-			rxr->rx_buf_ring[mbcons + 0] = NULL;
+		if (num_valid == 0)
 			break;
-		case 0:
-			goto out;
-		}
 
 		descs_to_mbufs(rxcmp, rxcmp1, mbuf_init, &rx_pkts[nb_rx_pkts],
 			       rxr);
@@ -281,7 +267,6 @@ bnxt_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 			break;
 	}
 
-out:
 	if (nb_rx_pkts) {
 		rxr->rx_raw_prod = RING_ADV(rxr->rx_raw_prod, nb_rx_pkts);
 
@@ -336,12 +321,11 @@ bnxt_handle_tx_cp_vec(struct bnxt_tx_queue *txq)
 
 static inline void
 bnxt_xmit_one(struct rte_mbuf *mbuf, struct tx_bd_long *txbd,
-	      struct bnxt_sw_tx_bd *tx_buf)
+	      struct rte_mbuf **tx_buf)
 {
 	__m128i desc;
 
-	tx_buf->mbuf = mbuf;
-	tx_buf->nr_bds = 1;
+	*tx_buf = mbuf;
 
 	desc = _mm_set_epi64x(mbuf->buf_iova + mbuf->data_off,
 			      bnxt_xmit_flags_len(mbuf->data_len,
@@ -358,7 +342,7 @@ bnxt_xmit_fixed_burst_vec(struct bnxt_tx_queue *txq, struct rte_mbuf **tx_pkts,
 	struct bnxt_tx_ring_info *txr = txq->tx_ring;
 	uint16_t tx_prod, tx_raw_prod = txr->tx_raw_prod;
 	struct tx_bd_long *txbd;
-	struct bnxt_sw_tx_bd *tx_buf;
+	struct rte_mbuf **tx_buf;
 	uint16_t to_send;
 
 	tx_prod = RING_IDX(txr->tx_ring_struct, tx_raw_prod);

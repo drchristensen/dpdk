@@ -86,7 +86,8 @@ The public API headers are grouped by topics:
   [byte order]         (@ref rte_byteorder.h),
   [CPU flags]          (@ref rte_cpuflags.h),
   [CPU pause]          (@ref rte_pause.h),
-  [I/O access]         (@ref rte_io.h)
+  [I/O access]         (@ref rte_io.h),
+  [power management]   (@ref rte_power_intrinsics.h)
 
 - **CPU multicore**:
   [interrupts]         (@ref rte_interrupts.h),
@@ -95,7 +96,8 @@ The public API headers are grouped by topics:
   [per-lcore]          (@ref rte_per_lcore.h),
   [service cores]      (@ref rte_service.h),
   [keepalive]          (@ref rte_keepalive.h),
-  [power/freq]         (@ref rte_power.h)
+  [power/freq]         (@ref rte_power.h),
+  [PMD power]          (@ref rte_power_pmd_mgmt.h)
 
 - **layers**:
   [ethernet]           (@ref rte_ether.h),
@@ -184,10 +186,13 @@ The public API headers are grouped by topics:
   * SWX port:
     [port]             (@ref rte_swx_port.h),
     [ethdev]           (@ref rte_swx_port_ethdev.h),
+    [fd]               (@ref rte_swx_port_fd.h),
+    [ring]             (@ref rte_swx_port_ring.h),
     [src/sink]         (@ref rte_swx_port_source_sink.h)
   * SWX table:
     [table]            (@ref rte_swx_table.h),
     [table_em]         (@ref rte_swx_table_em.h)
+    [table_wm]         (@ref rte_swx_table_wm.h)
   * [graph]            (@ref rte_graph.h):
     [graph_worker]     (@ref rte_graph_worker.h)
   * graph_nodes:

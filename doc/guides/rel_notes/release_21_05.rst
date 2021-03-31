@@ -55,6 +55,20 @@ New Features
      Also, make sure to start the actual text at the margin.
      =======================================================
 
+* **Enhanced ethdev representor syntax.**
+
+  * Introduced representor type of VF, SF and PF.
+  * Supported sub-function and multi-host in representor syntax::
+
+      representor=#            [0,2-4]      /* Legacy VF compatible.         */
+      representor=[[c#]pf#]vf# c1pf2vf3     /* VF 3 on PF 2 of controller 1. */
+      representor=[[c#]pf#]sf# sf[0,2-1023] /* 1023 SFs.                     */
+      representor=[c#]pf#      c2pf[0,1]    /* 2 PFs on controller 2.        */
+
+* **Updated Broadcom bnxt driver.**
+
+  * Updated HWRM structures to 1.10.2.15 version.
+
 * **Updated Hisilicon hns3 driver.**
 
   * Added support for module EEPROM dumping.
@@ -75,6 +89,10 @@ New Features
 * **Updated Wangxun txgbe driver.**
 
   * Added support for txgbevf PMD.
+
+* **Updated the AF_XDP driver.**
+
+  * Added support for preferred busy polling.
 
 * **Updated testpmd.**
 
@@ -112,6 +130,10 @@ API Changes
    Also, make sure to start the actual text at the margin.
    =======================================================
 
+* eal: The experimental TLS API added in ``rte_thread.h`` has been renamed
+  from ``rte_thread_tls_*`` to ``rte_thread_*`` to avoid naming redundancy
+  and confusion with the transport layer security term.
+
 
 ABI Changes
 -----------
@@ -129,6 +151,11 @@ ABI Changes
    =======================================================
 
 * No ABI change that would break compatibility with 20.11.
+
+* The experimental function ``rte_telemetry_legacy_register`` has been
+  removed from the public API and is now an internal-only function. This
+  function was already marked as internal in the API documentation for it,
+  and was not for use by external applications.
 
 
 Known Issues

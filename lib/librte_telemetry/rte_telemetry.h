@@ -6,7 +6,6 @@
 #include <sched.h>
 
 #include <rte_compat.h>
-#include <rte_os.h>
 
 #ifndef _RTE_TELEMETRY_H_
 #define _RTE_TELEMETRY_H_
@@ -292,27 +291,6 @@ __rte_experimental
 int
 rte_telemetry_register_cmd(const char *cmd, telemetry_cb fn, const char *help);
 
-/**
- * @internal
- * Initialize Telemetry.
- *
- * @param runtime_dir
- * The runtime directory of DPDK.
- * @param cpuset
- * The CPU set to be used for setting the thread affinity.
- * @param err_str
- * This err_str pointer should point to NULL on entry. In the case of an error
- * or warning, it will be non-NULL on exit.
- *
- * @return
- *  0 on success.
- * @return
- *  -1 on failure.
- */
-__rte_internal
-int
-rte_telemetry_init(const char *runtime_dir, rte_cpuset_t *cpuset,
-		const char **err_str);
 
 /**
  * Get a pointer to a container with memory allocated. The container is to be

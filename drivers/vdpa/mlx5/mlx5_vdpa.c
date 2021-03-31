@@ -745,13 +745,14 @@ mlx5_vdpa_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	priv->caps = attr.vdpa;
 	priv->log_max_rqt_size = attr.log_max_rqt_size;
 	priv->num_lag_ports = attr.num_lag_ports;
+	priv->qp_ts_format = attr.qp_ts_format;
 	if (attr.num_lag_ports == 0)
 		priv->num_lag_ports = 1;
 	priv->ctx = ctx;
 	priv->pci_dev = pci_dev;
 	priv->var = mlx5_glue->dv_alloc_var(ctx, 0);
 	if (!priv->var) {
-		DRV_LOG(ERR, "Failed to allocate VAR %u.\n", errno);
+		DRV_LOG(ERR, "Failed to allocate VAR %u.", errno);
 		goto error;
 	}
 	priv->vdev = rte_vdpa_register_device(&pci_dev->device,

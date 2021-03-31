@@ -3,6 +3,7 @@
  */
 #include <unistd.h>
 #include <stdint.h>
+#include <sched.h>
 #include <fcntl.h>
 #include <sys/eventfd.h>
 
@@ -234,7 +235,7 @@ mlx5_vdpa_timer_sleep(struct mlx5_vdpa_priv *priv, uint32_t max)
 		usleep(priv->timer_delay_us);
 	else
 		/* Give-up CPU to improve polling threads scheduling. */
-		pthread_yield();
+		sched_yield();
 }
 
 static void *
@@ -515,17 +516,6 @@ mlx5_vdpa_cqe_event_setup(struct mlx5_vdpa_priv *priv)
 		pthread_cond_init(&priv->timer_cond, NULL);
 		priv->timer_on = 0;
 		pthread_attr_init(&attr);
-		CPU_ZERO(&cpuset);
-		if (priv->event_core != -1)
-			CPU_SET(priv->event_core, &cpuset);
-		else
-			cpuset = rte_lcore_cpuset(rte_get_main_lcore());
-		ret = pthread_attr_setaffinity_np(&attr, sizeof(cpuset),
-						  &cpuset);
-		if (ret) {
-			DRV_LOG(ERR, "Failed to set thread affinity.");
-			return -1;
-		}
 		ret = pthread_attr_setschedpolicy(&attr, SCHED_RR);
 		if (ret) {
 			DRV_LOG(ERR, "Failed to set thread sched policy = RR.");
@@ -541,6 +531,17 @@ mlx5_vdpa_cqe_event_setup(struct mlx5_vdpa_priv *priv)
 		if (ret) {
 			DRV_LOG(ERR, "Failed to create timer thread.");
 			return -1;
+		}
+		CPU_ZERO(&cpuset);
+		if (priv->event_core != -1)
+			CPU_SET(priv->event_core, &cpuset);
+		else
+			cpuset = rte_lcore_cpuset(rte_get_main_lcore());
+		ret = pthread_setaffinity_np(priv->timer_tid,
+					     sizeof(cpuset), &cpuset);
+		if (ret) {
+			DRV_LOG(ERR, "Failed to set thread affinity.");
+			goto error;
 		}
 		snprintf(name, sizeof(name), "vDPA-mlx5-%d", priv->vid);
 		ret = pthread_setname_np(priv->timer_tid, name);
@@ -662,6 +663,7 @@ mlx5_vdpa_event_qp_create(struct mlx5_vdpa_priv *priv, uint16_t desc_n,
 	if (mlx5_vdpa_cq_create(priv, log_desc_n, callfd, &eqp->cq))
 		return -1;
 	attr.pd = priv->pdn;
+	attr.ts_format = mlx5_ts_format_conv(priv->qp_ts_format);
 	eqp->fw_qp = mlx5_devx_cmd_create_qp(priv->ctx, &attr);
 	if (!eqp->fw_qp) {
 		DRV_LOG(ERR, "Failed to create FW QP(%u).", rte_errno);
@@ -692,6 +694,7 @@ mlx5_vdpa_event_qp_create(struct mlx5_vdpa_priv *priv, uint16_t desc_n,
 	attr.wq_umem_offset = 0;
 	attr.dbr_umem_id = eqp->umem_obj->umem_id;
 	attr.dbr_address = (1 << log_desc_n) * MLX5_WSEG_SIZE;
+	attr.ts_format = mlx5_ts_format_conv(priv->qp_ts_format);
 	eqp->sw_qp = mlx5_devx_cmd_create_qp(priv->ctx, &attr);
 	if (!eqp->sw_qp) {
 		DRV_LOG(ERR, "Failed to create SW QP(%u).", rte_errno);

@@ -18,6 +18,7 @@ extern "C" {
 #include <stdio.h>
 
 #include <rte_compat.h>
+#include <rte_meter.h>
 
 #include "rte_swx_port.h"
 #include "rte_swx_table.h"
@@ -46,6 +47,12 @@ struct rte_swx_ctl_pipeline_info {
 
 	/** Number of tables. */
 	uint32_t n_tables;
+
+	/** Number of register arrays. */
+	uint32_t n_regarrays;
+
+	/** Number of meter arrays. */
+	uint32_t n_metarrays;
 };
 
 /**
@@ -521,6 +528,10 @@ rte_swx_ctl_pipeline_abort(struct rte_swx_ctl_pipeline *ctl);
  *   Table name.
  * @param[in] string
  *   String containing the table entry.
+ * @param[out] is_blank_or_comment
+ *   On error, this argument provides an indication of whether *string* contains
+ *   an invalid table entry (set to zero) or a blank or comment line that should
+ *   typically be ignored (set to a non-zero value).
  * @return
  *   0 on success or the following error codes otherwise:
  *   -EINVAL: Invalid argument.
@@ -529,7 +540,8 @@ __rte_experimental
 struct rte_swx_table_entry *
 rte_swx_ctl_pipeline_table_entry_read(struct rte_swx_ctl_pipeline *ctl,
 				      const char *table_name,
-				      const char *string);
+				      const char *string,
+				      int *is_blank_or_comment);
 
 /**
  * Pipeline table print to file
@@ -551,6 +563,233 @@ int
 rte_swx_ctl_pipeline_table_fprintf(FILE *f,
 				   struct rte_swx_ctl_pipeline *ctl,
 				   const char *table_name);
+
+/*
+ * Register Array Query API.
+ */
+
+/** Register array info. */
+struct rte_swx_ctl_regarray_info {
+	/** Register array name. */
+	char name[RTE_SWX_CTL_NAME_SIZE];
+
+	/** Register array size. */
+	uint32_t size;
+};
+
+/**
+ * Register array info get
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] regarray_id
+ *   Register array ID (0 .. *n_regarrays* - 1).
+ * @param[out] regarray
+ *   Register array info.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_regarray_info_get(struct rte_swx_pipeline *p,
+			      uint32_t regarray_id,
+			      struct rte_swx_ctl_regarray_info *regarray);
+
+/**
+ * Register read
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] regarray_name
+ *   Register array name.
+ * @param[in] regarray_index
+ *   Register index within the array (0 .. *size* - 1).
+ * @param[out] value
+ *   Current register value.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_regarray_read(struct rte_swx_pipeline *p,
+				   const char *regarray_name,
+				   uint32_t regarray_index,
+				   uint64_t *value);
+
+/**
+ * Register write
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] regarray_name
+ *   Register array name.
+ * @param[in] regarray_index
+ *   Register index within the array (0 .. *size* - 1).
+ * @param[in] value
+ *   Value to be written to the register.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_regarray_write(struct rte_swx_pipeline *p,
+				   const char *regarray_name,
+				   uint32_t regarray_index,
+				   uint64_t value);
+
+/*
+ * Meter Array Query and Configuration API.
+ */
+
+/** Meter array info. */
+struct rte_swx_ctl_metarray_info {
+	/** Meter array name. */
+	char name[RTE_SWX_CTL_NAME_SIZE];
+
+	/** Meter array size. */
+	uint32_t size;
+};
+
+/**
+ * Meter array info get
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] metarray_id
+ *   Meter array ID (0 .. *n_metarrays* - 1).
+ * @param[out] metarray
+ *   Meter array info.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_metarray_info_get(struct rte_swx_pipeline *p,
+			      uint32_t metarray_id,
+			      struct rte_swx_ctl_metarray_info *metarray);
+
+/**
+ * Meter profile add
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] name
+ *   Meter profile name.
+ * @param[in] params
+ *   Meter profile parameters.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument;
+ *   -ENOMEM: Not enough space/cannot allocate memory;
+ *   -EEXIST: Meter profile with this name already exists.
+ */
+__rte_experimental
+int
+rte_swx_ctl_meter_profile_add(struct rte_swx_pipeline *p,
+			      const char *name,
+			      struct rte_meter_trtcm_params *params);
+
+/**
+ * Meter profile delete
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] name
+ *   Meter profile name.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument;
+ *   -EBUSY: Meter profile is currently in use.
+ */
+__rte_experimental
+int
+rte_swx_ctl_meter_profile_delete(struct rte_swx_pipeline *p,
+				 const char *name);
+
+/**
+ * Meter reset
+ *
+ * Reset a meter within a given meter array to use the default profile that
+ * causes all the input packets to be colored as green. It is the responsibility
+ * of the control plane to make sure this meter is not used by the data plane
+ * pipeline before calling this function.
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] metarray_name
+ *   Meter array name.
+ * @param[in] metarray_index
+ *   Meter index within the meter array.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_meter_reset(struct rte_swx_pipeline *p,
+			const char *metarray_name,
+			uint32_t metarray_index);
+
+/**
+ * Meter set
+ *
+ * Set a meter within a given meter array to use a specific profile. It is the
+ * responsibility of the control plane to make sure this meter is not used by
+ * the data plane pipeline before calling this function.
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] metarray_name
+ *   Meter array name.
+ * @param[in] metarray_index
+ *   Meter index within the meter array.
+ * @param[in] profile_name
+ *   Existing meter profile name.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_meter_set(struct rte_swx_pipeline *p,
+		      const char *metarray_name,
+		      uint32_t metarray_index,
+		      const char *profile_name);
+
+/** Meter statistics counters. */
+struct rte_swx_ctl_meter_stats {
+	/** Number of packets tagged by the meter for each color. */
+	uint64_t n_pkts[RTE_COLORS];
+
+	/** Number of bytes tagged by the meter for each color. */
+	uint64_t n_bytes[RTE_COLORS];
+};
+
+/**
+ * Meter statistics counters read
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] metarray_name
+ *   Meter array name.
+ * @param[in] metarray_index
+ *   Meter index within the meter array.
+ * @param[out] stats
+ *   Meter statistics counters.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_meter_stats_read(struct rte_swx_pipeline *p,
+			     const char *metarray_name,
+			     uint32_t metarray_index,
+			     struct rte_swx_ctl_meter_stats *stats);
 
 /**
  * Pipeline control free

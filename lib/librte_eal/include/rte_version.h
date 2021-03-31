@@ -18,6 +18,7 @@ extern "C" {
 #include <string.h>
 #include <stdio.h>
 #include <rte_common.h>
+#include <rte_compat.h>
 
 /**
  * Macro to compute a version number usable for comparisons
@@ -34,32 +35,47 @@ extern "C" {
 			RTE_VER_RELEASE)
 
 /**
+ * Function to return DPDK version prefix string
+ */
+__rte_experimental
+const char *rte_version_prefix(void);
+
+/**
+ * Function to return DPDK version year
+ */
+__rte_experimental
+unsigned int rte_version_year(void);
+
+/**
+ * Function to return DPDK version month
+ */
+__rte_experimental
+unsigned int rte_version_month(void);
+
+/**
+ * Function to return DPDK minor version number
+ */
+__rte_experimental
+unsigned int rte_version_minor(void);
+
+/**
+ * Function to return DPDK version suffix for any release candidates
+ */
+__rte_experimental
+const char *rte_version_suffix(void);
+
+/**
+ * Function to return DPDK version release candidate value
+ */
+__rte_experimental
+unsigned int rte_version_release(void);
+
+/**
  * Function returning version string
  * @return
- *     string
+ *     DPDK version string
  */
-static inline const char *
-rte_version(void)
-{
-	static char version[32];
-	if (version[0] != 0)
-		return version;
-	if (strlen(RTE_VER_SUFFIX) == 0)
-		snprintf(version, sizeof(version), "%s %d.%02d.%d",
-			RTE_VER_PREFIX,
-			RTE_VER_YEAR,
-			RTE_VER_MONTH,
-			RTE_VER_MINOR);
-	else
-		snprintf(version, sizeof(version), "%s %d.%02d.%d%s%d",
-			RTE_VER_PREFIX,
-			RTE_VER_YEAR,
-			RTE_VER_MONTH,
-			RTE_VER_MINOR,
-			RTE_VER_SUFFIX,
-			RTE_VER_RELEASE);
-	return version;
-}
+const char *rte_version(void);
 
 #ifdef __cplusplus
 }

@@ -784,6 +784,30 @@ typedef int (*eth_get_monitor_addr_t)(void *rxq,
 		struct rte_power_monitor_cond *pmc);
 
 /**
+ * @internal
+ * Get representor info to be able to calculate the unique representor ID.
+ *
+ * Caller should pass NULL as pointer of info to get number of entries,
+ * allocate info buffer according to returned entry number, then call
+ * again with buffer to get real info.
+ *
+ * To calculate the representor ID, caller should iterate each entry,
+ * match controller index, pf index, vf or sf start index and range,
+ * then calculate representor ID from offset to vf/sf start index.
+ * @see rte_eth_representor_id_get.
+ *
+ * @param dev
+ *   Ethdev handle of port.
+ * @param [out] info
+ *   Pointer to memory to save device representor info.
+ * @return
+ *   Negative errno value on error, number of info entries otherwise.
+ */
+
+typedef int (*eth_representor_info_get_t)(struct rte_eth_dev *dev,
+	struct rte_eth_representor_info *info);
+
+/**
  * @internal A structure containing the functions exported by an Ethernet driver.
  */
 struct eth_dev_ops {
@@ -940,6 +964,9 @@ struct eth_dev_ops {
 
 	eth_get_monitor_addr_t get_monitor_addr;
 	/**< Get power monitoring condition for Rx queue. */
+
+	eth_representor_info_get_t representor_info_get;
+	/**< Get representor info. */
 };
 
 /**
@@ -1216,8 +1243,16 @@ __rte_internal
 int
 rte_eth_switch_domain_free(uint16_t domain_id);
 
-/** Generic Ethernet device arguments  */
+/**
+ * Generic Ethernet device arguments
+ *
+ * One type of representor each structure.
+ */
 struct rte_eth_devargs {
+	uint16_t mh_controllers[RTE_MAX_MULTI_HOST_CTRLS];
+	/** controller/s number in case of multi-host */
+	uint16_t nb_mh_controllers;
+	/** number of controllers in multi-host controllers field */
 	uint16_t ports[RTE_MAX_ETHPORTS];
 	/** port/s number to enable on a multi-port single function */
 	uint16_t nb_ports;
@@ -1226,7 +1261,40 @@ struct rte_eth_devargs {
 	/** representor port/s identifier to enable on device */
 	uint16_t nb_representor_ports;
 	/** number of ports in representor port field */
+	enum rte_eth_representor_type type; /* type of representor */
 };
+
+/**
+ * PMD helper function to get representor ID from location detail.
+ *
+ * Get representor ID from controller, pf and (sf or vf).
+ * The mapping is retrieved from rte_eth_representor_info_get().
+ *
+ * For backward compatibility, if no representor info, direct
+ * map legacy VF (no controller and pf).
+ *
+ * @param ethdev
+ *  Handle of ethdev port.
+ * @param type
+ *  Representor type.
+ * @param controller
+ *  Controller ID, -1 if unspecified.
+ * @param pf
+ *  PF port ID, -1 if unspecified.
+ * @param representor_port
+ *  VF or SF representor port number, -1 if unspecified.
+ * @param repr_id
+ *  Pointer to output representor ID.
+ *
+ * @return
+ *  Negative errno value on error, 0 on success.
+ */
+__rte_internal
+int
+rte_eth_representor_id_get(const struct rte_eth_dev *ethdev,
+			   enum rte_eth_representor_type type,
+			   int controller, int pf, int representor_port,
+			   uint16_t *repr_id);
 
 /**
  * PMD helper function to parse ethdev arguments

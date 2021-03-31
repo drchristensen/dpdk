@@ -106,7 +106,6 @@ int bnxt_mq_rx_configure(struct bnxt *bp)
 
 	pools = RTE_MIN(pools, bp->rx_cp_nr_rings);
 	nb_q_per_grp = bp->rx_cp_nr_rings / pools;
-	bp->rx_num_qs_per_vnic = nb_q_per_grp;
 	PMD_DRV_LOG(DEBUG, "pools = %u nb_q_per_grp = %u\n",
 		    pools, nb_q_per_grp);
 	start_grp_id = 0;
@@ -165,6 +164,8 @@ skip_filter_allocation:
 	}
 
 out:
+	bp->rx_num_qs_per_vnic = nb_q_per_grp;
+
 	if (dev_conf->rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG) {
 		struct rte_eth_rss_conf *rss = &dev_conf->rx_adv_conf.rss_conf;
 
@@ -212,6 +213,16 @@ void bnxt_rx_queue_release_mbufs(struct bnxt_rx_queue *rxq)
 
 	sw_ring = rxq->rx_ring->rx_buf_ring;
 	if (sw_ring) {
+#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
+		/*
+		 * The vector receive burst function does not set used
+		 * mbuf pointers to NULL, do that here to simplify
+		 * cleanup logic.
+		 */
+		for (i = 0; i < rxq->rxrearm_nb; i++)
+			sw_ring[rxq->rxrearm_start + i] = NULL;
+		rxq->rxrearm_nb = 0;
+#endif
 		for (i = 0;
 		     i < rxq->rx_ring->rx_ring_struct->ring_size; i++) {
 			if (sw_ring[i]) {

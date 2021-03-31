@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright(c) 2019-2020 Xilinx, Inc.
+# Copyright(c) 2019-2021 Xilinx, Inc.
 # Copyright(c) 2016-2019 Solarflare Communications Inc.
 #
 # This software was jointly developed between OKTET Labs (under contract
@@ -29,6 +29,7 @@ sources = [
 	'efx_tunnel.c',
 	'efx_tx.c',
 	'efx_vpd.c',
+	'efx_virtio.c',
 	'mcdi_mon.c',
 	'siena_mac.c',
 	'siena_mcdi.c',
@@ -61,6 +62,7 @@ sources = [
 	'rhead_rx.c',
 	'rhead_tunnel.c',
 	'rhead_tx.c',
+	'rhead_virtio.c',
 ]
 
 extra_flags = [

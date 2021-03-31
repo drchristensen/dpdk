@@ -751,6 +751,17 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 				strerror(rte_errno));
 			return NULL;
 		}
+		if (eth_da.type == RTE_ETH_REPRESENTOR_NONE) {
+			/* Representor not specified. */
+			rte_errno = EBUSY;
+			return NULL;
+		}
+		if (eth_da.type != RTE_ETH_REPRESENTOR_VF) {
+			rte_errno = ENOTSUP;
+			DRV_LOG(ERR, "unsupported representor type: %s",
+				dpdk_dev->devargs->args);
+			return NULL;
+		}
 		for (i = 0; i < eth_da.nb_representor_ports; ++i)
 			if (eth_da.representor_ports[i] ==
 			    (uint16_t)switch_info->port_name)
@@ -1162,6 +1173,9 @@ err_secondary:
 			sh->cmng.relaxed_ordering_read = 0;
 			sh->cmng.relaxed_ordering_write = 0;
 		}
+		sh->rq_ts_format = config->hca_attr.rq_ts_format;
+		sh->sq_ts_format = config->hca_attr.sq_ts_format;
+		sh->qp_ts_format = config->hca_attr.qp_ts_format;
 		/* Check for LRO support. */
 		if (config->dest_tir && config->hca_attr.lro_cap &&
 		    config->dv_flow_en) {
@@ -1233,14 +1247,14 @@ err_secondary:
 		if (config->hca_attr.log_max_ft_sampler_num > 0  &&
 		    config->dv_flow_en) {
 			priv->sampler_en = 1;
-			DRV_LOG(DEBUG, "The Sampler enabled!\n");
+			DRV_LOG(DEBUG, "Sampler enabled!");
 		} else {
 			priv->sampler_en = 0;
 			if (!config->hca_attr.log_max_ft_sampler_num)
-				DRV_LOG(WARNING, "No available register for"
-						" Sampler.");
+				DRV_LOG(WARNING,
+					"No available register for sampler.");
 			else
-				DRV_LOG(DEBUG, "DV flow is not supported!\n");
+				DRV_LOG(DEBUG, "DV flow is not supported!");
 		}
 #endif
 	}

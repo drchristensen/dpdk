@@ -603,9 +603,11 @@ bnxt_set_ol_flags(struct bnxt_rx_ring_info *rxr, struct rx_pkt_cmpl *rxcmp,
 static void
 bnxt_get_rx_ts_p5(struct bnxt *bp, uint32_t rx_ts_cmpl)
 {
-	uint64_t systime_cycles = 0;
+	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
+	uint64_t last_hwrm_time;
+	uint64_t pkt_time = 0;
 
-	if (!BNXT_CHIP_P5(bp))
+	if (!BNXT_CHIP_P5(bp) || !ptp)
 		return;
 
 	/* On Thor, Rx timestamps are provided directly in the
@@ -616,10 +618,13 @@ bnxt_get_rx_ts_p5(struct bnxt *bp, uint32_t rx_ts_cmpl)
 	 * from the HWRM response with the lower 32 bits in the
 	 * Rx completion to produce the 48 bit timestamp for the Rx packet
 	 */
-	bnxt_hwrm_port_ts_query(bp, BNXT_PTP_FLAGS_CURRENT_TIME,
-				&systime_cycles);
-	bp->ptp_cfg->rx_timestamp = (systime_cycles & 0xFFFF00000000);
-	bp->ptp_cfg->rx_timestamp |= rx_ts_cmpl;
+	last_hwrm_time = ptp->current_time;
+	pkt_time = (last_hwrm_time & BNXT_PTP_CURRENT_TIME_MASK) | rx_ts_cmpl;
+	if (rx_ts_cmpl < (uint32_t)last_hwrm_time) {
+		/* timer has rolled over */
+		pkt_time += (1ULL << 32);
+	}
+	ptp->rx_timestamp = pkt_time;
 }
 #endif
 
@@ -986,7 +991,9 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 					cpr->cp_ring_struct->ring_mask,
 					cpr->valid);
 
-		if ((CMP_TYPE(rxcmp) >= CMPL_BASE_TYPE_RX_TPA_START_V2) &&
+		if (CMP_TYPE(rxcmp) == CMPL_BASE_TYPE_HWRM_DONE) {
+			PMD_DRV_LOG(ERR, "Rx flush done\n");
+		} else if ((CMP_TYPE(rxcmp) >= CMPL_BASE_TYPE_RX_TPA_START_V2) &&
 		     (CMP_TYPE(rxcmp) <= RX_TPA_V2_ABUF_CMPL_TYPE_RX_TPA_AGG)) {
 			rc = bnxt_rx_pkt(&rx_pkts[nb_rx_pkts], rxq, &raw_cons);
 			if (!rc)
@@ -1283,6 +1290,38 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 		}
 	}
 	PMD_DRV_LOG(DEBUG, "TPA alloc Done!\n");
+
+	return 0;
+}
+
+/* Sweep the Rx completion queue till HWRM_DONE for ring flush is received.
+ * The mbufs will not be freed in this call.
+ * They will be freed during ring free as a part of mem cleanup.
+ */
+int bnxt_flush_rx_cmp(struct bnxt_cp_ring_info *cpr)
+{
+	struct bnxt_ring *cp_ring_struct = cpr->cp_ring_struct;
+	uint32_t ring_mask = cp_ring_struct->ring_mask;
+	uint32_t raw_cons = cpr->cp_raw_cons;
+	struct rx_pkt_cmpl *rxcmp;
+	uint32_t nb_rx = 0;
+	uint32_t cons;
+
+	do {
+		cons = RING_CMP(cpr->cp_ring_struct, raw_cons);
+		rxcmp = (struct rx_pkt_cmpl *)&cpr->cp_desc_ring[cons];
+
+		if (CMP_TYPE(rxcmp) == CMPL_BASE_TYPE_HWRM_DONE)
+			return 1;
+
+		raw_cons = NEXT_RAW_CMP(raw_cons);
+		nb_rx++;
+	} while (nb_rx < ring_mask);
+
+	cpr->cp_raw_cons = raw_cons;
+
+	/* Ring the completion queue doorbell. */
+	bnxt_db_cq(cpr);
 
 	return 0;
 }

@@ -309,6 +309,7 @@ struct rte_flow {
 #define BNXT_PTP_FLAGS_PATH_TX		0x0
 #define BNXT_PTP_FLAGS_PATH_RX		0x1
 #define BNXT_PTP_FLAGS_CURRENT_TIME	0x2
+#define BNXT_PTP_CURRENT_TIME_MASK	0xFFFF00000000ULL
 
 struct bnxt_ptp_cfg {
 #define BNXT_GRCPF_REG_WINDOW_BASE_OUT  0x400
@@ -358,6 +359,7 @@ struct bnxt_ptp_cfg {
 
 	/* On Thor, the Rx timestamp is present in the Rx completion record */
 	uint64_t			rx_timestamp;
+	uint64_t			current_time;
 };
 
 struct bnxt_coal {
@@ -390,9 +392,17 @@ struct bnxt_coal {
 #define BNXT_MAX_RSS_CTXTS_P5 \
 	(BNXT_RSS_TBL_SIZE_P5 / BNXT_RSS_ENTRIES_PER_CTX_P5)
 
-#define BNXT_MAX_TC    8
-#define BNXT_MAX_QUEUE 8
-#define BNXT_MAX_TC_Q  (BNXT_MAX_TC + 1)
+#define BNXT_MAX_QUEUE			8
+#define BNXT_MAX_TQM_SP_RINGS		1
+#define BNXT_MAX_TQM_FP_LEGACY_RINGS	8
+#define BNXT_MAX_TQM_FP_RINGS		9
+#define BNXT_MAX_TQM_LEGACY_RINGS	\
+	(BNXT_MAX_TQM_SP_RINGS + BNXT_MAX_TQM_FP_LEGACY_RINGS)
+#define BNXT_MAX_TQM_RINGS		\
+	(BNXT_MAX_TQM_SP_RINGS + BNXT_MAX_TQM_FP_RINGS)
+#define BNXT_BACKING_STORE_CFG_LEGACY_LEN	256
+#define BNXT_BACKING_STORE_CFG_LEN	\
+	sizeof(struct hwrm_func_backing_store_cfg_input)
 #define BNXT_PAGE_SHFT 12
 #define BNXT_PAGE_SIZE (1 << BNXT_PAGE_SHFT)
 #define MAX_CTX_PAGES  (BNXT_PAGE_SIZE / 8)
@@ -461,7 +471,7 @@ struct bnxt_ctx_mem_info {
 	struct bnxt_ctx_pg_info cq_mem;
 	struct bnxt_ctx_pg_info vnic_mem;
 	struct bnxt_ctx_pg_info stat_mem;
-	struct bnxt_ctx_pg_info *tqm_mem[BNXT_MAX_TC_Q];
+	struct bnxt_ctx_pg_info *tqm_mem[BNXT_MAX_TQM_RINGS];
 };
 
 struct bnxt_ctx_mem_buf_info {
@@ -662,6 +672,12 @@ struct bnxt {
 #define BNXT_HAS_DFLT_MAC_SET(bp)      ((bp)->flags & BNXT_FLAG_DFLT_MAC_SET)
 #define BNXT_TRUFLOW_EN(bp)	((bp)->flags & BNXT_FLAG_TRUFLOW_EN)
 #define BNXT_GFID_ENABLED(bp)	((bp)->flags & BNXT_FLAG_GFID_ENABLE)
+
+	uint32_t			flags2;
+#define BNXT_FLAGS2_PTP_TIMESYNC_ENABLED	BIT(0)
+#define BNXT_FLAGS2_PTP_ALARM_SCHEDULED		BIT(1)
+#define BNXT_P5_PTP_TIMESYNC_ENABLED(bp)	\
+	((bp)->flags2 & BNXT_FLAGS2_PTP_TIMESYNC_ENABLED)
 
 	uint16_t		chip_num;
 #define CHIP_NUM_58818		0xd818

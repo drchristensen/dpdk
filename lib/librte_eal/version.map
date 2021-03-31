@@ -199,6 +199,7 @@ DPDK_21 {
 	rte_uuid_is_null;
 	rte_uuid_parse;
 	rte_uuid_unparse;
+	rte_version;
 	rte_vfio_clear_group;
 	rte_vfio_container_create;
 	rte_vfio_container_destroy;
@@ -408,10 +409,18 @@ EXPERIMENTAL {
 	rte_power_monitor;
 	rte_power_monitor_wakeup;
 	rte_power_pause;
-	rte_thread_tls_key_create;
-	rte_thread_tls_key_delete;
-	rte_thread_tls_value_get;
-	rte_thread_tls_value_set;
+
+	# added in 21.05
+	rte_thread_key_create;
+	rte_thread_key_delete;
+	rte_thread_value_get;
+	rte_thread_value_set;
+	rte_version_minor;
+	rte_version_month;
+	rte_version_prefix;
+	rte_version_release;
+	rte_version_suffix;
+	rte_version_year;
 };
 
 INTERNAL {

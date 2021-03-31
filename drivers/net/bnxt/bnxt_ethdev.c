@@ -1300,6 +1300,73 @@ static void bnxt_free_switch_domain(struct bnxt *bp)
 	}
 }
 
+static void bnxt_ptp_get_current_time(void *arg)
+{
+	struct bnxt *bp = arg;
+	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
+	int rc;
+
+	rc = is_bnxt_in_error(bp);
+	if (rc)
+		return;
+
+	if (!ptp)
+		return;
+
+	bnxt_hwrm_port_ts_query(bp, BNXT_PTP_FLAGS_CURRENT_TIME,
+				&ptp->current_time);
+
+	rc = rte_eal_alarm_set(US_PER_S, bnxt_ptp_get_current_time, (void *)bp);
+	if (rc != 0) {
+		PMD_DRV_LOG(ERR, "Failed to re-schedule PTP alarm\n");
+		bp->flags2 &= ~BNXT_FLAGS2_PTP_ALARM_SCHEDULED;
+	}
+}
+
+static int bnxt_schedule_ptp_alarm(struct bnxt *bp)
+{
+	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
+	int rc;
+
+	if (bp->flags2 & BNXT_FLAGS2_PTP_ALARM_SCHEDULED)
+		return 0;
+
+	bnxt_hwrm_port_ts_query(bp, BNXT_PTP_FLAGS_CURRENT_TIME,
+				&ptp->current_time);
+
+	rc = rte_eal_alarm_set(US_PER_S, bnxt_ptp_get_current_time, (void *)bp);
+	return rc;
+}
+
+static void bnxt_cancel_ptp_alarm(struct bnxt *bp)
+{
+	if (bp->flags2 & BNXT_FLAGS2_PTP_ALARM_SCHEDULED) {
+		rte_eal_alarm_cancel(bnxt_ptp_get_current_time, (void *)bp);
+		bp->flags2 &= ~BNXT_FLAGS2_PTP_ALARM_SCHEDULED;
+	}
+}
+
+static void bnxt_ptp_stop(struct bnxt *bp)
+{
+	bnxt_cancel_ptp_alarm(bp);
+	bp->flags2 &= ~BNXT_FLAGS2_PTP_TIMESYNC_ENABLED;
+}
+
+static int bnxt_ptp_start(struct bnxt *bp)
+{
+	int rc;
+
+	rc = bnxt_schedule_ptp_alarm(bp);
+	if (rc != 0) {
+		PMD_DRV_LOG(ERR, "Failed to schedule PTP alarm\n");
+	} else {
+		bp->flags2 |= BNXT_FLAGS2_PTP_TIMESYNC_ENABLED;
+		bp->flags2 |= BNXT_FLAGS2_PTP_ALARM_SCHEDULED;
+	}
+
+	return rc;
+}
+
 static int bnxt_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct bnxt *bp = eth_dev->data->dev_private;
@@ -1329,6 +1396,9 @@ static int bnxt_dev_stop(struct rte_eth_dev *eth_dev)
 	bnxt_ulp_port_deinit(bp);
 
 	bnxt_cancel_fw_health_check(bp);
+
+	if (BNXT_P5_PTP_TIMESYNC_ENABLED(bp))
+		bnxt_cancel_ptp_alarm(bp);
 
 	/* Do not bring link down during reset recovery */
 	if (!is_bnxt_in_error(bp)) {
@@ -1449,6 +1519,9 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 
 	bnxt_schedule_fw_health_check(bp);
 
+	if (BNXT_P5_PTP_TIMESYNC_ENABLED(bp))
+		bnxt_schedule_ptp_alarm(bp);
+
 	return 0;
 
 error:
@@ -1484,7 +1557,7 @@ static void bnxt_drv_uninit(struct bnxt *bp)
 	rte_memzone_free((const struct rte_memzone *)bp->rx_mem_zone);
 	bp->rx_mem_zone = NULL;
 
-	bnxt_hwrm_free_vf_info(bp);
+	bnxt_free_vf_info(bp);
 
 	rte_free(bp->grp_info);
 	bp->grp_info = NULL;
@@ -3003,42 +3076,109 @@ bnxt_rx_queue_count_op(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 static int
 bnxt_rx_descriptor_status_op(void *rx_queue, uint16_t offset)
 {
-	struct bnxt_rx_queue *rxq = (struct bnxt_rx_queue *)rx_queue;
-	struct bnxt_rx_ring_info *rxr;
+	struct bnxt_rx_queue *rxq = rx_queue;
 	struct bnxt_cp_ring_info *cpr;
-	struct rte_mbuf *rx_buf;
+	struct bnxt_rx_ring_info *rxr;
+	uint32_t desc, raw_cons;
+	struct bnxt *bp = rxq->bp;
 	struct rx_pkt_cmpl *rxcmp;
-	uint32_t cons, cp_cons;
 	int rc;
 
-	if (!rxq)
-		return -EINVAL;
-
-	rc = is_bnxt_in_error(rxq->bp);
+	rc = is_bnxt_in_error(bp);
 	if (rc)
 		return rc;
-
-	cpr = rxq->cp_ring;
-	rxr = rxq->rx_ring;
 
 	if (offset >= rxq->nb_rx_desc)
 		return -EINVAL;
 
-	cons = RING_CMP(cpr->cp_ring_struct, offset);
-	cp_cons = cpr->cp_raw_cons;
-	rxcmp = (struct rx_pkt_cmpl *)&cpr->cp_desc_ring[cons];
+	rxr = rxq->rx_ring;
+	cpr = rxq->cp_ring;
 
-	if (cons > cp_cons) {
-		if (CMPL_VALID(rxcmp, cpr->valid))
+	/*
+	 * For the vector receive case, the completion at the requested
+	 * offset can be indexed directly.
+	 */
+#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
+	if (bp->flags & BNXT_FLAG_RX_VECTOR_PKT_MODE) {
+		struct rx_pkt_cmpl *rxcmp;
+		uint32_t cons;
+
+		/* Check status of completion descriptor. */
+		raw_cons = cpr->cp_raw_cons +
+			   offset * CMP_LEN(CMPL_BASE_TYPE_RX_L2);
+		cons = RING_CMP(cpr->cp_ring_struct, raw_cons);
+		rxcmp = (struct rx_pkt_cmpl *)&cpr->cp_desc_ring[cons];
+
+		if (CMP_VALID(rxcmp, raw_cons, cpr->cp_ring_struct))
 			return RTE_ETH_RX_DESC_DONE;
-	} else {
-		if (CMPL_VALID(rxcmp, !cpr->valid))
-			return RTE_ETH_RX_DESC_DONE;
+
+		/* Check whether rx desc has an mbuf attached. */
+		cons = RING_CMP(rxr->rx_ring_struct, raw_cons / 2);
+		if (cons >= rxq->rxrearm_start &&
+		    cons < rxq->rxrearm_start + rxq->rxrearm_nb) {
+			return RTE_ETH_RX_DESC_UNAVAIL;
+		}
+
+		return RTE_ETH_RX_DESC_AVAIL;
 	}
-	rx_buf = rxr->rx_buf_ring[cons];
-	if (rx_buf == NULL || rx_buf == &rxq->fake_mbuf)
-		return RTE_ETH_RX_DESC_UNAVAIL;
+#endif
 
+	/*
+	 * For the non-vector receive case, scan the completion ring to
+	 * locate the completion descriptor for the requested offset.
+	 */
+	raw_cons = cpr->cp_raw_cons;
+	desc = 0;
+	while (1) {
+		uint32_t agg_cnt, cons, cmpl_type;
+
+		cons = RING_CMP(cpr->cp_ring_struct, raw_cons);
+		rxcmp = (struct rx_pkt_cmpl *)&cpr->cp_desc_ring[cons];
+
+		if (!CMP_VALID(rxcmp, raw_cons, cpr->cp_ring_struct))
+			break;
+
+		cmpl_type = CMP_TYPE(rxcmp);
+
+		switch (cmpl_type) {
+		case CMPL_BASE_TYPE_RX_L2:
+		case CMPL_BASE_TYPE_RX_L2_V2:
+			if (desc == offset) {
+				cons = rxcmp->opaque;
+				if (rxr->rx_buf_ring[cons])
+					return RTE_ETH_RX_DESC_DONE;
+				else
+					return RTE_ETH_RX_DESC_UNAVAIL;
+			}
+			agg_cnt = BNXT_RX_L2_AGG_BUFS(rxcmp);
+			raw_cons = raw_cons + CMP_LEN(cmpl_type) + agg_cnt;
+			desc++;
+			break;
+
+		case CMPL_BASE_TYPE_RX_TPA_END:
+			if (desc == offset)
+				return RTE_ETH_RX_DESC_DONE;
+
+			if (BNXT_CHIP_P5(rxq->bp)) {
+				struct rx_tpa_v2_end_cmpl_hi *p5_tpa_end;
+
+				p5_tpa_end = (void *)rxcmp;
+				agg_cnt = BNXT_TPA_END_AGG_BUFS_TH(p5_tpa_end);
+			} else {
+				struct rx_tpa_end_cmpl *tpa_end;
+
+				tpa_end = (void *)rxcmp;
+				agg_cnt = BNXT_TPA_END_AGG_BUFS(tpa_end);
+			}
+
+			raw_cons = raw_cons + CMP_LEN(cmpl_type) + agg_cnt;
+			desc++;
+			break;
+
+		default:
+			raw_cons += CMP_LEN(cmpl_type);
+		}
+	}
 
 	return RTE_ETH_RX_DESC_AVAIL;
 }
@@ -3049,7 +3189,7 @@ bnxt_tx_descriptor_status_op(void *tx_queue, uint16_t offset)
 	struct bnxt_tx_queue *txq = (struct bnxt_tx_queue *)tx_queue;
 	struct bnxt_tx_ring_info *txr;
 	struct bnxt_cp_ring_info *cpr;
-	struct bnxt_sw_tx_bd *tx_buf;
+	struct rte_mbuf **tx_buf;
 	struct tx_pkt_cmpl *txcmp;
 	uint32_t cons, cp_cons;
 	int rc;
@@ -3079,7 +3219,7 @@ bnxt_tx_descriptor_status_op(void *tx_queue, uint16_t offset)
 			return RTE_ETH_TX_DESC_UNAVAIL;
 	}
 	tx_buf = &txr->tx_buf_ring[cons];
-	if (tx_buf->mbuf == NULL)
+	if (*tx_buf == NULL)
 		return RTE_ETH_TX_DESC_DONE;
 
 	return RTE_ETH_TX_DESC_FULL;
@@ -3288,6 +3428,8 @@ bnxt_timesync_write_time(struct rte_eth_dev *dev, const struct timespec *ts)
 	ns = rte_timespec_to_ns(ts);
 	/* Set the timecounters to a new value. */
 	ptp->tc.nsec = ns;
+	ptp->tx_tstamp_tc.nsec = ns;
+	ptp->rx_tstamp_tc.nsec = ns;
 
 	return 0;
 }
@@ -3351,8 +3493,10 @@ bnxt_timesync_enable(struct rte_eth_dev *dev)
 
 	if (!BNXT_CHIP_P5(bp))
 		bnxt_map_ptp_regs(bp);
+	else
+		rc = bnxt_ptp_start(bp);
 
-	return 0;
+	return rc;
 }
 
 static int
@@ -3372,6 +3516,8 @@ bnxt_timesync_disable(struct rte_eth_dev *dev)
 
 	if (!BNXT_CHIP_P5(bp))
 		bnxt_unmap_ptp_regs(bp);
+	else
+		bnxt_ptp_stop(bp);
 
 	return 0;
 }
@@ -3434,6 +3580,8 @@ bnxt_timesync_adjust_time(struct rte_eth_dev *dev, int64_t delta)
 		return 0;
 
 	ptp->tc.nsec += delta;
+	ptp->tx_tstamp_tc.nsec += delta;
+	ptp->rx_tstamp_tc.nsec += delta;
 
 	return 0;
 }
@@ -3743,6 +3891,32 @@ static void bnxt_dev_cleanup(struct bnxt *bp)
 	bnxt_uninit_resources(bp, true);
 }
 
+static int
+bnxt_check_fw_reset_done(struct bnxt *bp)
+{
+	int timeout = bp->fw_reset_max_msecs;
+	uint16_t val = 0;
+	int rc;
+
+	do {
+		rc = rte_pci_read_config(bp->pdev, &val, sizeof(val), PCI_SUBSYSTEM_ID_OFFSET);
+		if (rc < 0) {
+			PMD_DRV_LOG(ERR, "Failed to read PCI offset 0x%x", PCI_SUBSYSTEM_ID_OFFSET);
+			return rc;
+		}
+		if (val != 0xffff)
+			break;
+		rte_delay_ms(1);
+	} while (timeout--);
+
+	if (val == 0xffff) {
+		PMD_DRV_LOG(ERR, "Firmware reset aborted, PCI config space invalid\n");
+		return -1;
+	}
+
+	return 0;
+}
+
 static int bnxt_restore_vlan_filters(struct bnxt *bp)
 {
 	struct rte_eth_dev *dev = bp->eth_dev;
@@ -3833,28 +4007,44 @@ static int bnxt_restore_filters(struct bnxt *bp)
 	return ret;
 }
 
-static void bnxt_dev_recover(void *arg)
+static int bnxt_check_fw_ready(struct bnxt *bp)
 {
-	struct bnxt *bp = arg;
 	int timeout = bp->fw_reset_max_msecs;
 	int rc = 0;
 
-	pthread_mutex_lock(&bp->err_recovery_lock);
-	/* Clear Error flag so that device re-init should happen */
-	bp->flags &= ~BNXT_FLAG_FATAL_ERROR;
-
 	do {
-		rc = bnxt_hwrm_ver_get(bp, SHORT_HWRM_CMD_TIMEOUT);
+		rc = bnxt_hwrm_poll_ver_get(bp);
 		if (rc == 0)
 			break;
 		rte_delay_ms(BNXT_FW_READY_WAIT_INTERVAL);
 		timeout -= BNXT_FW_READY_WAIT_INTERVAL;
-	} while (rc && timeout);
+	} while (rc && timeout > 0);
 
-	if (rc) {
+	if (rc)
 		PMD_DRV_LOG(ERR, "FW is not Ready after reset\n");
-		goto err;
+
+	return rc;
+}
+
+static void bnxt_dev_recover(void *arg)
+{
+	struct bnxt *bp = arg;
+	int rc = 0;
+
+	pthread_mutex_lock(&bp->err_recovery_lock);
+
+	if (!bp->fw_reset_min_msecs) {
+		rc = bnxt_check_fw_reset_done(bp);
+		if (rc)
+			goto err;
 	}
+
+	/* Clear Error flag so that device re-init should happen */
+	bp->flags &= ~BNXT_FLAG_FATAL_ERROR;
+
+	rc = bnxt_check_fw_ready(bp);
+	if (rc)
+		goto err;
 
 	rc = bnxt_init_resources(bp, true);
 	if (rc) {
@@ -3891,14 +4081,33 @@ err:
 void bnxt_dev_reset_and_resume(void *arg)
 {
 	struct bnxt *bp = arg;
+	uint32_t us = US_PER_MS * bp->fw_reset_min_msecs;
+	uint16_t val = 0;
 	int rc;
 
 	bnxt_dev_cleanup(bp);
 
 	bnxt_wait_for_device_shutdown(bp);
 
-	rc = rte_eal_alarm_set(US_PER_MS * bp->fw_reset_min_msecs,
-			       bnxt_dev_recover, (void *)bp);
+	/* During some fatal firmware error conditions, the PCI config space
+	 * register 0x2e which normally contains the subsystem ID will become
+	 * 0xffff. This register will revert back to the normal value after
+	 * the chip has completed core reset. If we detect this condition,
+	 * we can poll this config register immediately for the value to revert.
+	 */
+	if (bp->flags & BNXT_FLAG_FATAL_ERROR) {
+		rc = rte_pci_read_config(bp->pdev, &val, sizeof(val), PCI_SUBSYSTEM_ID_OFFSET);
+		if (rc < 0) {
+			PMD_DRV_LOG(ERR, "Failed to read PCI offset 0x%x", PCI_SUBSYSTEM_ID_OFFSET);
+			return;
+		}
+		if (val == 0xffff) {
+			bp->fw_reset_min_msecs = 0;
+			us = 1;
+		}
+	}
+
+	rc = rte_eal_alarm_set(us, bnxt_dev_recover, (void *)bp);
 	if (rc)
 		PMD_DRV_LOG(ERR, "Error setting recovery alarm");
 }
@@ -4354,15 +4563,22 @@ int bnxt_alloc_ctx_mem(struct bnxt *bp)
 	entries = clamp_t(uint32_t, entries, min,
 			  ctx->tqm_max_entries_per_ring);
 	for (i = 0, ena = 0; i < ctx->tqm_fp_rings_count + 1; i++) {
+		/* i=0 is for TQM_SP. i=1 to i=8 applies to RING0 to RING7.
+		 * i > 8 is other ext rings.
+		 */
 		ctx_pg = ctx->tqm_mem[i];
 		ctx_pg->entries = i ? entries : entries_sp;
 		if (ctx->tqm_entry_size) {
 			mem_size = ctx->tqm_entry_size * ctx_pg->entries;
-			rc = bnxt_alloc_ctx_mem_blk(bp, ctx_pg, mem_size, "tqm_mem", i);
+			rc = bnxt_alloc_ctx_mem_blk(bp, ctx_pg, mem_size,
+						    "tqm_mem", i);
 			if (rc)
 				return rc;
 		}
-		ena |= HWRM_FUNC_BACKING_STORE_CFG_INPUT_ENABLES_TQM_SP << i;
+		if (i < BNXT_MAX_TQM_LEGACY_RINGS)
+			ena |= HWRM_FUNC_BACKING_STORE_CFG_INPUT_ENABLES_TQM_SP << i;
+		else
+			ena |= HWRM_FUNC_BACKING_STORE_CFG_INPUT_ENABLES_TQM_RING8;
 	}
 
 	ena |= FUNC_BACKING_STORE_CFG_INPUT_DFLT_ENABLES;
@@ -5646,6 +5862,13 @@ static int bnxt_rep_port_probe(struct rte_pci_device *pci_dev,
 	int i, ret = 0;
 	struct rte_kvargs *kvlist = NULL;
 
+	if (eth_da->type == RTE_ETH_REPRESENTOR_NONE)
+		return 0;
+	if (eth_da->type != RTE_ETH_REPRESENTOR_VF) {
+		PMD_DRV_LOG(ERR, "unsupported representor type %d\n",
+			    eth_da->type);
+		return -ENOTSUP;
+	}
 	num_rep = eth_da->nb_representor_ports;
 	if (num_rep > BNXT_MAX_VF_REPS) {
 		PMD_DRV_LOG(ERR, "nb_representor_ports = %d > %d MAX VF REPS\n",

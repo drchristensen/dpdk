@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2016-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -2160,6 +2160,13 @@ sfc_eth_dev_init(struct rte_eth_dev *dev)
 	const efx_nic_cfg_t *encp;
 	const struct rte_ether_addr *from;
 	int ret;
+
+	if (sfc_efx_dev_class_get(pci_dev->device.devargs) !=
+			SFC_EFX_DEV_CLASS_NET) {
+		SFC_GENERIC_LOG(DEBUG,
+			"Incompatible device class: skip probing, should be probed by other sfc driver.");
+		return 1;
+	}
 
 	sfc_register_dp();
 

@@ -42,11 +42,38 @@ struct table {
 	struct rte_swx_table_ops ops;
 	struct rte_swx_table_params params;
 
+	/* Set of "stable" keys: these keys are currently part of the table;
+	 * these keys will be preserved with no action data changes after the
+	 * next commit.
+	 */
 	struct rte_swx_table_entry_list entries;
+
+	/* Set of new keys: these keys are currently NOT part of the table;
+	 * these keys will be added to the table on the next commit, if
+	 * the commit operation is successful.
+	 */
 	struct rte_swx_table_entry_list pending_add;
+
+	/* Set of keys to be modified: these keys are currently part of the
+	 * table; these keys are still going to be part of the table after the
+	 * next commit, but their action data will be modified if the commit
+	 * operation is successful. The modify0 list contains the keys with the
+	 * current action data, the modify1 list contains the keys with the
+	 * modified action data.
+	 */
 	struct rte_swx_table_entry_list pending_modify0;
 	struct rte_swx_table_entry_list pending_modify1;
+
+	/* Set of keys to be deleted: these keys are currently part of the
+	 * table; these keys are to be deleted from the table on the next
+	 * commit, if the commit operation is successful.
+	 */
 	struct rte_swx_table_entry_list pending_delete;
+
+	/* The pending default action: this is NOT the current default action;
+	 * this will be the new default action after the next commit, if the
+	 * next commit operation is successful.
+	 */
 	struct rte_swx_table_entry *pending_default;
 
 	int is_stub;
@@ -235,6 +262,26 @@ error:
 }
 
 static int
+table_entry_key_check_em(struct table *table, struct rte_swx_table_entry *entry)
+{
+	uint8_t *key_mask0 = table->params.key_mask0;
+	uint32_t key_size = table->params.key_size, i;
+
+	if (!entry->key_mask)
+		return 0;
+
+	for (i = 0; i < key_size; i++) {
+		uint8_t km0 = key_mask0[i];
+		uint8_t km = entry->key_mask[i];
+
+		if ((km & km0) != km0)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int
 table_entry_check(struct rte_swx_ctl_pipeline *ctl,
 		  uint32_t table_id,
 		  struct rte_swx_table_entry *entry,
@@ -242,6 +289,7 @@ table_entry_check(struct rte_swx_ctl_pipeline *ctl,
 		  int data_check)
 {
 	struct table *table = &ctl->tables[table_id];
+	int status;
 
 	CHECK(entry, EINVAL);
 
@@ -266,7 +314,9 @@ table_entry_check(struct rte_swx_ctl_pipeline *ctl,
 				break;
 
 			case RTE_SWX_TABLE_MATCH_EXACT:
-				CHECK(!entry->key_mask, EINVAL);
+				status = table_entry_key_check_em(table, entry);
+				if (status)
+					return status;
 				break;
 
 			default:
@@ -327,10 +377,7 @@ table_entry_duplicate(struct rte_swx_ctl_pipeline *ctl,
 		new_entry->key_signature = entry->key_signature;
 
 		/* key_mask. */
-		if (table->params.match_type != RTE_SWX_TABLE_MATCH_EXACT) {
-			if (!entry->key_mask)
-				goto error;
-
+		if (entry->key_mask) {
 			new_entry->key_mask = malloc(table->params.key_size);
 			if (!new_entry->key_mask)
 				goto error;
@@ -339,6 +386,9 @@ table_entry_duplicate(struct rte_swx_ctl_pipeline *ctl,
 			       entry->key_mask,
 			       table->params.key_size);
 		}
+
+		/* key_priority. */
+		new_entry->key_priority = entry->key_priority;
 	}
 
 	if (data_duplicate) {
@@ -357,18 +407,24 @@ table_entry_duplicate(struct rte_swx_ctl_pipeline *ctl,
 
 		/* action_data. */
 		a = &ctl->actions[entry->action_id];
-		if (a->data_size) {
-			if (!entry->action_data)
-				goto error;
+		if (a->data_size && !entry->action_data)
+			goto error;
 
-			new_entry->action_data = malloc(a->data_size);
-			if (!new_entry->action_data)
-				goto error;
+		/* The table layer provisions a constant action data size per
+		 * entry, which should be the largest data size for all the
+		 * actions enabled for the current table, and attempts to copy
+		 * this many bytes each time a table entry is added, even if the
+		 * specific action requires less data or even no data at all,
+		 * hence we always have to allocate the max.
+		 */
+		new_entry->action_data = calloc(1, table->params.action_data_size);
+		if (!new_entry->action_data)
+			goto error;
 
+		if (a->data_size)
 			memcpy(new_entry->action_data,
 			       entry->action_data,
 			       a->data_size);
-		}
 	}
 
 	return new_entry;
@@ -379,57 +435,35 @@ error:
 }
 
 static int
-entry_keycmp_em(struct rte_swx_table_entry *e0,
-		struct rte_swx_table_entry *e1,
-		uint32_t key_size)
-{
-	if (e0->key_signature != e1->key_signature)
-		return 1; /* Not equal. */
-
-	if (memcmp(e0->key, e1->key, key_size))
-		return 1; /* Not equal. */
-
-	return 0; /* Equal */
-}
-
-static int
-entry_keycmp_wm(struct rte_swx_table_entry *e0 __rte_unused,
-		struct rte_swx_table_entry *e1 __rte_unused,
-		uint32_t key_size __rte_unused)
-{
-	/* TBD */
-
-	return 1; /* Not equal */
-}
-
-static int
-entry_keycmp_lpm(struct rte_swx_table_entry *e0 __rte_unused,
-		 struct rte_swx_table_entry *e1 __rte_unused,
-		 uint32_t key_size __rte_unused)
-{
-	/* TBD */
-
-	return 1; /* Not equal */
-}
-
-static int
 table_entry_keycmp(struct table *table,
 		   struct rte_swx_table_entry *e0,
 		   struct rte_swx_table_entry *e1)
 {
-	switch (table->params.match_type) {
-	case RTE_SWX_TABLE_MATCH_EXACT:
-		return entry_keycmp_em(e0, e1, table->params.key_size);
+	uint32_t key_size = table->params.key_size;
+	uint32_t i;
 
-	case RTE_SWX_TABLE_MATCH_WILDCARD:
-		return entry_keycmp_wm(e0, e1, table->params.key_size);
+	for (i = 0; i < key_size; i++) {
+		uint8_t *key_mask0 = table->params.key_mask0;
+		uint8_t km0, km[2], k[2];
 
-	case RTE_SWX_TABLE_MATCH_LPM:
-		return entry_keycmp_lpm(e0, e1, table->params.key_size);
+		km0 = key_mask0 ? key_mask0[i] : 0xFF;
 
-	default:
-		return 1; /* Not equal. */
+		km[0] = e0->key_mask ? e0->key_mask[i] : 0xFF;
+		km[1] = e1->key_mask ? e1->key_mask[i] : 0xFF;
+
+		k[0] = e0->key[i];
+		k[1] = e1->key[i];
+
+		/* Mask comparison. */
+		if ((km[0] & km0) != (km[1] & km0))
+			return 1; /* Not equal. */
+
+		/* Value comparison. */
+		if ((k[0] & km[0] & km0) != (k[1] & km[1] & km0))
+			return 1; /* Not equal. */
 	}
+
+	return 0; /* Equal. */
 }
 
 static struct rte_swx_table_entry *
@@ -605,6 +639,31 @@ table_pending_default_free(struct table *table)
 	table->pending_default = NULL;
 }
 
+static int
+table_is_update_pending(struct table *table, int consider_pending_default)
+{
+	struct rte_swx_table_entry *e;
+	uint32_t n = 0;
+
+	/* Pending add. */
+	TAILQ_FOREACH(e, &table->pending_add, node)
+		n++;
+
+	/* Pending modify. */
+	TAILQ_FOREACH(e, &table->pending_modify1, node)
+		n++;
+
+	/* Pending delete. */
+	TAILQ_FOREACH(e, &table->pending_delete, node)
+		n++;
+
+	/* Pending default. */
+	if (consider_pending_default && table->pending_default)
+		n++;
+
+	return n;
+}
+
 static void
 table_free(struct rte_swx_ctl_pipeline *ctl)
 {
@@ -676,7 +735,7 @@ table_state_create(struct rte_swx_ctl_pipeline *ctl)
 		struct rte_swx_table_state *ts_next = &ctl->ts_next[i];
 
 		/* Table object. */
-		if (!table->is_stub) {
+		if (!table->is_stub && table->ops.add) {
 			ts_next->obj = table->ops.create(&table->params,
 							 &table->entries,
 							 table->info.args,
@@ -686,6 +745,9 @@ table_state_create(struct rte_swx_ctl_pipeline *ctl)
 				goto error;
 			}
 		}
+
+		if (!table->is_stub && !table->ops.add)
+			ts_next->obj = ts->obj;
 
 		/* Default action data: duplicate from current table state. */
 		ts_next->default_action_data =
@@ -893,6 +955,9 @@ rte_swx_ctl_pipeline_table_entry_add(struct rte_swx_ctl_pipeline *ctl,
 	CHECK(table, EINVAL);
 	table_id = table - ctl->tables;
 
+	CHECK(entry, EINVAL);
+	CHECK(!table_entry_check(ctl, table_id, entry, 1, 1), EINVAL);
+
 	new_entry = table_entry_duplicate(ctl, table_id, entry, 1, 1);
 	CHECK(new_entry, ENOMEM);
 
@@ -1095,6 +1160,9 @@ rte_swx_ctl_pipeline_table_default_entry_add(struct rte_swx_ctl_pipeline *ctl,
 	table_id = table - ctl->tables;
 	CHECK(!table->info.default_action_is_const, EINVAL);
 
+	CHECK(entry, EINVAL);
+	CHECK(!table_entry_check(ctl, table_id, entry, 0, 1), EINVAL);
+
 	new_entry = table_entry_duplicate(ctl, table_id, entry, 0, 1);
 	CHECK(new_entry, ENOMEM);
 
@@ -1104,54 +1172,173 @@ rte_swx_ctl_pipeline_table_default_entry_add(struct rte_swx_ctl_pipeline *ctl,
 	return 0;
 }
 
+
+static void
+table_entry_list_free(struct rte_swx_table_entry_list *list)
+{
+	for ( ; ; ) {
+		struct rte_swx_table_entry *entry;
+
+		entry = TAILQ_FIRST(list);
+		if (!entry)
+			break;
+
+		TAILQ_REMOVE(list, entry, node);
+		table_entry_free(entry);
+	}
+}
+
 static int
-table_rollfwd0(struct rte_swx_ctl_pipeline *ctl, uint32_t table_id)
+table_entry_list_duplicate(struct rte_swx_ctl_pipeline *ctl,
+			   uint32_t table_id,
+			   struct rte_swx_table_entry_list *dst,
+			   struct rte_swx_table_entry_list *src)
+{
+	struct rte_swx_table_entry *src_entry;
+
+	TAILQ_FOREACH(src_entry, src, node) {
+		struct rte_swx_table_entry *dst_entry;
+
+		dst_entry = table_entry_duplicate(ctl, table_id, src_entry, 1, 1);
+		if (!dst_entry)
+			goto error;
+
+		TAILQ_INSERT_TAIL(dst, dst_entry, node);
+	}
+
+	return 0;
+
+error:
+	table_entry_list_free(dst);
+	return -ENOMEM;
+}
+
+/* This commit stage contains all the operations that can fail; in case ANY of
+ * them fails for ANY table, ALL of them are rolled back for ALL the tables.
+ */
+static int
+table_rollfwd0(struct rte_swx_ctl_pipeline *ctl,
+	       uint32_t table_id,
+	       uint32_t after_swap)
 {
 	struct table *table = &ctl->tables[table_id];
+	struct rte_swx_table_state *ts = &ctl->ts[table_id];
 	struct rte_swx_table_state *ts_next = &ctl->ts_next[table_id];
-	struct rte_swx_table_entry *entry;
 
-	/* Reset counters. */
-	table->n_add = 0;
-	table->n_modify = 0;
-	table->n_delete = 0;
+	if (table->is_stub || !table_is_update_pending(table, 0))
+		return 0;
 
-	/* Add pending rules. */
-	TAILQ_FOREACH(entry, &table->pending_add, node) {
-		int status;
+	/*
+	 * Current table supports incremental update.
+	 */
+	if (table->ops.add) {
+		/* Reset counters. */
+		table->n_add = 0;
+		table->n_modify = 0;
+		table->n_delete = 0;
 
-		status = table->ops.add(ts_next->obj, entry);
-		if (status)
-			return status;
+		/* Add pending rules. */
+		struct rte_swx_table_entry *entry;
 
-		table->n_add++;
+		TAILQ_FOREACH(entry, &table->pending_add, node) {
+			int status;
+
+			status = table->ops.add(ts_next->obj, entry);
+			if (status)
+				return status;
+
+			table->n_add++;
+		}
+
+		/* Modify pending rules. */
+		TAILQ_FOREACH(entry, &table->pending_modify1, node) {
+			int status;
+
+			status = table->ops.add(ts_next->obj, entry);
+			if (status)
+				return status;
+
+			table->n_modify++;
+		}
+
+		/* Delete pending rules. */
+		TAILQ_FOREACH(entry, &table->pending_delete, node) {
+			int status;
+
+			status = table->ops.del(ts_next->obj, entry);
+			if (status)
+				return status;
+
+			table->n_delete++;
+		}
+
+		return 0;
 	}
 
-	/* Modify pending rules. */
-	TAILQ_FOREACH(entry, &table->pending_modify1, node) {
+	/*
+	 * Current table does NOT support incremental update.
+	 */
+	if (!after_swap) {
+		struct rte_swx_table_entry_list list;
 		int status;
 
-		status = table->ops.add(ts_next->obj, entry);
-		if (status)
-			return status;
+		/* Create updated list of entries included. */
+		TAILQ_INIT(&list);
 
-		table->n_modify++;
+		status = table_entry_list_duplicate(ctl,
+						    table_id,
+						    &list,
+						    &table->entries);
+		if (status)
+			goto error;
+
+		status = table_entry_list_duplicate(ctl,
+						    table_id,
+						    &list,
+						    &table->pending_add);
+		if (status)
+			goto error;
+
+		status = table_entry_list_duplicate(ctl,
+						    table_id,
+						    &list,
+						    &table->pending_modify1);
+		if (status)
+			goto error;
+
+		/* Create new table object with the updates included. */
+		ts_next->obj = table->ops.create(&table->params,
+						 &list,
+						 table->info.args,
+						 ctl->numa_node);
+		if (!ts_next->obj) {
+			status = -ENODEV;
+			goto error;
+		}
+
+		table_entry_list_free(&list);
+
+		return 0;
+
+error:
+		table_entry_list_free(&list);
+		return status;
 	}
 
-	/* Delete pending rules. */
-	TAILQ_FOREACH(entry, &table->pending_delete, node) {
-		int status;
+	/* Free the old table object. */
+	if (ts_next->obj && table->ops.free)
+		table->ops.free(ts_next->obj);
 
-		status = table->ops.del(ts_next->obj, entry);
-		if (status)
-			return status;
-
-		table->n_delete++;
-	}
+	/* Copy over the new table object. */
+	ts_next->obj = ts->obj;
 
 	return 0;
 }
 
+/* This commit stage contains all the operations that cannot fail. They are
+ * executed only if the previous stage was successful for ALL the tables. Hence,
+ * none of these operations has to be rolled back for ANY table.
+ */
 static void
 table_rollfwd1(struct rte_swx_ctl_pipeline *ctl, uint32_t table_id)
 {
@@ -1176,6 +1363,10 @@ table_rollfwd1(struct rte_swx_ctl_pipeline *ctl, uint32_t table_id)
 	ts_next->default_action_id = action_id;
 }
 
+/* This last commit stage is simply finalizing a successful commit operation.
+ * This stage is only executed if all the previous stages were successful. This
+ * stage cannot fail.
+ */
 static void
 table_rollfwd2(struct rte_swx_ctl_pipeline *ctl, uint32_t table_id)
 {
@@ -1202,43 +1393,66 @@ table_rollfwd2(struct rte_swx_ctl_pipeline *ctl, uint32_t table_id)
 	table_pending_default_free(table);
 }
 
+/* The rollback stage is only executed when the commit failed, i.e. ANY of the
+ * commit operations that can fail did fail for ANY table. It reverts ALL the
+ * tables to their state before the commit started, as if the commit never
+ * happened.
+ */
 static void
 table_rollback(struct rte_swx_ctl_pipeline *ctl, uint32_t table_id)
 {
 	struct table *table = &ctl->tables[table_id];
 	struct rte_swx_table_state *ts_next = &ctl->ts_next[table_id];
-	struct rte_swx_table_entry *entry;
 
-	/* Add back all the entries that were just deleted. */
-	TAILQ_FOREACH(entry, &table->pending_delete, node) {
-		if (!table->n_delete)
-			break;
+	if (table->is_stub || !table_is_update_pending(table, 0))
+		return;
 
-		table->ops.add(ts_next->obj, entry);
-		table->n_delete--;
-	}
+	if (table->ops.add) {
+		struct rte_swx_table_entry *entry;
 
-	/* Add back the old copy for all the entries that were just
-	 * modified.
-	 */
-	TAILQ_FOREACH(entry, &table->pending_modify0, node) {
-		if (!table->n_modify)
-			break;
+		/* Add back all the entries that were just deleted. */
+		TAILQ_FOREACH(entry, &table->pending_delete, node) {
+			if (!table->n_delete)
+				break;
 
-		table->ops.add(ts_next->obj, entry);
-		table->n_modify--;
-	}
+			table->ops.add(ts_next->obj, entry);
+			table->n_delete--;
+		}
 
-	/* Delete all the entries that were just added. */
-	TAILQ_FOREACH(entry, &table->pending_add, node) {
-		if (!table->n_add)
-			break;
+		/* Add back the old copy for all the entries that were just
+		 * modified.
+		 */
+		TAILQ_FOREACH(entry, &table->pending_modify0, node) {
+			if (!table->n_modify)
+				break;
 
-		table->ops.del(ts_next->obj, entry);
-		table->n_add--;
+			table->ops.add(ts_next->obj, entry);
+			table->n_modify--;
+		}
+
+		/* Delete all the entries that were just added. */
+		TAILQ_FOREACH(entry, &table->pending_add, node) {
+			if (!table->n_add)
+				break;
+
+			table->ops.del(ts_next->obj, entry);
+			table->n_add--;
+		}
+	} else {
+		struct rte_swx_table_state *ts = &ctl->ts[table_id];
+
+		/* Free the new table object, as update was cancelled. */
+		if (ts_next->obj && table->ops.free)
+			table->ops.free(ts_next->obj);
+
+		/* Reinstate the old table object. */
+		ts_next->obj = ts->obj;
 	}
 }
 
+/* This stage is conditionally executed (as instructed by the user) after a
+ * failed commit operation to remove ALL the pending work for ALL the tables.
+ */
 static void
 table_abort(struct rte_swx_ctl_pipeline *ctl, uint32_t table_id)
 {
@@ -1280,7 +1494,7 @@ rte_swx_ctl_pipeline_commit(struct rte_swx_ctl_pipeline *ctl, int abort_on_fail)
 	 * ts.
 	 */
 	for (i = 0; i < ctl->info.n_tables; i++) {
-		status = table_rollfwd0(ctl, i);
+		status = table_rollfwd0(ctl, i, 0);
 		if (status)
 			goto rollback;
 	}
@@ -1300,7 +1514,7 @@ rte_swx_ctl_pipeline_commit(struct rte_swx_ctl_pipeline *ctl, int abort_on_fail)
 	/* Operate the changes on the current ts_next, which is the previous ts.
 	 */
 	for (i = 0; i < ctl->info.n_tables; i++) {
-		table_rollfwd0(ctl, i);
+		table_rollfwd0(ctl, i, 1);
 		table_rollfwd1(ctl, i);
 		table_rollfwd2(ctl, i);
 	}
@@ -1329,19 +1543,32 @@ rte_swx_ctl_pipeline_abort(struct rte_swx_ctl_pipeline *ctl)
 		table_abort(ctl, i);
 }
 
+static int
+token_is_comment(const char *token)
+{
+	if ((token[0] == '#') ||
+	    (token[0] == ';') ||
+	    ((token[0] == '/') && (token[1] == '/')))
+		return 1; /* TRUE. */
+
+	return 0; /* FALSE. */
+}
+
 #define RTE_SWX_CTL_ENTRY_TOKENS_MAX 256
 
 struct rte_swx_table_entry *
 rte_swx_ctl_pipeline_table_entry_read(struct rte_swx_ctl_pipeline *ctl,
 				      const char *table_name,
-				      const char *string)
+				      const char *string,
+				      int *is_blank_or_comment)
 {
-	char *tokens[RTE_SWX_CTL_ENTRY_TOKENS_MAX];
+	char *token_array[RTE_SWX_CTL_ENTRY_TOKENS_MAX], **tokens;
 	struct table *table;
 	struct action *action;
 	struct rte_swx_table_entry *entry = NULL;
 	char *s0 = NULL, *s;
 	uint32_t n_tokens = 0, arg_offset = 0, i;
+	int blank_or_comment = 0;
 
 	/* Check input arguments. */
 	if (!ctl)
@@ -1371,37 +1598,66 @@ rte_swx_ctl_pipeline_table_entry_read(struct rte_swx_ctl_pipeline *ctl,
 		char *token;
 
 		token = strtok_r(s, " \f\n\r\t\v", &s);
-		if (!token)
+		if (!token || token_is_comment(token))
 			break;
 
 		if (n_tokens >= RTE_SWX_CTL_ENTRY_TOKENS_MAX)
 			goto error;
 
-		tokens[n_tokens] = token;
+		token_array[n_tokens] = token;
 		n_tokens++;
 	}
 
-	if ((n_tokens < 3 + table->info.n_match_fields) ||
-	    strcmp(tokens[0], "match") ||
-	    strcmp(tokens[1 + table->info.n_match_fields], "action"))
+	if (!n_tokens) {
+		blank_or_comment = 1;
 		goto error;
+	}
 
-	action = action_find(ctl, tokens[2 + table->info.n_match_fields]);
-	if (!action)
-		goto error;
-
-	if (n_tokens != 3 + table->info.n_match_fields +
-	    action->info.n_args * 2)
-		goto error;
+	tokens = token_array;
 
 	/*
 	 * Match.
 	 */
+	if (n_tokens && strcmp(tokens[0], "match"))
+		goto action;
+
+	if (n_tokens < 1 + table->info.n_match_fields)
+		goto error;
+
 	for (i = 0; i < table->info.n_match_fields; i++) {
 		struct rte_swx_ctl_table_match_field_info *mf = &table->mf[i];
-		char *mf_val = tokens[1 + i];
-		uint64_t val;
+		char *mf_val = tokens[1 + i], *mf_mask = NULL;
+		uint64_t val, mask = UINT64_MAX;
+		uint32_t offset = (mf->offset - table->mf[0].offset) / 8;
 
+		/*
+		 * Mask.
+		 */
+		mf_mask = strchr(mf_val, '/');
+		if (mf_mask) {
+			*mf_mask = 0;
+			mf_mask++;
+
+			/* Parse. */
+			mask = strtoull(mf_mask, &mf_mask, 0);
+			if (mf_mask[0])
+				goto error;
+
+			/* Endianness conversion. */
+			if (mf->is_header)
+				mask = field_hton(mask, mf->n_bits);
+		}
+
+		/* Copy to entry. */
+		if (entry->key_mask)
+			memcpy(&entry->key_mask[offset],
+			       (uint8_t *)&mask,
+			       mf->n_bits / 8);
+
+		/*
+		 * Value.
+		 */
+		/* Parse. */
 		val = strtoull(mf_val, &mf_val, 0);
 		if (mf_val[0])
 			goto error;
@@ -1410,17 +1666,54 @@ rte_swx_ctl_pipeline_table_entry_read(struct rte_swx_ctl_pipeline *ctl,
 		if (mf->is_header)
 			val = field_hton(val, mf->n_bits);
 
-		/* Copy key and key_mask to entry. */
-		memcpy(&entry->key[(mf->offset - table->mf[0].offset) / 8],
+		/* Copy to entry. */
+		memcpy(&entry->key[offset],
 		       (uint8_t *)&val,
 		       mf->n_bits / 8);
+	}
 
-		/* TBD Set entry->key_mask for wildcard and LPM tables. */
+	tokens += 1 + table->info.n_match_fields;
+	n_tokens -= 1 + table->info.n_match_fields;
+
+	/*
+	 * Match priority.
+	 */
+	if (n_tokens && !strcmp(tokens[0], "priority")) {
+		char *priority = tokens[1];
+		uint32_t val;
+
+		if (n_tokens < 2)
+			goto error;
+
+		/* Parse. */
+		val = strtoul(priority, &priority, 0);
+		if (priority[0])
+			goto error;
+
+		/* Copy to entry. */
+		entry->key_priority = val;
+
+		tokens += 2;
+		n_tokens -= 2;
 	}
 
 	/*
 	 * Action.
 	 */
+action:
+	if (n_tokens && strcmp(tokens[0], "action"))
+		goto other;
+
+	if (n_tokens < 2)
+		goto error;
+
+	action = action_find(ctl, tokens[1]);
+	if (!action)
+		goto error;
+
+	if (n_tokens < 2 + action->info.n_args * 2)
+		goto error;
+
 	/* action_id. */
 	entry->action_id = action - ctl->actions;
 
@@ -1431,8 +1724,8 @@ rte_swx_ctl_pipeline_table_entry_read(struct rte_swx_ctl_pipeline *ctl,
 		uint64_t val;
 		int is_nbo = 0;
 
-		arg_name = tokens[3 + table->info.n_match_fields + i * 2];
-		arg_val = tokens[3 + table->info.n_match_fields + i * 2 + 1];
+		arg_name = tokens[2 + i * 2];
+		arg_val = tokens[2 + i * 2 + 1];
 
 		if (strcmp(arg_name, arg->name) ||
 		    (strlen(arg_val) < 4) ||
@@ -1463,13 +1756,50 @@ rte_swx_ctl_pipeline_table_entry_read(struct rte_swx_ctl_pipeline *ctl,
 		arg_offset += arg->n_bits / 8;
 	}
 
+	tokens += 2 + action->info.n_args * 2;
+	n_tokens -= 2 + action->info.n_args * 2;
+
+other:
+	if (n_tokens)
+		goto error;
+
 	free(s0);
 	return entry;
 
 error:
 	table_entry_free(entry);
 	free(s0);
+	if (is_blank_or_comment)
+		*is_blank_or_comment = blank_or_comment;
 	return NULL;
+}
+
+static void
+table_entry_printf(FILE *f,
+		   struct rte_swx_ctl_pipeline *ctl,
+		   struct table *table,
+		   struct rte_swx_table_entry *entry)
+{
+	struct action *action = &ctl->actions[entry->action_id];
+	uint32_t i;
+
+	fprintf(f, "match ");
+	for (i = 0; i < table->params.key_size; i++)
+		fprintf(f, "%02x", entry->key[i]);
+
+	if (entry->key_mask) {
+		fprintf(f, "/");
+		for (i = 0; i < table->params.key_size; i++)
+			fprintf(f, "%02x", entry->key_mask[i]);
+	}
+
+	fprintf(f, " priority %u", entry->key_priority);
+
+	fprintf(f, " action %s ", action->info.name);
+	for (i = 0; i < action->data_size; i++)
+		fprintf(f, "%02x", entry->action_data[i]);
+
+	fprintf(f, "\n");
 }
 
 int
@@ -1502,47 +1832,17 @@ rte_swx_ctl_pipeline_table_fprintf(FILE *f,
 
 	/* Table entries. */
 	TAILQ_FOREACH(entry, &table->entries, node) {
-		struct action *action = &ctl->actions[entry->action_id];
-
-		fprintf(f, "match ");
-		for (i = 0; i < table->params.key_size; i++)
-			fprintf(f, "%02x", entry->key[i]);
-
-		fprintf(f, " action %s ", action->info.name);
-		for (i = 0; i < action->data_size; i++)
-			fprintf(f, "%02x", entry->action_data[i]);
-
-		fprintf(f, "\n");
+		table_entry_printf(f, ctl, table, entry);
 		n_entries++;
 	}
 
 	TAILQ_FOREACH(entry, &table->pending_modify0, node) {
-		struct action *action = &ctl->actions[entry->action_id];
-
-		fprintf(f, "match ");
-		for (i = 0; i < table->params.key_size; i++)
-			fprintf(f, "%02x", entry->key[i]);
-
-		fprintf(f, " action %s ", action->info.name);
-		for (i = 0; i < action->data_size; i++)
-			fprintf(f, "%02x", entry->action_data[i]);
-
-		fprintf(f, "\n");
+		table_entry_printf(f, ctl, table, entry);
 		n_entries++;
 	}
 
 	TAILQ_FOREACH(entry, &table->pending_delete, node) {
-		struct action *action = &ctl->actions[entry->action_id];
-
-		fprintf(f, "match ");
-		for (i = 0; i < table->params.key_size; i++)
-			fprintf(f, "%02x", entry->key[i]);
-
-		fprintf(f, " action %s ", action->info.name);
-		for (i = 0; i < action->data_size; i++)
-			fprintf(f, "%02x", entry->action_data[i]);
-
-		fprintf(f, "\n");
+		table_entry_printf(f, ctl, table, entry);
 		n_entries++;
 	}
 
