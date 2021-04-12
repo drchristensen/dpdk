@@ -115,6 +115,7 @@ struct mlx5_dev_spawn_data {
 	void *phys_dev; /**< Associated physical device. */
 	struct rte_eth_dev *eth_dev; /**< Associated Ethernet device. */
 	struct rte_pci_device *pci_dev; /**< Backend PCI device. */
+	struct mlx5_bond_info *bond_info;
 };
 
 /** Key string for IPC. */
@@ -671,6 +672,21 @@ struct mlx5_flex_parser_profiles {
 	void *obj;		/* Flex parser node object. */
 };
 
+/* Max member ports per bonding device. */
+#define MLX5_BOND_MAX_PORTS 2
+
+/* Bonding device information. */
+struct mlx5_bond_info {
+	int n_port; /* Number of bond member ports. */
+	uint32_t ifindex;
+	char ifname[MLX5_NAMESIZE + 1];
+	struct {
+		char ifname[MLX5_NAMESIZE + 1];
+		uint32_t ifindex;
+		struct rte_pci_addr pci_addr;
+	} ports[MLX5_BOND_MAX_PORTS];
+};
+
 /*
  * Shared Infiniband device context for Master/Representors
  * which belong to same IB device with multiple IB ports.
@@ -678,13 +694,13 @@ struct mlx5_flex_parser_profiles {
 struct mlx5_dev_ctx_shared {
 	LIST_ENTRY(mlx5_dev_ctx_shared) next;
 	uint32_t refcnt;
-	uint16_t bond_dev; /* Bond primary device id. */
 	uint32_t devx:1; /* Opened with DV. */
 	uint32_t flow_hit_aso_en:1; /* Flow Hit ASO is supported. */
 	uint32_t rq_ts_format:2; /* RQ timestamp formats supported. */
 	uint32_t sq_ts_format:2; /* SQ timestamp formats supported. */
 	uint32_t qp_ts_format:2; /* QP timestamp formats supported. */
 	uint32_t max_port; /* Maximal IB device port index. */
+	struct mlx5_bond_info bond; /* Bonding information. */
 	void *ctx; /* Verbs/DV/DevX context. */
 	void *pd; /* Protection Domain. */
 	uint32_t pdn; /* Protection Domain number. */
@@ -713,7 +729,7 @@ struct mlx5_dev_ctx_shared {
 	struct mlx5_hlist *flow_tbls;
 	struct mlx5_flow_tunnel_hub *tunnel_hub;
 	/* Direct Rules tables for FDB, NIC TX+RX */
-	void *esw_drop_action; /* Pointer to DR E-Switch drop action. */
+	void *dr_drop_action; /* Pointer to DR drop action, any domain. */
 	void *pop_vlan_action; /* Pointer to DR pop VLAN action. */
 	struct mlx5_hlist *encaps_decaps; /* Encap/decap action hash list. */
 	struct mlx5_hlist *modify_cmds;
@@ -935,11 +951,9 @@ struct mlx5_priv {
 	uint16_t vport_id; /* Associated VF vport index (if any). */
 	uint32_t vport_meta_tag; /* Used for vport index match ove VF LAG. */
 	uint32_t vport_meta_mask; /* Used for vport index field match mask. */
-	int32_t representor_id; /* Port representor identifier. */
-	int32_t pf_bond; /* >=0 means PF index in bonding configuration. */
+	int32_t representor_id; /* -1 if not a representor. */
+	int32_t pf_bond; /* >=0, representor owner PF index in bonding. */
 	unsigned int if_index; /* Associated kernel network device index. */
-	uint32_t bond_ifindex; /**< Bond interface index. */
-	char bond_name[MLX5_NAMESIZE]; /**< Bond interface name. */
 	/* RX/TX queues. */
 	unsigned int rxqs_n; /* RX queues array size. */
 	unsigned int txqs_n; /* TX queues array size. */
@@ -1011,6 +1025,7 @@ int mlx5_udp_tunnel_port_add(struct rte_eth_dev *dev,
 			      struct rte_eth_udp_tunnel *udp_tunnel);
 uint16_t mlx5_eth_find_next(uint16_t port_id, struct rte_pci_device *pci_dev);
 int mlx5_dev_close(struct rte_eth_dev *dev);
+bool mlx5_is_hpf(struct rte_eth_dev *dev);
 void mlx5_age_event_prepare(struct mlx5_dev_ctx_shared *sh);
 
 /* Macro to iterate over all valid ports for mlx5 driver. */
@@ -1043,6 +1058,16 @@ int mlx5_flow_aso_age_mng_init(struct mlx5_dev_ctx_shared *sh);
 /* mlx5_ethdev.c */
 
 int mlx5_dev_configure(struct rte_eth_dev *dev);
+int mlx5_representor_info_get(struct rte_eth_dev *dev,
+			      struct rte_eth_representor_info *info);
+#define MLX5_REPRESENTOR_ID(pf, type, repr) \
+		(((pf) << 14) + ((type) << 12) + ((repr) & 0xfff))
+#define MLX5_REPRESENTOR_REPR(repr_id) \
+		((repr_id) & 0xfff)
+#define MLX5_REPRESENTOR_TYPE(repr_id) \
+		(((repr_id) >> 12) & 3)
+uint16_t mlx5_representor_id_encode(const struct mlx5_switch_info *info,
+				    enum rte_eth_representor_type hpf_type);
 int mlx5_fw_version_get(struct rte_eth_dev *dev, char *fw_ver,
 			size_t fw_size);
 int mlx5_dev_infos_get(struct rte_eth_dev *dev,
@@ -1195,10 +1220,7 @@ int mlx5_flow_query(struct rte_eth_dev *dev, struct rte_flow *flow,
 		    struct rte_flow_error *error);
 int mlx5_flow_isolate(struct rte_eth_dev *dev, int enable,
 		      struct rte_flow_error *error);
-int mlx5_dev_filter_ctrl(struct rte_eth_dev *dev,
-			 enum rte_filter_type filter_type,
-			 enum rte_filter_op filter_op,
-			 void *arg);
+int mlx5_flow_ops_get(struct rte_eth_dev *dev, const struct rte_flow_ops **ops);
 int mlx5_flow_start_default(struct rte_eth_dev *dev);
 void mlx5_flow_stop_default(struct rte_eth_dev *dev);
 int mlx5_flow_verify(struct rte_eth_dev *dev);

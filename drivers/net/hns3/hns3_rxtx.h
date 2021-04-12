@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #ifndef _HNS3_RXTX_H_
@@ -106,6 +106,8 @@
 #define HNS3_RXD_L3L4P_B			11
 #define HNS3_RXD_TSIND_S			12
 #define HNS3_RXD_TSIND_M			(0x7 << HNS3_RXD_TSIND_S)
+
+#define HNS3_RXD_TS_VLD_B			14
 #define HNS3_RXD_LKBK_B				15
 #define HNS3_RXD_GRO_SIZE_S			16
 #define HNS3_RXD_GRO_SIZE_M			(0x3fff << HNS3_RXD_GRO_SIZE_S)
@@ -149,6 +151,7 @@
 #define HNS3_TXD_MSS_S				0
 #define HNS3_TXD_MSS_M				(0x3fff << HNS3_TXD_MSS_S)
 
+#define HNS3_TXD_OL4CS_B			22
 #define HNS3_L2_LEN_UNIT			1UL
 #define HNS3_L3_LEN_UNIT			2UL
 #define HNS3_L4_LEN_UNIT			2UL
@@ -199,6 +202,8 @@ enum hns3_pkt_tun_type {
 struct hns3_desc {
 	union {
 		uint64_t addr;
+		uint64_t timestamp;
+
 		struct {
 			uint32_t addr0;
 			uint32_t addr1;
@@ -234,7 +239,7 @@ struct hns3_desc {
 				};
 			};
 
-			uint32_t paylen;
+			uint32_t paylen_fd_dop_ol4cs;
 			uint16_t tp_fe_sc_vld_ra_ri;
 			uint16_t mss;
 		} tx;
@@ -464,6 +469,22 @@ struct hns3_tx_queue {
 	 */
 	uint8_t tso_mode;
 	/*
+	 * udp checksum mode.
+	 * value range:
+	 *      HNS3_SPECIAL_PORT_HW_CKSUM_MODE/HNS3_SPECIAL_PORT_SW_CKSUM_MODE
+	 *
+	 *  - HNS3_SPECIAL_PORT_SW_CKSUM_MODE
+	 *     In this mode, HW can not do checksum for special UDP port like
+	 *     4789, 4790, 6081 for non-tunnel UDP packets and UDP tunnel
+	 *     packets without the PKT_TX_TUNEL_MASK in the mbuf. So, PMD need
+	 *     do the checksum for these packets to avoid a checksum error.
+	 *
+	 *  - HNS3_SPECIAL_PORT_HW_CKSUM_MODE
+	 *     In this mode, HW does not have the preceding problems and can
+	 *     directly calculate the checksum of these UDP packets.
+	 */
+	uint8_t udp_cksum_mode;
+	/*
 	 * The minimum length of the packet supported by hardware in the Tx
 	 * direction.
 	 */
@@ -503,6 +524,7 @@ struct hns3_queue_info {
 };
 
 #define HNS3_TX_CKSUM_OFFLOAD_MASK ( \
+	PKT_TX_OUTER_UDP_CKSUM | \
 	PKT_TX_OUTER_IP_CKSUM | \
 	PKT_TX_IP_CKSUM | \
 	PKT_TX_TCP_SEG | \
@@ -515,6 +537,9 @@ enum hns3_cksum_status {
 	HNS3_OUTER_L3_CKSUM_ERR = 4,
 	HNS3_OUTER_L4_CKSUM_ERR = 8
 };
+
+extern uint64_t hns3_timestamp_rx_dynflag;
+extern int hns3_timestamp_dynfield_offset;
 
 static inline int
 hns3_handle_bdinfo(struct hns3_rx_queue *rxq, struct rte_mbuf *rxm,
@@ -718,5 +743,7 @@ void hns3_stop_all_txqs(struct rte_eth_dev *dev);
 void hns3_restore_tqp_enable_state(struct hns3_hw *hw);
 int hns3_tx_done_cleanup(void *txq, uint32_t free_cnt);
 void hns3_enable_rxd_adv_layout(struct hns3_hw *hw);
+int hns3_dev_rx_descriptor_status(void *rx_queue, uint16_t offset);
+int hns3_dev_tx_descriptor_status(void *tx_queue, uint16_t offset);
 
 #endif /* _HNS3_RXTX_H_ */

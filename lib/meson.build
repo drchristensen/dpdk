@@ -67,6 +67,7 @@ foreach l:libraries
 	sources = []
 	headers = []
 	indirect_headers = [] # public headers not directly included by apps
+	driver_sdk_headers = [] # public headers included by drivers
 	includes = []
 	cflags = default_cflags
 	objs = [] # other object files to link against, used e.g. for
@@ -105,6 +106,9 @@ foreach l:libraries
 		dpdk_conf.set('RTE_LIB_' + name.to_upper(), 1)
 		install_headers(headers)
 		install_headers(indirect_headers)
+		if get_option('enable_driver_sdk')
+			install_headers(driver_sdk_headers)
+		endif
 		dpdk_chkinc_headers += headers
 
 		libname = 'rte_' + name
@@ -115,9 +119,9 @@ foreach l:libraries
 			shared_dep = declare_dependency(include_directories: includes)
 			static_dep = shared_dep
 		else
-			if is_windows and use_function_versioning
+			if is_windows and use_function_versioning and developer_mode
 				message('@0@: Function versioning is not supported by Windows.'
-				.format(name))
+						.format(name))
 			endif
 
 			if use_function_versioning
@@ -173,7 +177,7 @@ foreach l:libraries
 			endif
 
 			lk_deps = [version_map, def_file, mingw_map]
-			if not is_windows
+			if developer_mode and not is_windows
 				# on unix systems check the output of the
 				# check-symbols.sh script, using it as a
 				# dependency of the .so build
@@ -206,7 +210,9 @@ foreach l:libraries
 
 		set_variable('shared_rte_' + name, shared_dep)
 		set_variable('static_rte_' + name, static_dep)
-		message('lib/@0@: Defining dependency "@1@"'.format(
-				dir_name, name))
+		if developer_mode
+			message('lib/@0@: Defining dependency "@1@"'.format(
+					dir_name, name))
+		endif
 	endif # if build
 endforeach

@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #include <rte_bus_pci.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
+#include <rte_geneve.h>
 #include <rte_vxlan.h>
 #include <ethdev_driver.h>
 #include <rte_io.h>
@@ -628,10 +629,6 @@ hns3pf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 	uint64_t end;
 	int ret;
 
-	ret = hns3_tqp_enable(hw, queue_id, false);
-	if (ret)
-		return ret;
-
 	/*
 	 * In current version VF is not supported when PF is driven by DPDK
 	 * driver, all task queue pairs are mapped to PF function, so PF's queue
@@ -678,11 +675,6 @@ hns3vf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 	uint8_t msg_data[2];
 	int ret;
 
-	/* Disable VF's queue before send queue reset msg to PF */
-	ret = hns3_tqp_enable(hw, queue_id, false);
-	if (ret)
-		return ret;
-
 	memcpy(msg_data, &queue_id, sizeof(uint16_t));
 
 	ret = hns3_send_mbx_msg(hw, HNS3_MBX_QUEUE_RESET, 0, msg_data,
@@ -694,14 +686,105 @@ hns3vf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 }
 
 static int
-hns3_reset_tqp(struct hns3_adapter *hns, uint16_t queue_id)
+hns3_reset_rcb_cmd(struct hns3_hw *hw, uint8_t *reset_status)
 {
-	struct hns3_hw *hw = &hns->hw;
+	struct hns3_reset_cmd *req;
+	struct hns3_cmd_desc desc;
+	int ret;
 
-	if (hns->is_vf)
-		return hns3vf_reset_tqp(hw, queue_id);
-	else
-		return hns3pf_reset_tqp(hw, queue_id);
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_CFG_RST_TRIGGER, false);
+	req = (struct hns3_reset_cmd *)desc.data;
+	hns3_set_bit(req->mac_func_reset, HNS3_CFG_RESET_RCB_B, 1);
+
+	/*
+	 * The start qid should be the global qid of the first tqp of the
+	 * function which should be reset in this port. Since our PF not
+	 * support take over of VFs, so we only need to reset function 0,
+	 * and its start qid is always 0.
+	 */
+	req->fun_reset_rcb_vqid_start = rte_cpu_to_le_16(0);
+	req->fun_reset_rcb_vqid_num = rte_cpu_to_le_16(hw->cfg_max_queues);
+
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret) {
+		hns3_err(hw, "fail to send rcb reset cmd, ret = %d.", ret);
+		return ret;
+	}
+
+	*reset_status = req->fun_reset_rcb_return_status;
+	return 0;
+}
+
+static int
+hns3pf_reset_all_tqps(struct hns3_hw *hw)
+{
+#define HNS3_RESET_RCB_NOT_SUPPORT	0U
+#define HNS3_RESET_ALL_TQP_SUCCESS	1U
+	uint8_t reset_status;
+	int ret;
+	int i;
+
+	ret = hns3_reset_rcb_cmd(hw, &reset_status);
+	if (ret)
+		return ret;
+
+	/*
+	 * If the firmware version is low, it may not support the rcb reset
+	 * which means reset all the tqps at a time. In this case, we should
+	 * reset tqps one by one.
+	 */
+	if (reset_status == HNS3_RESET_RCB_NOT_SUPPORT) {
+		for (i = 0; i < hw->cfg_max_queues; i++) {
+			ret = hns3pf_reset_tqp(hw, i);
+			if (ret) {
+				hns3_err(hw,
+				  "fail to reset tqp, queue_id = %d, ret = %d.",
+				  i, ret);
+				return ret;
+			}
+		}
+	} else if (reset_status != HNS3_RESET_ALL_TQP_SUCCESS) {
+		hns3_err(hw, "fail to reset all tqps, reset_status = %u.",
+				reset_status);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int
+hns3vf_reset_all_tqps(struct hns3_hw *hw)
+{
+#define HNS3VF_RESET_ALL_TQP_DONE	1U
+	uint8_t reset_status;
+	uint8_t msg_data[2];
+	int ret;
+	int i;
+
+	memset(msg_data, 0, sizeof(uint16_t));
+	ret = hns3_send_mbx_msg(hw, HNS3_MBX_QUEUE_RESET, 0, msg_data,
+				sizeof(msg_data), true, &reset_status,
+				sizeof(reset_status));
+	if (ret) {
+		hns3_err(hw, "fail to send rcb reset mbx, ret = %d.", ret);
+		return ret;
+	}
+
+	if (reset_status == HNS3VF_RESET_ALL_TQP_DONE)
+		return 0;
+
+	/*
+	 * If the firmware version or kernel PF version is low, it may not
+	 * support the rcb reset which means reset all the tqps at a time.
+	 * In this case, we should reset tqps one by one.
+	 */
+	for (i = 1; i < hw->cfg_max_queues; i++) {
+		ret = hns3vf_reset_tqp(hw, i);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 int
@@ -710,14 +793,21 @@ hns3_reset_all_tqps(struct hns3_adapter *hns)
 	struct hns3_hw *hw = &hns->hw;
 	int ret, i;
 
+	/* Disable all queues before reset all queues */
 	for (i = 0; i < hw->cfg_max_queues; i++) {
-		ret = hns3_reset_tqp(hns, i);
+		ret = hns3_tqp_enable(hw, i, false);
 		if (ret) {
-			hns3_err(hw, "Failed to reset No.%d queue: %d", i, ret);
+			hns3_err(hw,
+			    "fail to disable tqps before tqps reset, ret = %d.",
+			    ret);
 			return ret;
 		}
 	}
-	return 0;
+
+	if (hns->is_vf)
+		return hns3vf_reset_all_tqps(hw);
+	else
+		return hns3pf_reset_all_tqps(hw);
 }
 
 static int
@@ -2275,6 +2365,23 @@ hns3_rx_alloc_buffer(struct hns3_rx_queue *rxq)
 		return rte_mbuf_raw_alloc(rxq->mb_pool);
 }
 
+static inline void
+hns3_rx_ptp_timestamp_handle(struct hns3_rx_queue *rxq, struct rte_mbuf *mbuf,
+		  volatile struct hns3_desc *rxd)
+{
+	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(rxq->hns);
+	uint64_t timestamp = rte_le_to_cpu_64(rxd->timestamp);
+
+	mbuf->ol_flags |= PKT_RX_IEEE1588_PTP | PKT_RX_IEEE1588_TMST;
+	if (hns3_timestamp_rx_dynflag > 0) {
+		*RTE_MBUF_DYNFIELD(mbuf, hns3_timestamp_dynfield_offset,
+			rte_mbuf_timestamp_t *) = timestamp;
+		mbuf->ol_flags |= hns3_timestamp_rx_dynflag;
+	}
+
+	pf->rx_timestamp = timestamp;
+}
+
 uint16_t
 hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 {
@@ -2334,7 +2441,11 @@ hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		}
 
 		rxm = rxe->mbuf;
+		rxm->ol_flags = 0;
 		rxe->mbuf = nmb;
+
+		if (unlikely(bd_base_info & BIT(HNS3_RXD_TS_VLD_B)))
+			hns3_rx_ptp_timestamp_handle(rxq, rxm, rxdp);
 
 		dma_addr = rte_mbuf_data_iova_default(nmb);
 		rxdp->addr = rte_cpu_to_le_64(dma_addr);
@@ -2346,7 +2457,7 @@ hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		rxm->data_len = rxm->pkt_len;
 		rxm->port = rxq->port_id;
 		rxm->hash.rss = rte_le_to_cpu_32(rxd.rx.rss_hash);
-		rxm->ol_flags = PKT_RX_RSS_HASH;
+		rxm->ol_flags |= PKT_RX_RSS_HASH;
 		if (unlikely(bd_base_info & BIT(HNS3_RXD_LUM_B))) {
 			rxm->hash.fdir.hi =
 				rte_le_to_cpu_16(rxd.rx.fd_id);
@@ -2364,6 +2475,9 @@ hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			goto pkt_err;
 
 		rxm->packet_type = hns3_rx_calc_ptype(rxq, l234_info, ol_info);
+
+		if (rxm->packet_type == RTE_PTYPE_L2_ETHER_TIMESYNC)
+			rxm->ol_flags |= PKT_RX_IEEE1588_PTP;
 
 		if (likely(bd_base_info & BIT(HNS3_RXD_L3L4P_B)))
 			hns3_rx_set_cksum_flag(rxm, rxm->packet_type,
@@ -2689,13 +2803,26 @@ hns3_get_rx_function(struct rte_eth_dev *dev)
 {
 	struct hns3_adapter *hns = dev->data->dev_private;
 	uint64_t offloads = dev->data->dev_conf.rxmode.offloads;
+	bool vec_allowed, sve_allowed, simple_allowed;
 
-	if (hns->rx_vec_allowed && hns3_rx_check_vec_support(dev) == 0)
-		return hns3_check_sve_support() ? hns3_recv_pkts_vec_sve :
-		       hns3_recv_pkts_vec;
+	vec_allowed = hns->rx_vec_allowed &&
+		      hns3_rx_check_vec_support(dev) == 0;
+	sve_allowed = vec_allowed && hns3_check_sve_support();
+	simple_allowed = hns->rx_simple_allowed && !dev->data->scattered_rx &&
+			 (offloads & DEV_RX_OFFLOAD_TCP_LRO) == 0;
 
-	if (hns->rx_simple_allowed && !dev->data->scattered_rx &&
-	    (offloads & DEV_RX_OFFLOAD_TCP_LRO) == 0)
+	if (hns->rx_func_hint == HNS3_IO_FUNC_HINT_VEC && vec_allowed)
+		return hns3_recv_pkts_vec;
+	if (hns->rx_func_hint == HNS3_IO_FUNC_HINT_SVE && sve_allowed)
+		return hns3_recv_pkts_vec_sve;
+	if (hns->rx_func_hint == HNS3_IO_FUNC_HINT_SIMPLE && simple_allowed)
+		return hns3_recv_pkts;
+	if (hns->rx_func_hint == HNS3_IO_FUNC_HINT_COMMON)
+		return hns3_recv_scattered_pkts;
+
+	if (vec_allowed)
+		return hns3_recv_pkts_vec;
+	if (simple_allowed)
 		return hns3_recv_pkts;
 
 	return hns3_recv_scattered_pkts;
@@ -2832,6 +2959,7 @@ hns3_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t nb_desc,
 					     HNS3_RING_TX_TAIL_REG);
 	txq->min_tx_pkt_len = hw->min_tx_pkt_len;
 	txq->tso_mode = hw->tso_mode;
+	txq->udp_cksum_mode = hw->udp_cksum_mode;
 	memset(&txq->basic_stats, 0, sizeof(struct hns3_tx_basic_stats));
 	memset(&txq->dfx_stats, 0, sizeof(struct hns3_tx_dfx_stats));
 
@@ -2939,7 +3067,7 @@ hns3_fill_per_desc(struct hns3_desc *desc, struct rte_mbuf *rxm)
 {
 	desc->addr = rte_mbuf_data_iova(rxm);
 	desc->tx.send_size = rte_cpu_to_le_16(rte_pktmbuf_data_len(rxm));
-	desc->tx.tp_fe_sc_vld_ra_ri = rte_cpu_to_le_16(BIT(HNS3_TXD_VLD_B));
+	desc->tx.tp_fe_sc_vld_ra_ri |= rte_cpu_to_le_16(BIT(HNS3_TXD_VLD_B));
 }
 
 static void
@@ -2954,7 +3082,7 @@ hns3_fill_first_desc(struct hns3_tx_queue *txq, struct hns3_desc *desc,
 	hdr_len += (ol_flags & PKT_TX_TUNNEL_MASK) ?
 			   rxm->outer_l2_len + rxm->outer_l3_len : 0;
 	paylen = rxm->pkt_len - hdr_len;
-	desc->tx.paylen = rte_cpu_to_le_32(paylen);
+	desc->tx.paylen_fd_dop_ol4cs |= rte_cpu_to_le_32(paylen);
 	hns3_set_tso(desc, paylen, rxm);
 
 	/*
@@ -2987,6 +3115,10 @@ hns3_fill_first_desc(struct hns3_tx_queue *txq, struct hns3_desc *desc,
 					rte_cpu_to_le_32(BIT(HNS3_TXD_VLAN_B));
 		desc->tx.vlan_tag = rte_cpu_to_le_16(rxm->vlan_tci);
 	}
+
+	if (ol_flags & PKT_TX_IEEE1588_TMST)
+		desc->tx.tp_fe_sc_vld_ra_ri |=
+				rte_cpu_to_le_16(BIT(HNS3_TXD_TSYN_B));
 }
 
 static inline int
@@ -3191,8 +3323,10 @@ hns3_parse_tunneling_params(struct hns3_tx_queue *txq, struct rte_mbuf *m,
 {
 	struct hns3_desc *tx_ring = txq->tx_ring;
 	struct hns3_desc *desc = &tx_ring[tx_desc_id];
+	uint64_t ol_flags = m->ol_flags;
 	uint32_t tmp_outer = 0;
 	uint32_t tmp_inner = 0;
+	uint32_t tmp_ol4cs;
 	int ret;
 
 	/*
@@ -3202,7 +3336,7 @@ hns3_parse_tunneling_params(struct hns3_tx_queue *txq, struct rte_mbuf *m,
 	 * calculations, the length of the L2 header include the outer and
 	 * inner, will be filled during the parsing of tunnel packects.
 	 */
-	if (!(m->ol_flags & PKT_TX_TUNNEL_MASK)) {
+	if (!(ol_flags & PKT_TX_TUNNEL_MASK)) {
 		/*
 		 * For non tunnel type the tunnel type id is 0, so no need to
 		 * assign a value to it. Only the inner(normal) L2 header length
@@ -3217,7 +3351,8 @@ hns3_parse_tunneling_params(struct hns3_tx_queue *txq, struct rte_mbuf *m,
 		 * inner l2_len. It would lead a cksum error. So driver has to
 		 * calculate the header length.
 		 */
-		if (unlikely(!(m->ol_flags & PKT_TX_OUTER_IP_CKSUM) &&
+		if (unlikely(!(ol_flags &
+			(PKT_TX_OUTER_IP_CKSUM | PKT_TX_OUTER_UDP_CKSUM)) &&
 					m->outer_l2_len == 0)) {
 			struct rte_net_hdr_lens hdr_len;
 			(void)rte_net_get_ptype(m, &hdr_len,
@@ -3234,6 +3369,9 @@ hns3_parse_tunneling_params(struct hns3_tx_queue *txq, struct rte_mbuf *m,
 
 	desc->tx.ol_type_vlan_len_msec = rte_cpu_to_le_32(tmp_outer);
 	desc->tx.type_cs_vlan_tso_len = rte_cpu_to_le_32(tmp_inner);
+	tmp_ol4cs = ol_flags & PKT_TX_OUTER_UDP_CKSUM ?
+			BIT(HNS3_TXD_OL4CS_B) : 0;
+	desc->tx.paylen_fd_dop_ol4cs = rte_cpu_to_le_32(tmp_ol4cs);
 
 	return 0;
 }
@@ -3272,6 +3410,7 @@ hns3_parse_l4_cksum_params(struct rte_mbuf *m, uint32_t *type_cs_vlan_tso_len)
 	uint32_t tmp;
 	/* Enable L4 checksum offloads */
 	switch (ol_flags & (PKT_TX_L4_MASK | PKT_TX_TCP_SEG)) {
+	case PKT_TX_TCP_CKSUM | PKT_TX_TCP_SEG:
 	case PKT_TX_TCP_CKSUM:
 	case PKT_TX_TCP_SEG:
 		tmp = *type_cs_vlan_tso_len;
@@ -3363,31 +3502,78 @@ hns3_pkt_need_linearized(struct rte_mbuf *tx_pkts, uint32_t bd_num,
 	return false;
 }
 
+static bool
+hns3_outer_ipv4_cksum_prepared(struct rte_mbuf *m, uint64_t ol_flags,
+				uint32_t *l4_proto)
+{
+	struct rte_ipv4_hdr *ipv4_hdr;
+	ipv4_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *,
+					   m->outer_l2_len);
+	if (ol_flags & PKT_TX_OUTER_IP_CKSUM)
+		ipv4_hdr->hdr_checksum = 0;
+	if (ol_flags & PKT_TX_OUTER_UDP_CKSUM) {
+		struct rte_udp_hdr *udp_hdr;
+		/*
+		 * If OUTER_UDP_CKSUM is support, HW can caclulate the pseudo
+		 * header for TSO packets
+		 */
+		if (ol_flags & PKT_TX_TCP_SEG)
+			return true;
+		udp_hdr = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
+				m->outer_l2_len + m->outer_l3_len);
+		udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ipv4_hdr, ol_flags);
+
+		return true;
+	}
+	*l4_proto = ipv4_hdr->next_proto_id;
+	return false;
+}
+
+static bool
+hns3_outer_ipv6_cksum_prepared(struct rte_mbuf *m, uint64_t ol_flags,
+				uint32_t *l4_proto)
+{
+	struct rte_ipv6_hdr *ipv6_hdr;
+	ipv6_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv6_hdr *,
+					   m->outer_l2_len);
+	if (ol_flags & PKT_TX_OUTER_UDP_CKSUM) {
+		struct rte_udp_hdr *udp_hdr;
+		/*
+		 * If OUTER_UDP_CKSUM is support, HW can caclulate the pseudo
+		 * header for TSO packets
+		 */
+		if (ol_flags & PKT_TX_TCP_SEG)
+			return true;
+		udp_hdr = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
+				m->outer_l2_len + m->outer_l3_len);
+		udp_hdr->dgram_cksum = rte_ipv6_phdr_cksum(ipv6_hdr, ol_flags);
+
+		return true;
+	}
+	*l4_proto = ipv6_hdr->proto;
+	return false;
+}
+
 static void
 hns3_outer_header_cksum_prepare(struct rte_mbuf *m)
 {
 	uint64_t ol_flags = m->ol_flags;
 	uint32_t paylen, hdr_len, l4_proto;
+	struct rte_udp_hdr *udp_hdr;
 
 	if (!(ol_flags & (PKT_TX_OUTER_IPV4 | PKT_TX_OUTER_IPV6)))
 		return;
 
 	if (ol_flags & PKT_TX_OUTER_IPV4) {
-		struct rte_ipv4_hdr *ipv4_hdr;
-		ipv4_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *,
-						   m->outer_l2_len);
-		l4_proto = ipv4_hdr->next_proto_id;
-		if (ol_flags & PKT_TX_OUTER_IP_CKSUM)
-			ipv4_hdr->hdr_checksum = 0;
+		if (hns3_outer_ipv4_cksum_prepared(m, ol_flags, &l4_proto))
+			return;
 	} else {
-		struct rte_ipv6_hdr *ipv6_hdr;
-		ipv6_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv6_hdr *,
-						   m->outer_l2_len);
-		l4_proto = ipv6_hdr->proto;
+		if (hns3_outer_ipv6_cksum_prepared(m, ol_flags, &l4_proto))
+			return;
 	}
+
 	/* driver should ensure the outer udp cksum is 0 for TUNNEL TSO */
 	if (l4_proto == IPPROTO_UDP && (ol_flags & PKT_TX_TCP_SEG)) {
-		struct rte_udp_hdr *udp_hdr;
 		hdr_len = m->l2_len + m->l3_len + m->l4_len;
 		hdr_len += m->outer_l2_len + m->outer_l3_len;
 		paylen = m->pkt_len - hdr_len;
@@ -3481,6 +3667,69 @@ hns3_vld_vlan_chk(struct hns3_tx_queue *txq, struct rte_mbuf *m)
 }
 #endif
 
+static uint16_t
+hns3_udp_cksum_help(struct rte_mbuf *m)
+{
+	uint64_t ol_flags = m->ol_flags;
+	uint16_t cksum = 0;
+	uint32_t l4_len;
+
+	if (ol_flags & PKT_TX_IPV4) {
+		struct rte_ipv4_hdr *ipv4_hdr = rte_pktmbuf_mtod_offset(m,
+				struct rte_ipv4_hdr *, m->l2_len);
+		l4_len = rte_be_to_cpu_16(ipv4_hdr->total_length) - m->l3_len;
+	} else {
+		struct rte_ipv6_hdr *ipv6_hdr = rte_pktmbuf_mtod_offset(m,
+				struct rte_ipv6_hdr *, m->l2_len);
+		l4_len = rte_be_to_cpu_16(ipv6_hdr->payload_len);
+	}
+
+	rte_raw_cksum_mbuf(m, m->l2_len + m->l3_len, l4_len, &cksum);
+
+	cksum = ~cksum;
+	/*
+	 * RFC 768:If the computed checksum is zero for UDP, it is transmitted
+	 * as all ones
+	 */
+	if (cksum == 0)
+		cksum = 0xffff;
+
+	return (uint16_t)cksum;
+}
+
+static bool
+hns3_validate_tunnel_cksum(struct hns3_tx_queue *tx_queue, struct rte_mbuf *m)
+{
+	uint64_t ol_flags = m->ol_flags;
+	struct rte_udp_hdr *udp_hdr;
+	uint16_t dst_port;
+
+	if (tx_queue->udp_cksum_mode == HNS3_SPECIAL_PORT_HW_CKSUM_MODE ||
+	    ol_flags & PKT_TX_TUNNEL_MASK ||
+	    (ol_flags & PKT_TX_L4_MASK) != PKT_TX_UDP_CKSUM)
+		return true;
+	/*
+	 * A UDP packet with the same dst_port as VXLAN\VXLAN_GPE\GENEVE will
+	 * be recognized as a tunnel packet in HW. In this case, if UDP CKSUM
+	 * offload is set and the tunnel mask has not been set, the CKSUM will
+	 * be wrong since the header length is wrong and driver should complete
+	 * the CKSUM to avoid CKSUM error.
+	 */
+	udp_hdr = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
+						m->l2_len + m->l3_len);
+	dst_port = rte_be_to_cpu_16(udp_hdr->dst_port);
+	switch (dst_port) {
+	case RTE_VXLAN_DEFAULT_PORT:
+	case RTE_VXLAN_GPE_DEFAULT_PORT:
+	case RTE_GENEVE_DEFAULT_PORT:
+		udp_hdr->dgram_cksum = hns3_udp_cksum_help(m);
+		m->ol_flags = ol_flags & ~PKT_TX_L4_MASK;
+		return false;
+	default:
+		return true;
+	}
+}
+
 static int
 hns3_prep_pkt_proc(struct hns3_tx_queue *tx_queue, struct rte_mbuf *m)
 {
@@ -3524,6 +3773,9 @@ hns3_prep_pkt_proc(struct hns3_tx_queue *tx_queue, struct rte_mbuf *m)
 		rte_errno = -ret;
 		return ret;
 	}
+
+	if (!hns3_validate_tunnel_cksum(tx_queue, m))
+		return 0;
 
 	hns3_outer_header_cksum_prepare(m);
 
@@ -3673,7 +3925,7 @@ hns3_tx_setup_4bd(struct hns3_desc *txdp, struct rte_mbuf **pkts)
 		dma_addr = rte_mbuf_data_iova(*pkts);
 		txdp->addr = rte_cpu_to_le_64(dma_addr);
 		txdp->tx.send_size = rte_cpu_to_le_16((*pkts)->data_len);
-		txdp->tx.paylen = 0;
+		txdp->tx.paylen_fd_dop_ol4cs = 0;
 		txdp->tx.type_cs_vlan_tso_len = 0;
 		txdp->tx.ol_type_vlan_len_msec = 0;
 		txdp->tx.tp_fe_sc_vld_ra_ri = rte_cpu_to_le_16(bd_flag);
@@ -3689,7 +3941,7 @@ hns3_tx_setup_1bd(struct hns3_desc *txdp, struct rte_mbuf **pkts)
 	dma_addr = rte_mbuf_data_iova(*pkts);
 	txdp->addr = rte_cpu_to_le_64(dma_addr);
 	txdp->tx.send_size = rte_cpu_to_le_16((*pkts)->data_len);
-	txdp->tx.paylen = 0;
+	txdp->tx.paylen_fd_dop_ol4cs = 0;
 	txdp->tx.type_cs_vlan_tso_len = 0;
 	txdp->tx.ol_type_vlan_len_msec = 0;
 	txdp->tx.tp_fe_sc_vld_ra_ri = rte_cpu_to_le_16(bd_flag);
@@ -3925,23 +4177,47 @@ hns3_tx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 	return 0;
 }
 
+static bool
+hns3_tx_check_simple_support(struct rte_eth_dev *dev)
+{
+	uint64_t offloads = dev->data->dev_conf.txmode.offloads;
+
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	if (hns3_dev_ptp_supported(hw))
+		return false;
+
+	return (offloads == (offloads & DEV_TX_OFFLOAD_MBUF_FAST_FREE));
+}
+
 static eth_tx_burst_t
 hns3_get_tx_function(struct rte_eth_dev *dev, eth_tx_prep_t *prep)
 {
-	uint64_t offloads = dev->data->dev_conf.txmode.offloads;
 	struct hns3_adapter *hns = dev->data->dev_private;
+	bool vec_allowed, sve_allowed, simple_allowed;
 
-	if (hns->tx_vec_allowed && hns3_tx_check_vec_support(dev) == 0) {
-		*prep = NULL;
-		return hns3_check_sve_support() ? hns3_xmit_pkts_vec_sve :
-			hns3_xmit_pkts_vec;
-	}
+	vec_allowed = hns->tx_vec_allowed &&
+		      hns3_tx_check_vec_support(dev) == 0;
+	sve_allowed = vec_allowed && hns3_check_sve_support();
+	simple_allowed = hns->tx_simple_allowed &&
+			 hns3_tx_check_simple_support(dev);
 
-	if (hns->tx_simple_allowed &&
-	    offloads == (offloads & DEV_TX_OFFLOAD_MBUF_FAST_FREE)) {
-		*prep = NULL;
+	*prep = NULL;
+
+	if (hns->tx_func_hint == HNS3_IO_FUNC_HINT_VEC && vec_allowed)
+		return hns3_xmit_pkts_vec;
+	if (hns->tx_func_hint == HNS3_IO_FUNC_HINT_SVE && sve_allowed)
+		return hns3_xmit_pkts_vec_sve;
+	if (hns->tx_func_hint == HNS3_IO_FUNC_HINT_SIMPLE && simple_allowed)
 		return hns3_xmit_pkts_simple;
+	if (hns->tx_func_hint == HNS3_IO_FUNC_HINT_COMMON) {
+		*prep = hns3_prep_pkts;
+		return hns3_xmit_pkts;
 	}
+
+	if (vec_allowed)
+		return hns3_xmit_pkts_vec;
+	if (simple_allowed)
+		return hns3_xmit_pkts_simple;
 
 	*prep = hns3_prep_pkts;
 	return hns3_xmit_pkts;
@@ -3963,8 +4239,10 @@ void hns3_set_rxtx_function(struct rte_eth_dev *eth_dev)
 	if (hns->hw.adapter_state == HNS3_NIC_STARTED &&
 	    __atomic_load_n(&hns->hw.reset.resetting, __ATOMIC_RELAXED) == 0) {
 		eth_dev->rx_pkt_burst = hns3_get_rx_function(eth_dev);
+		eth_dev->rx_descriptor_status = hns3_dev_rx_descriptor_status;
 		eth_dev->tx_pkt_burst = hns3_get_tx_function(eth_dev, &prep);
 		eth_dev->tx_pkt_prepare = prep;
+		eth_dev->tx_descriptor_status = hns3_dev_tx_descriptor_status;
 	} else {
 		eth_dev->rx_pkt_burst = hns3_dummy_rxtx_burst;
 		eth_dev->tx_pkt_burst = hns3_dummy_rxtx_burst;
@@ -4175,6 +4453,68 @@ hns3_tx_done_cleanup(void *txq, uint32_t free_cnt)
 		return 0;
 	else
 		return -ENOTSUP;
+}
+
+int
+hns3_dev_rx_descriptor_status(void *rx_queue, uint16_t offset)
+{
+	volatile struct hns3_desc *rxdp;
+	struct hns3_rx_queue *rxq;
+	struct rte_eth_dev *dev;
+	uint32_t bd_base_info;
+	uint16_t desc_id;
+
+	rxq = (struct hns3_rx_queue *)rx_queue;
+	if (offset >= rxq->nb_rx_desc)
+		return -EINVAL;
+
+	desc_id = (rxq->next_to_use + offset) % rxq->nb_rx_desc;
+	rxdp = &rxq->rx_ring[desc_id];
+	bd_base_info = rte_le_to_cpu_32(rxdp->rx.bd_base_info);
+	dev = &rte_eth_devices[rxq->port_id];
+	if (dev->rx_pkt_burst == hns3_recv_pkts ||
+	    dev->rx_pkt_burst == hns3_recv_scattered_pkts) {
+		if (offset >= rxq->nb_rx_desc - rxq->rx_free_hold)
+			return RTE_ETH_RX_DESC_UNAVAIL;
+	} else if (dev->rx_pkt_burst == hns3_recv_pkts_vec ||
+		   dev->rx_pkt_burst == hns3_recv_pkts_vec_sve) {
+		if (offset >= rxq->nb_rx_desc - rxq->rx_rearm_nb)
+			return RTE_ETH_RX_DESC_UNAVAIL;
+	} else {
+		return RTE_ETH_RX_DESC_UNAVAIL;
+	}
+
+	if (!(bd_base_info & BIT(HNS3_RXD_VLD_B)))
+		return RTE_ETH_RX_DESC_AVAIL;
+	else
+		return RTE_ETH_RX_DESC_DONE;
+}
+
+int
+hns3_dev_tx_descriptor_status(void *tx_queue, uint16_t offset)
+{
+	volatile struct hns3_desc *txdp;
+	struct hns3_tx_queue *txq;
+	struct rte_eth_dev *dev;
+	uint16_t desc_id;
+
+	txq = (struct hns3_tx_queue *)tx_queue;
+	if (offset >= txq->nb_tx_desc)
+		return -EINVAL;
+
+	dev = &rte_eth_devices[txq->port_id];
+	if (dev->tx_pkt_burst != hns3_xmit_pkts_simple &&
+	    dev->tx_pkt_burst != hns3_xmit_pkts &&
+	    dev->tx_pkt_burst != hns3_xmit_pkts_vec_sve &&
+	    dev->tx_pkt_burst != hns3_xmit_pkts_vec)
+		return RTE_ETH_TX_DESC_UNAVAIL;
+
+	desc_id = (txq->next_to_use + offset) % txq->nb_tx_desc;
+	txdp = &txq->tx_ring[desc_id];
+	if (txdp->tx.tp_fe_sc_vld_ra_ri & rte_cpu_to_le_16(BIT(HNS3_TXD_VLD_B)))
+		return RTE_ETH_TX_DESC_FULL;
+	else
+		return RTE_ETH_TX_DESC_DONE;
 }
 
 uint32_t

@@ -2139,8 +2139,10 @@ int qede_rss_hash_update(struct rte_eth_dev *eth_dev,
 		/* RSS hash key */
 		if (key) {
 			if (len > (ECORE_RSS_KEY_SIZE * sizeof(uint32_t))) {
-				DP_ERR(edev, "RSS key length exceeds limit\n");
-				return -EINVAL;
+				len = ECORE_RSS_KEY_SIZE * sizeof(uint32_t);
+				DP_NOTICE(edev, false,
+					  "RSS key length too big, trimmed to %d\n",
+					  len);
 			}
 			DP_INFO(edev, "Applying user supplied hash key\n");
 			rss_params.update_rss_key = 1;
@@ -2434,7 +2436,7 @@ static const struct eth_dev_ops qede_eth_dev_ops = {
 	.reta_update  = qede_rss_reta_update,
 	.reta_query  = qede_rss_reta_query,
 	.mtu_set = qede_set_mtu,
-	.filter_ctrl = qede_dev_filter_ctrl,
+	.flow_ops_get = qede_dev_flow_ops_get,
 	.udp_tunnel_port_add = qede_udp_dst_port_add,
 	.udp_tunnel_port_del = qede_udp_dst_port_del,
 	.fw_version_get = qede_fw_version_get,

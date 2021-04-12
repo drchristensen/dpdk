@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #ifndef _HNS3_CMD_H_
@@ -111,6 +111,8 @@ enum hns3_opcode_type {
 
 	HNS3_OPC_QUERY_DEV_SPECS        = 0x0050,
 
+	HNS3_OPC_SSU_DROP_REG           = 0x0065,
+
 	/* MAC command */
 	HNS3_OPC_CONFIG_MAC_MODE        = 0x0301,
 	HNS3_OPC_QUERY_LINK_STATUS      = 0x0307,
@@ -120,6 +122,10 @@ enum hns3_opcode_type {
 	HNS3_OPC_MAC_TNL_INT_EN         = 0x0311,
 	HNS3_OPC_CLEAR_MAC_TNL_INT      = 0x0312,
 	HNS3_OPC_CONFIG_FEC_MODE        = 0x031A,
+
+	/* PTP command */
+	HNS3_OPC_PTP_INT_EN             = 0x0501,
+	HNS3_OPC_CFG_PTP_MODE           = 0x0507,
 
 	/* PFC/Pause commands */
 	HNS3_OPC_CFG_MAC_PAUSE_EN       = 0x0701,
@@ -931,10 +937,16 @@ struct hns3_reset_tqp_queue_cmd {
 
 #define HNS3_CFG_RESET_MAC_B		3
 #define HNS3_CFG_RESET_FUNC_B		7
+#define HNS3_CFG_RESET_RCB_B		1
 struct hns3_reset_cmd {
 	uint8_t mac_func_reset;
 	uint8_t fun_reset_vfid;
-	uint8_t rsv[22];
+	uint8_t fun_reset_rcb;
+	uint8_t rsv1;
+	uint16_t fun_reset_rcb_vqid_start;
+	uint16_t fun_reset_rcb_vqid_num;
+	uint8_t fun_reset_rcb_return_status;
+	uint8_t rsv2[15];
 };
 
 #define HNS3_QUERY_DEV_SPECS_BD_NUM		4
@@ -955,6 +967,43 @@ struct hns3_query_rpu_cmd {
 	uint32_t rsv1[2];
 	uint32_t rpu_rx_pkt_drop_cnt;
 	uint32_t rsv2[2];
+};
+
+#define HNS3_OPC_SSU_DROP_REG_NUM 2
+
+struct hns3_query_ssu_cmd {
+	uint8_t rxtx;
+	uint8_t rsv[3];
+	uint32_t full_drop_cnt;
+	uint32_t part_drop_cnt;
+	uint32_t oq_drop_cnt;
+	uint32_t rev1[2];
+};
+
+#define HNS3_PTP_ENABLE_B               0
+#define HNS3_PTP_TX_ENABLE_B            1
+#define HNS3_PTP_RX_ENABLE_B            2
+
+#define HNS3_PTP_TYPE_S                 0
+#define HNS3_PTP_TYPE_M                (0x3 << HNS3_PTP_TYPE_S)
+
+#define ALL_PTP_V2_TYPE                 0xF
+#define HNS3_PTP_MESSAGE_TYPE_S         0
+#define HNS3_PTP_MESSAGE_TYPE_M        (0xF << HNS3_PTP_MESSAGE_TYPE_S)
+
+#define PTP_TYPE_L2_V2_TYPE             0
+
+struct hns3_ptp_mode_cfg_cmd {
+	uint8_t enable;
+	uint8_t ptp_type;
+	uint8_t v2_message_type_1;
+	uint8_t v2_message_type_0;
+	uint8_t rsv[20];
+};
+
+struct hns3_ptp_int_cmd {
+	uint8_t int_en;
+	uint8_t rsvd[23];
 };
 
 #define HNS3_MAX_TQP_NUM_HIP08_PF	64

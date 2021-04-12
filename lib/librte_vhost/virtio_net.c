@@ -548,10 +548,11 @@ fill_vec_buf_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			return -1;
 		}
 
-		len += descs[idx].len;
+		dlen = descs[idx].len;
+		len += dlen;
 
 		if (unlikely(map_one_desc(dev, vq, buf_vec, &vec_id,
-						descs[idx].addr, descs[idx].len,
+						descs[idx].addr, dlen,
 						perm))) {
 			free_ind_table(idesc);
 			return -1;
@@ -668,9 +669,10 @@ fill_vec_buf_packed_indirect(struct virtio_net *dev,
 			return -1;
 		}
 
-		*len += descs[i].len;
+		dlen = descs[i].len;
+		*len += dlen;
 		if (unlikely(map_one_desc(dev, vq, buf_vec, &vec_id,
-						descs[i].addr, descs[i].len,
+						descs[i].addr, dlen,
 						perm)))
 			return -1;
 	}
@@ -691,6 +693,7 @@ fill_vec_buf_packed(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	bool wrap_counter = vq->avail_wrap_counter;
 	struct vring_packed_desc *descs = vq->desc_packed;
 	uint16_t vec_id = *vec_idx;
+	uint64_t dlen;
 
 	if (avail_idx < vq->last_avail_idx)
 		wrap_counter ^= 1;
@@ -723,11 +726,12 @@ fill_vec_buf_packed(struct virtio_net *dev, struct vhost_virtqueue *vq,
 							len, perm) < 0))
 				return -1;
 		} else {
-			*len += descs[avail_idx].len;
+			dlen = descs[avail_idx].len;
+			*len += dlen;
 
 			if (unlikely(map_one_desc(dev, vq, buf_vec, &vec_id,
 							descs[avail_idx].addr,
-							descs[avail_idx].len,
+							dlen,
 							perm)))
 				return -1;
 		}
@@ -808,9 +812,10 @@ copy_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	hdr_mbuf = m;
 	hdr_addr = buf_addr;
-	if (unlikely(buf_len < dev->vhost_hlen))
+	if (unlikely(buf_len < dev->vhost_hlen)) {
+		memset(&tmp_hdr, 0, sizeof(struct virtio_net_hdr_mrg_rxbuf));
 		hdr = &tmp_hdr;
-	else
+	} else
 		hdr = (struct virtio_net_hdr_mrg_rxbuf *)(uintptr_t)hdr_addr;
 
 	VHOST_LOG_DATA(DEBUG, "(%d) RX: num merge buffers %d\n",
@@ -981,9 +986,10 @@ async_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	hdr_mbuf = m;
 	hdr_addr = buf_addr;
-	if (unlikely(buf_len < dev->vhost_hlen))
+	if (unlikely(buf_len < dev->vhost_hlen)) {
+		memset(&tmp_hdr, 0, sizeof(struct virtio_net_hdr_mrg_rxbuf));
 		hdr = &tmp_hdr;
-	else
+	} else
 		hdr = (struct virtio_net_hdr_mrg_rxbuf *)(uintptr_t)hdr_addr;
 
 	VHOST_LOG_DATA(DEBUG, "(%d) RX: num merge buffers %d\n",
@@ -1396,13 +1402,13 @@ virtio_dev_rx(struct virtio_net *dev, uint16_t queue_id,
 
 	rte_spinlock_lock(&vq->access_lock);
 
-	if (unlikely(vq->enabled == 0))
+	if (unlikely(!vq->enabled))
 		goto out_access_unlock;
 
 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
 		vhost_user_iotlb_rd_lock(vq);
 
-	if (unlikely(vq->access_ok == 0))
+	if (unlikely(!vq->access_ok))
 		if (unlikely(vring_translate(dev, vq) < 0))
 			goto out;
 
@@ -1753,13 +1759,13 @@ virtio_dev_rx_async_submit(struct virtio_net *dev, uint16_t queue_id,
 
 	rte_spinlock_lock(&vq->access_lock);
 
-	if (unlikely(vq->enabled == 0 || !vq->async_registered))
+	if (unlikely(!vq->enabled || !vq->async_registered))
 		goto out_access_unlock;
 
 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
 		vhost_user_iotlb_rd_lock(vq);
 
-	if (unlikely(vq->access_ok == 0))
+	if (unlikely(!vq->access_ok))
 		if (unlikely(vring_translate(dev, vq) < 0))
 			goto out;
 
@@ -2314,7 +2320,7 @@ vhost_reserve_avail_batch_packed(struct virtio_net *dev,
 	}
 
 	vhost_for_each_try_unroll(i, 0, PACKED_BATCH_SIZE) {
-		pkts[i]->pkt_len = descs[avail_idx + i].len - buf_offset;
+		pkts[i]->pkt_len = lens[i] - buf_offset;
 		pkts[i]->data_len = pkts[i]->pkt_len;
 		ids[i] = descs[avail_idx + i].id;
 	}
@@ -2518,7 +2524,7 @@ rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 	if (unlikely(rte_spinlock_trylock(&vq->access_lock) == 0))
 		return 0;
 
-	if (unlikely(vq->enabled == 0)) {
+	if (unlikely(!vq->enabled)) {
 		count = 0;
 		goto out_access_unlock;
 	}
@@ -2526,7 +2532,7 @@ rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
 		vhost_user_iotlb_rd_lock(vq);
 
-	if (unlikely(vq->access_ok == 0))
+	if (unlikely(!vq->access_ok))
 		if (unlikely(vring_translate(dev, vq) < 0)) {
 			count = 0;
 			goto out;

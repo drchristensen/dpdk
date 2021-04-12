@@ -61,6 +61,7 @@ static bool dump_iterations;
 static bool delete_flag;
 static bool dump_socket_mem_flag;
 static bool enable_fwd;
+static bool unique_data;
 
 static struct rte_mempool *mbuf_mp;
 static uint32_t nb_lcores;
@@ -104,8 +105,8 @@ struct used_cpu_time {
 struct multi_cores_pool {
 	uint32_t cores_count;
 	uint32_t rules_count;
-	struct used_cpu_time create_meter;
-	struct used_cpu_time create_flow;
+	struct used_cpu_time meters_record;
+	struct used_cpu_time flows_record;
 	int64_t last_alloc[RTE_MAX_LCORE];
 	int64_t current_alloc[RTE_MAX_LCORE];
 } __rte_cache_aligned;
@@ -131,6 +132,8 @@ usage(char *progname)
 	printf("  --enable-fwd: To enable packets forwarding"
 		" after insertion\n");
 	printf("  --portmask=N: hexadecimal bitmask of ports used\n");
+	printf("  --unique-data: flag to set using unique data for all"
+		" actions that support data, such as header modify and encap actions\n");
 
 	printf("To set flow attributes:\n");
 	printf("  --ingress: set ingress attribute in flows\n");
@@ -567,6 +570,7 @@ args_parse(int argc, char **argv)
 		{ "deletion-rate",              0, 0, 0 },
 		{ "dump-socket-mem",            0, 0, 0 },
 		{ "enable-fwd",                 0, 0, 0 },
+		{ "unique-data",                0, 0, 0 },
 		{ "portmask",                   1, 0, 0 },
 		{ "cores",                      1, 0, 0 },
 		/* Attributes */
@@ -639,7 +643,7 @@ args_parse(int argc, char **argv)
 		case 0:
 			if (strcmp(lgopts[opt_idx].name, "help") == 0) {
 				usage(argv[0]);
-				rte_exit(EXIT_SUCCESS, "Displayed help\n");
+				exit(EXIT_SUCCESS);
 			}
 
 			if (strcmp(lgopts[opt_idx].name, "group") == 0) {
@@ -647,7 +651,7 @@ args_parse(int argc, char **argv)
 				if (n >= 0)
 					flow_group = n;
 				else
-					rte_exit(EXIT_SUCCESS,
+					rte_exit(EXIT_FAILURE,
 						"flow group should be >= 0\n");
 				printf("group %d / ", flow_group);
 			}
@@ -667,7 +671,7 @@ args_parse(int argc, char **argv)
 				if (n > 0)
 					hairpin_queues_num = n;
 				else
-					rte_exit(EXIT_SUCCESS,
+					rte_exit(EXIT_FAILURE,
 						"Hairpin queues should be > 0\n");
 
 				flow_actions[actions_idx++] =
@@ -680,7 +684,7 @@ args_parse(int argc, char **argv)
 				if (n > 0)
 					hairpin_queues_num = n;
 				else
-					rte_exit(EXIT_SUCCESS,
+					rte_exit(EXIT_FAILURE,
 						"Hairpin queues should be > 0\n");
 
 				flow_actions[actions_idx++] =
@@ -704,11 +708,9 @@ args_parse(int argc, char **argv)
 							break;
 						}
 						/* Reached last item with no match */
-						if (i == (RTE_DIM(flow_options) - 1)) {
-							fprintf(stderr, "Invalid encap item: %s\n", token);
-							usage(argv[0]);
-							rte_exit(EXIT_SUCCESS, "Invalid encap item\n");
-						}
+						if (i == (RTE_DIM(flow_options) - 1))
+							rte_exit(EXIT_FAILURE,
+								"Invalid encap item: %s\n", token);
 					}
 					token = strtok(NULL, ",");
 				}
@@ -726,15 +728,13 @@ args_parse(int argc, char **argv)
 					for (i = 0; i < RTE_DIM(flow_options); i++) {
 						if (strcmp(flow_options[i].str, token) == 0) {
 							printf("%s,", token);
-							encap_data |= flow_options[i].mask;
+							decap_data |= flow_options[i].mask;
 							break;
 						}
 						/* Reached last item with no match */
-						if (i == (RTE_DIM(flow_options) - 1)) {
-							fprintf(stderr, "Invalid decap item: %s\n", token);
-							usage(argv[0]);
-							rte_exit(EXIT_SUCCESS, "Invalid decap item\n");
-						}
+						if (i == (RTE_DIM(flow_options) - 1))
+							rte_exit(EXIT_FAILURE,
+								"Invalid decap item %s\n", token);
 					}
 					token = strtok(NULL, ",");
 				}
@@ -747,9 +747,9 @@ args_parse(int argc, char **argv)
 				if (n >= DEFAULT_RULES_BATCH)
 					rules_batch = n;
 				else {
-					printf("\n\nrules_batch should be >= %d\n",
+					rte_exit(EXIT_FAILURE,
+						"rules_batch should be >= %d\n",
 						DEFAULT_RULES_BATCH);
-					rte_exit(EXIT_SUCCESS, " ");
 				}
 			}
 			if (strcmp(lgopts[opt_idx].name,
@@ -758,13 +758,17 @@ args_parse(int argc, char **argv)
 				if (n >= (int) rules_batch)
 					rules_count = n;
 				else {
-					printf("\n\nrules_count should be >= %d\n",
+					rte_exit(EXIT_FAILURE,
+						"rules_count should be >= %d\n",
 						rules_batch);
 				}
 			}
 			if (strcmp(lgopts[opt_idx].name,
 					"dump-iterations") == 0)
 				dump_iterations = true;
+			if (strcmp(lgopts[opt_idx].name,
+					"unique-data") == 0)
+				unique_data = true;
 			if (strcmp(lgopts[opt_idx].name,
 					"deletion-rate") == 0)
 				delete_flag = true;
@@ -786,23 +790,23 @@ args_parse(int argc, char **argv)
 			if (strcmp(lgopts[opt_idx].name, "cores") == 0) {
 				n = atoi(optarg);
 				if ((int) rte_lcore_count() <= n) {
-					printf("\nError: you need %d cores to run on multi-cores\n"
+					rte_exit(EXIT_FAILURE,
+						"Error: you need %d cores to run on multi-cores\n"
 						"Existing cores are: %d\n", n, rte_lcore_count());
-					rte_exit(EXIT_FAILURE, " ");
 				}
 				if (n <= RTE_MAX_LCORE && n > 0)
 					mc_pool.cores_count = n;
 				else {
-					printf("Error: cores count must be > 0 "
-						" and < %d\n", RTE_MAX_LCORE);
-					rte_exit(EXIT_FAILURE, " ");
+					rte_exit(EXIT_FAILURE,
+						"Error: cores count must be > 0 and < %d\n",
+						RTE_MAX_LCORE);
 				}
 			}
 			break;
 		default:
-			fprintf(stderr, "Invalid option: %s\n", argv[optind]);
 			usage(argv[0]);
-			rte_exit(EXIT_SUCCESS, "Invalid option\n");
+			rte_exit(EXIT_FAILURE, "Invalid option: %s\n",
+					argv[optind]);
 			break;
 		}
 	}
@@ -936,7 +940,7 @@ create_meter_rule(int port_id, uint32_t counter)
 		printf("Port %u create meter idx(%d) error(%d) message: %s\n",
 			port_id, counter, error.type,
 			error.message ? error.message : "(no stated reason)");
-		rte_exit(EXIT_FAILURE, "error in creating meter");
+		rte_exit(EXIT_FAILURE, "Error in creating meter\n");
 	}
 }
 
@@ -949,7 +953,7 @@ destroy_meter_rule(int port_id, uint32_t counter)
 		printf("Port %u destroy meter(%d) error(%d) message: %s\n",
 			port_id, counter, error.type,
 			error.message ? error.message : "(no stated reason)");
-		rte_exit(EXIT_FAILURE, "Error in deleting meter rule");
+		rte_exit(EXIT_FAILURE, "Error in deleting meter rule\n");
 	}
 }
 
@@ -969,7 +973,7 @@ meters_handler(int port_id, uint8_t core_id, uint8_t ops)
 	end_counter = (core_id + 1) * rules_count_per_core;
 
 	cpu_time_used = 0;
-	start_batch = rte_rdtsc();
+	start_batch = rte_get_timer_cycles();
 	for (counter = start_counter; counter < end_counter; counter++) {
 		if (ops == METER_CREATE)
 			create_meter_rule(port_id, counter);
@@ -984,10 +988,10 @@ meters_handler(int port_id, uint8_t core_id, uint8_t ops)
 		if (!((counter + 1) % rules_batch)) {
 			rules_batch_idx = ((counter + 1) / rules_batch) - 1;
 			cpu_time_per_batch[rules_batch_idx] =
-				((double)(rte_rdtsc() - start_batch))
-				/ rte_get_tsc_hz();
+				((double)(rte_get_timer_cycles() - start_batch))
+				/ rte_get_timer_hz();
 			cpu_time_used += cpu_time_per_batch[rules_batch_idx];
-			start_batch = rte_rdtsc();
+			start_batch = rte_get_timer_cycles();
 		}
 	}
 
@@ -1006,10 +1010,10 @@ meters_handler(int port_id, uint8_t core_id, uint8_t ops)
 		cpu_time_used, insertion_rate);
 
 	if (ops == METER_CREATE)
-		mc_pool.create_meter.insertion[port_id][core_id]
+		mc_pool.meters_record.insertion[port_id][core_id]
 			= cpu_time_used;
 	else
-		mc_pool.create_meter.deletion[port_id][core_id]
+		mc_pool.meters_record.deletion[port_id][core_id]
 			= cpu_time_used;
 }
 
@@ -1089,7 +1093,7 @@ destroy_flows(int port_id, uint8_t core_id, struct rte_flow **flows_list)
 	if (flow_group > 0 && core_id == 0)
 		rules_count_per_core++;
 
-	start_batch = rte_rdtsc();
+	start_batch = rte_get_timer_cycles();
 	for (i = 0; i < (uint32_t) rules_count_per_core; i++) {
 		if (flows_list[i] == 0)
 			break;
@@ -1097,7 +1101,7 @@ destroy_flows(int port_id, uint8_t core_id, struct rte_flow **flows_list)
 		memset(&error, 0x33, sizeof(error));
 		if (rte_flow_destroy(port_id, flows_list[i], &error)) {
 			print_flow_error(error);
-			rte_exit(EXIT_FAILURE, "Error in deleting flow");
+			rte_exit(EXIT_FAILURE, "Error in deleting flow\n");
 		}
 
 		/*
@@ -1107,12 +1111,12 @@ destroy_flows(int port_id, uint8_t core_id, struct rte_flow **flows_list)
 		 * for this batch.
 		 */
 		if (!((i + 1) % rules_batch)) {
-			end_batch = rte_rdtsc();
+			end_batch = rte_get_timer_cycles();
 			delta = (double) (end_batch - start_batch);
 			rules_batch_idx = ((i + 1) / rules_batch) - 1;
-			cpu_time_per_batch[rules_batch_idx] = delta / rte_get_tsc_hz();
+			cpu_time_per_batch[rules_batch_idx] = delta / rte_get_timer_hz();
 			cpu_time_used += cpu_time_per_batch[rules_batch_idx];
-			start_batch = rte_rdtsc();
+			start_batch = rte_get_timer_cycles();
 		}
 	}
 
@@ -1127,7 +1131,7 @@ destroy_flows(int port_id, uint8_t core_id, struct rte_flow **flows_list)
 	printf(":: Port %d :: Core %d :: The time for deleting %d rules is %f seconds\n",
 		port_id, core_id, rules_count_per_core, cpu_time_used);
 
-	mc_pool.create_flow.deletion[port_id][core_id] = cpu_time_used;
+	mc_pool.flows_record.deletion[port_id][core_id] = cpu_time_used;
 }
 
 static struct rte_flow **
@@ -1136,6 +1140,7 @@ insert_flows(int port_id, uint8_t core_id)
 	struct rte_flow **flows_list;
 	struct rte_flow_error error;
 	clock_t start_batch, end_batch;
+	double first_flow_latency;
 	double cpu_time_used;
 	double insertion_rate;
 	double cpu_time_per_batch[MAX_BATCHES_COUNT] = { 0 };
@@ -1160,7 +1165,7 @@ insert_flows(int port_id, uint8_t core_id)
 	flows_list = rte_zmalloc("flows_list",
 		(sizeof(struct rte_flow *) * rules_count_per_core) + 1, 0);
 	if (flows_list == NULL)
-		rte_exit(EXIT_FAILURE, "No Memory available!");
+		rte_exit(EXIT_FAILURE, "No Memory available!\n");
 
 	cpu_time_used = 0;
 	flow_index = 0;
@@ -1176,30 +1181,40 @@ insert_flows(int port_id, uint8_t core_id)
 		 */
 		flow = generate_flow(port_id, 0, flow_attrs,
 			global_items, global_actions,
-			flow_group, 0, 0, 0, 0, core_id, &error);
+			flow_group, 0, 0, 0, 0, core_id, unique_data, &error);
 
 		if (flow == NULL) {
 			print_flow_error(error);
-			rte_exit(EXIT_FAILURE, "error in creating flow");
+			rte_exit(EXIT_FAILURE, "Error in creating flow\n");
 		}
 		flows_list[flow_index++] = flow;
 	}
 
-	start_batch = rte_rdtsc();
+	start_batch = rte_get_timer_cycles();
 	for (counter = start_counter; counter < end_counter; counter++) {
 		flow = generate_flow(port_id, flow_group,
 			flow_attrs, flow_items, flow_actions,
 			JUMP_ACTION_TABLE, counter,
 			hairpin_queues_num,
 			encap_data, decap_data,
-			core_id, &error);
+			core_id, unique_data, &error);
+
+		if (!counter) {
+			first_flow_latency = (double) (rte_get_timer_cycles() - start_batch);
+			first_flow_latency /= rte_get_timer_hz();
+			/* In millisecond */
+			first_flow_latency *= 1000;
+			printf(":: First Flow Latency :: Port %d :: First flow "
+				"installed in %f milliseconds\n",
+				port_id, first_flow_latency);
+		}
 
 		if (force_quit)
 			counter = end_counter;
 
 		if (!flow) {
 			print_flow_error(error);
-			rte_exit(EXIT_FAILURE, "error in creating flow");
+			rte_exit(EXIT_FAILURE, "Error in creating flow\n");
 		}
 
 		flows_list[flow_index++] = flow;
@@ -1211,12 +1226,12 @@ insert_flows(int port_id, uint8_t core_id)
 		 * for this batch.
 		 */
 		if (!((counter + 1) % rules_batch)) {
-			end_batch = rte_rdtsc();
+			end_batch = rte_get_timer_cycles();
 			delta = (double) (end_batch - start_batch);
 			rules_batch_idx = ((counter + 1) / rules_batch) - 1;
-			cpu_time_per_batch[rules_batch_idx] = delta / rte_get_tsc_hz();
+			cpu_time_per_batch[rules_batch_idx] = delta / rte_get_timer_hz();
 			cpu_time_used += cpu_time_per_batch[rules_batch_idx];
-			start_batch = rte_rdtsc();
+			start_batch = rte_get_timer_cycles();
 		}
 	}
 
@@ -1234,7 +1249,7 @@ insert_flows(int port_id, uint8_t core_id)
 	printf(":: Port %d :: Core %d :: The time for creating %d in rules %f seconds\n",
 		port_id, core_id, rules_count_per_core, cpu_time_used);
 
-	mc_pool.create_flow.insertion[port_id][core_id] = cpu_time_used;
+	mc_pool.flows_record.insertion[port_id][core_id] = cpu_time_used;
 	return flows_list;
 }
 
@@ -1430,11 +1445,14 @@ run_rte_flow_handler_cores(void *data __rte_unused)
 	rte_eal_mp_wait_lcore();
 
 	RTE_ETH_FOREACH_DEV(port) {
+		/* If port outside portmask */
+		if (!((ports_mask >> port) & 0x1))
+			continue;
 		if (has_meter())
 			dump_used_cpu_time("Meters:",
-				port, &mc_pool.create_meter);
+				port, &mc_pool.meters_record);
 		dump_used_cpu_time("Flows:",
-			port, &mc_pool.create_flow);
+			port, &mc_pool.flows_record);
 		dump_used_mem(port);
 	}
 
@@ -1517,7 +1535,7 @@ packet_per_second_stats(void)
 	old = rte_zmalloc("old",
 		sizeof(struct lcore_info) * RTE_MAX_LCORE, 0);
 	if (old == NULL)
-		rte_exit(EXIT_FAILURE, "No Memory available!");
+		rte_exit(EXIT_FAILURE, "No Memory available!\n");
 
 	memcpy(old, lcore_infos,
 		sizeof(struct lcore_info) * RTE_MAX_LCORE);
@@ -1863,6 +1881,7 @@ main(int argc, char **argv)
 	delete_flag = false;
 	dump_socket_mem_flag = false;
 	flow_group = DEFAULT_GROUP;
+	unique_data = false;
 
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
@@ -1877,7 +1896,6 @@ main(int argc, char **argv)
 	nb_lcores = rte_lcore_count();
 	if (nb_lcores <= 1)
 		rte_exit(EXIT_FAILURE, "This app needs at least two cores\n");
-
 
 	printf(":: Flows Count per port: %d\n\n", rules_count);
 

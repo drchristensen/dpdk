@@ -1106,6 +1106,26 @@ struct rte_flow {
 #define MLX5_RSS_HASH_IPV6_UDP \
 	(MLX5_RSS_HASH_IPV6 | \
 	 IBV_RX_HASH_SRC_PORT_UDP | IBV_RX_HASH_DST_PORT_UDP)
+#define MLX5_RSS_HASH_IPV4_SRC_ONLY IBV_RX_HASH_SRC_IPV4
+#define MLX5_RSS_HASH_IPV4_DST_ONLY IBV_RX_HASH_DST_IPV4
+#define MLX5_RSS_HASH_IPV6_SRC_ONLY IBV_RX_HASH_SRC_IPV6
+#define MLX5_RSS_HASH_IPV6_DST_ONLY IBV_RX_HASH_DST_IPV6
+#define MLX5_RSS_HASH_IPV4_UDP_SRC_ONLY \
+	(MLX5_RSS_HASH_IPV4 | IBV_RX_HASH_SRC_PORT_UDP)
+#define MLX5_RSS_HASH_IPV4_UDP_DST_ONLY \
+	(MLX5_RSS_HASH_IPV4 | IBV_RX_HASH_DST_PORT_UDP)
+#define MLX5_RSS_HASH_IPV6_UDP_SRC_ONLY \
+	(MLX5_RSS_HASH_IPV6 | IBV_RX_HASH_SRC_PORT_UDP)
+#define MLX5_RSS_HASH_IPV6_UDP_DST_ONLY \
+	(MLX5_RSS_HASH_IPV6 | IBV_RX_HASH_DST_PORT_UDP)
+#define MLX5_RSS_HASH_IPV4_TCP_SRC_ONLY \
+	(MLX5_RSS_HASH_IPV4 | IBV_RX_HASH_SRC_PORT_TCP)
+#define MLX5_RSS_HASH_IPV4_TCP_DST_ONLY \
+	(MLX5_RSS_HASH_IPV4 | IBV_RX_HASH_DST_PORT_TCP)
+#define MLX5_RSS_HASH_IPV6_TCP_SRC_ONLY \
+	(MLX5_RSS_HASH_IPV6 | IBV_RX_HASH_SRC_PORT_TCP)
+#define MLX5_RSS_HASH_IPV6_TCP_DST_ONLY \
+	(MLX5_RSS_HASH_IPV6 | IBV_RX_HASH_DST_PORT_TCP)
 #define MLX5_RSS_HASH_NONE 0ULL
 
 /* array of valid combinations of RX Hash fields for RSS */
@@ -1129,8 +1149,6 @@ struct mlx5_shared_action_rss {
 	/**< Hash RX queues (hrxq, hrxq_tunnel fields) indirection table. */
 	uint32_t hrxq[MLX5_RSS_HASH_FIELDS_LEN];
 	/**< Hash RX queue indexes mapped to mlx5_rss_hash_fields */
-	uint32_t hrxq_tunnel[MLX5_RSS_HASH_FIELDS_LEN];
-	/**< Hash RX queue indexes for tunneled RSS */
 	rte_spinlock_t action_rss_sl; /**< Shared RSS action spinlock. */
 };
 

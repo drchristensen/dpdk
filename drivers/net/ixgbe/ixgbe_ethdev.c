@@ -304,10 +304,8 @@ static int ixgbe_add_5tuple_filter(struct rte_eth_dev *dev,
 			struct ixgbe_5tuple_filter *filter);
 static void ixgbe_remove_5tuple_filter(struct rte_eth_dev *dev,
 			struct ixgbe_5tuple_filter *filter);
-static int ixgbe_dev_filter_ctrl(struct rte_eth_dev *dev,
-		     enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op,
-		     void *arg);
+static int ixgbe_dev_flow_ops_get(struct rte_eth_dev *dev,
+				  const struct rte_flow_ops **ops);
 static int ixgbevf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu);
 
 static int ixgbe_dev_set_mc_addr_list(struct rte_eth_dev *dev,
@@ -538,7 +536,7 @@ static const struct eth_dev_ops ixgbe_eth_dev_ops = {
 	.reta_query           = ixgbe_dev_rss_reta_query,
 	.rss_hash_update      = ixgbe_dev_rss_hash_update,
 	.rss_hash_conf_get    = ixgbe_dev_rss_hash_conf_get,
-	.filter_ctrl          = ixgbe_dev_filter_ctrl,
+	.flow_ops_get         = ixgbe_dev_flow_ops_get,
 	.set_mc_addr_list     = ixgbe_dev_set_mc_addr_list,
 	.rxq_info_get         = ixgbe_rxq_info_get,
 	.txq_info_get         = ixgbe_txq_info_get,
@@ -5015,10 +5013,18 @@ ixgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
 	uint32_t reta, r;
 	uint16_t idx, shift;
 	struct ixgbe_adapter *adapter = dev->data->dev_private;
+	struct rte_eth_dev_data *dev_data = dev->data;
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t reta_reg;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (!dev_data->dev_started) {
+		PMD_DRV_LOG(ERR,
+			"port %d must be started before rss reta update",
+			 dev_data->port_id);
+		return -EIO;
+	}
 
 	if (!ixgbe_rss_update_sp(hw->mac.type)) {
 		PMD_DRV_LOG(ERR, "RSS reta update is not supported on this "
@@ -6805,27 +6811,11 @@ ixgbe_add_del_ethertype_filter(struct rte_eth_dev *dev,
 }
 
 static int
-ixgbe_dev_filter_ctrl(__rte_unused struct rte_eth_dev *dev,
-		     enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op,
-		     void *arg)
+ixgbe_dev_flow_ops_get(__rte_unused struct rte_eth_dev *dev,
+		       const struct rte_flow_ops **ops)
 {
-	int ret = 0;
-
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
-		*(const void **)arg = &ixgbe_flow_ops;
-		break;
-	default:
-		PMD_DRV_LOG(WARNING, "Filter type (%d) not supported",
-							filter_type);
-		ret = -EINVAL;
-		break;
-	}
-
-	return ret;
+	*ops = &ixgbe_flow_ops;
+	return 0;
 }
 
 static u8 *
@@ -7339,9 +7329,6 @@ ixgbe_get_module_eeprom(struct rte_eth_dev *dev,
 	uint8_t databyte = 0xFF;
 	uint8_t *data = info->data;
 	uint32_t i = 0;
-
-	if (info->length == 0)
-		return -EINVAL;
 
 	for (i = info->offset; i < info->offset + info->length; i++) {
 		if (i < RTE_ETH_MODULE_SFF_8079_LEN)
@@ -8462,12 +8449,9 @@ RTE_PMD_REGISTER_PARAM_STRING(net_ixgbe_vf,
 RTE_LOG_REGISTER(ixgbe_logtype_init, pmd.net.ixgbe.init, NOTICE);
 RTE_LOG_REGISTER(ixgbe_logtype_driver, pmd.net.ixgbe.driver, NOTICE);
 
-#ifdef RTE_LIBRTE_IXGBE_DEBUG_RX
+#ifdef RTE_ETHDEV_DEBUG_RX
 RTE_LOG_REGISTER(ixgbe_logtype_rx, pmd.net.ixgbe.rx, DEBUG);
 #endif
-#ifdef RTE_LIBRTE_IXGBE_DEBUG_TX
+#ifdef RTE_ETHDEV_DEBUG_TX
 RTE_LOG_REGISTER(ixgbe_logtype_tx, pmd.net.ixgbe.tx, DEBUG);
-#endif
-#ifdef RTE_LIBRTE_IXGBE_DEBUG_TX_FREE
-RTE_LOG_REGISTER(ixgbe_logtype_tx_free, pmd.net.ixgbe.tx_free, DEBUG);
 #endif

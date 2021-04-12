@@ -55,6 +55,17 @@ New Features
      Also, make sure to start the actual text at the margin.
      =======================================================
 
+* **Added support for Marvell CN10K SoC drivers.**
+
+  Added Marvell CN10K SoC support. Marvell CN10K SoC are based on Octeon 10
+  family of ARM64 processors with ARM Neoverse N2 core with accelerators for
+  packet processing, timers, cryptography, etc.
+
+  * Added common/cnxk driver consisting of common API to be used by
+    net, crypto and event PMD's.
+  * Added mempool/cnxk driver which provides the support for the integrated
+    mempool device.
+
 * **Enhanced ethdev representor syntax.**
 
   * Introduced representor type of VF, SF and PF.
@@ -65,6 +76,18 @@ New Features
       representor=[[c#]pf#]sf# sf[0,2-1023] /* 1023 SFs.                     */
       representor=[c#]pf#      c2pf[0,1]    /* 2 PFs on controller 2.        */
 
+* **Updated Arkville PMD driver.**
+
+  Updated Arkville net driver with new features and improvements, including:
+
+  * Generalized passing meta data between PMD and FPGA, allowing up to 20
+    bytes of user specified information in RX and TX paths.
+
+  * Updated dynamic PMD extensions API using standardized names.
+
+  * Added support for new Atomic Rules PCI device IDs ``0x100f, 0x1010, 0x1017,
+    0x1018, 0x1019``.
+
 * **Updated Broadcom bnxt driver.**
 
   * Updated HWRM structures to 1.10.2.15 version.
@@ -74,6 +97,31 @@ New Features
   * Added support for module EEPROM dumping.
   * Added support for freeing Tx mbuf on demand.
   * Added support for copper port in Kunpeng930.
+  * Added support for runtime config to select IO burst function.
+  * Added support for outer UDP checksum in Kunpeng930.
+  * Added support for query Tx descriptor status.
+  * Added support for query Rx descriptor status.
+  * Added support for IEEE 1588 PTP.
+
+* **Updated Intel iavf driver.**
+
+  Updated the Intel iavf driver with new features and improvements, including:
+
+  * Added flow filter to support GTPU inner L3/L4 fields matching.
+
+* **Updated Intel ice driver.**
+
+  * Added Intel ice support on Windows.
+
+* **Updated Marvell OCTEON TX2 ethdev driver.**
+
+  * Added support for flow action port id.
+
+* **Updated Mellanox mlx5 driver.**
+
+  Updated the Mellanox mlx5 driver with new features and improvements, including:
+
+  * Added support for VXLAN and NVGRE encap as sample actions.
 
 * **Updated NXP DPAA driver.**
 
@@ -89,10 +137,17 @@ New Features
 * **Updated Wangxun txgbe driver.**
 
   * Added support for txgbevf PMD.
+  * Support device arguments to handle AN training for backplane NICs.
+
+* **Enabled vmxnet3 PMD on Windows.**
 
 * **Updated the AF_XDP driver.**
 
   * Added support for preferred busy polling.
+
+* **Updated Mellanox RegEx PMD.**
+
+  * Added support for multi-segments mbuf.
 
 * **Updated testpmd.**
 
@@ -133,6 +188,9 @@ API Changes
 * eal: The experimental TLS API added in ``rte_thread.h`` has been renamed
   from ``rte_thread_tls_*`` to ``rte_thread_*`` to avoid naming redundancy
   and confusion with the transport layer security term.
+
+* pci: The value ``PCI_ANY_ID`` is marked as deprecated
+  and can be replaced with ``RTE_PCI_ANY_ID``.
 
 
 ABI Changes

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #include <linux/pci_regs.h>
@@ -988,6 +988,9 @@ hns3vf_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 				 DEV_TX_OFFLOAD_MBUF_FAST_FREE |
 				 hns3_txvlan_cap_get(hw));
 
+	if (hns3_dev_outer_udp_cksum_supported(hw))
+		info->tx_offload_capa |= DEV_TX_OFFLOAD_OUTER_UDP_CKSUM;
+
 	if (hns3_dev_indep_txrx_supported(hw))
 		info->dev_capa = RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
 				 RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP;
@@ -1061,7 +1064,6 @@ hns3vf_check_event_cause(struct hns3_adapter *hns, uint32_t *clearval)
 
 	/* Fetch the events from their corresponding regs */
 	cmdq_stat_reg = hns3_read_dev(hw, HNS3_VECTOR0_CMDQ_STAT_REG);
-
 	if (BIT(HNS3_VECTOR0_RST_INT_B) & cmdq_stat_reg) {
 		rst_ing_reg = hns3_read_dev(hw, HNS3_FUN_RST_ING);
 		hns3_warn(hw, "resetting reg: 0x%x", rst_ing_reg);
@@ -1105,9 +1107,6 @@ hns3vf_interrupt_handler(void *param)
 	struct hns3_hw *hw = &hns->hw;
 	enum hns3vf_evt_cause event_cause;
 	uint32_t clearval;
-
-	if (hw->irq_thread_id == 0)
-		hw->irq_thread_id = pthread_self();
 
 	/* Disable interrupt */
 	hns3vf_disable_irq0(hw);
@@ -1218,6 +1217,7 @@ hns3vf_get_capability(struct hns3_hw *hw)
 		hw->intr.mapping_mode = HNS3_INTR_MAPPING_VEC_RSV_ONE;
 		hw->intr.gl_unit = HNS3_INTR_COALESCE_GL_UINT_2US;
 		hw->tso_mode = HNS3_TSO_SW_CAL_PSEUDO_H_CSUM;
+		hw->drop_stats_mode = HNS3_PKTS_DROP_STATS_MODE1;
 		hw->min_tx_pkt_len = HNS3_HIP08_MIN_TX_PKT_LEN;
 		hw->rss_info.ipv6_sctp_offload_supported = false;
 		hw->promisc_mode = HNS3_UNLIMIT_PROMISC_MODE;
@@ -1235,6 +1235,7 @@ hns3vf_get_capability(struct hns3_hw *hw)
 	hw->intr.mapping_mode = HNS3_INTR_MAPPING_VEC_ALL;
 	hw->intr.gl_unit = HNS3_INTR_COALESCE_GL_UINT_1US;
 	hw->tso_mode = HNS3_TSO_HW_CAL_PSEUDO_H_CSUM;
+	hw->drop_stats_mode = HNS3_PKTS_DROP_STATS_MODE2;
 	hw->min_tx_pkt_len = HNS3_HIP09_MIN_TX_PKT_LEN;
 	hw->rss_info.ipv6_sctp_offload_supported = true;
 	hw->promisc_mode = HNS3_LIMIT_PROMISC_MODE;
@@ -1872,6 +1873,13 @@ hns3vf_init_vf(struct rte_eth_dev *eth_dev)
 	if (ret)
 		goto err_get_config;
 
+	/* Hardware statistics of imissed registers cleared. */
+	ret = hns3_update_imissed_stats(hw, true);
+	if (ret) {
+		hns3_err(hw, "clear imissed stats failed, ret = %d", ret);
+		goto err_set_tc_queue;
+	}
+
 	ret = hns3vf_set_tc_queue_mapping(hns, hw->tqps_num, hw->tqps_num);
 	if (ret) {
 		PMD_INIT_LOG(ERR, "failed to set tc info, ret = %d.", ret);
@@ -2111,7 +2119,10 @@ hns3vf_dev_link_update(struct rte_eth_dev *eth_dev,
 		new_link.link_speed = mac->link_speed;
 		break;
 	default:
-		new_link.link_speed = ETH_SPEED_NUM_100M;
+		if (mac->link_status)
+			new_link.link_speed = ETH_SPEED_NUM_UNKNOWN;
+		else
+			new_link.link_speed = ETH_SPEED_NUM_NONE;
 		break;
 	}
 
@@ -2769,7 +2780,7 @@ static const struct eth_dev_ops hns3vf_eth_dev_ops = {
 	.rss_hash_conf_get  = hns3_dev_rss_hash_conf_get,
 	.reta_update        = hns3_dev_rss_reta_update,
 	.reta_query         = hns3_dev_rss_reta_query,
-	.filter_ctrl        = hns3_dev_filter_ctrl,
+	.flow_ops_get       = hns3_dev_flow_ops_get,
 	.vlan_filter_set    = hns3vf_vlan_filter_set,
 	.vlan_offload_set   = hns3vf_vlan_offload_set,
 	.get_reg            = hns3_get_regs,
@@ -2834,6 +2845,7 @@ hns3vf_dev_init(struct rte_eth_dev *eth_dev)
 	hw->adapter_state = HNS3_NIC_UNINITIALIZED;
 	hns->is_vf = true;
 	hw->data = eth_dev->data;
+	hns3_parse_devargs(eth_dev);
 
 	ret = hns3_reset_init(hw);
 	if (ret)
@@ -2902,8 +2914,10 @@ err_mp_init_primary:
 err_mp_init_secondary:
 	eth_dev->dev_ops = NULL;
 	eth_dev->rx_pkt_burst = NULL;
+	eth_dev->rx_descriptor_status = NULL;
 	eth_dev->tx_pkt_burst = NULL;
 	eth_dev->tx_pkt_prepare = NULL;
+	eth_dev->tx_descriptor_status = NULL;
 	rte_free(eth_dev->process_private);
 	eth_dev->process_private = NULL;
 
@@ -2962,3 +2976,6 @@ static struct rte_pci_driver rte_hns3vf_pmd = {
 RTE_PMD_REGISTER_PCI(net_hns3_vf, rte_hns3vf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_hns3_vf, pci_id_hns3vf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_hns3_vf, "* igb_uio | vfio-pci");
+RTE_PMD_REGISTER_PARAM_STRING(net_hns3_vf,
+		HNS3_DEVARG_RX_FUNC_HINT "=vec|sve|simple|common "
+		HNS3_DEVARG_TX_FUNC_HINT "=vec|sve|simple|common ");

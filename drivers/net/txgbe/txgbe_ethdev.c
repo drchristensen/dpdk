@@ -16,6 +16,7 @@
 #include <rte_memory.h>
 #include <rte_eal.h>
 #include <rte_alarm.h>
+#include <rte_kvargs.h>
 
 #include "txgbe_logs.h"
 #include "base/txgbe.h"
@@ -105,6 +106,7 @@ static void txgbe_vlan_hw_strip_disable(struct rte_eth_dev *dev,
 static void txgbe_dev_link_status_print(struct rte_eth_dev *dev);
 static int txgbe_dev_lsc_interrupt_setup(struct rte_eth_dev *dev, uint8_t on);
 static int txgbe_dev_macsec_interrupt_setup(struct rte_eth_dev *dev);
+static int txgbe_dev_misc_interrupt_setup(struct rte_eth_dev *dev);
 static int txgbe_dev_rxq_interrupt_setup(struct rte_eth_dev *dev);
 static int txgbe_dev_interrupt_get_status(struct rte_eth_dev *dev);
 static int txgbe_dev_interrupt_action(struct rte_eth_dev *dev,
@@ -138,8 +140,8 @@ static void txgbe_l2_tunnel_conf(struct rte_eth_dev *dev);
  * The set of PCI devices this driver supports
  */
 static const struct rte_pci_id pci_id_txgbe_map[] = {
-	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_WANGXUN, TXGBE_DEV_ID_RAPTOR_SFP) },
-	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_WANGXUN, TXGBE_DEV_ID_WX1820_SFP) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_WANGXUN, TXGBE_DEV_ID_SP1000) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_WANGXUN, TXGBE_DEV_ID_WX1820) },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 
@@ -470,6 +472,71 @@ txgbe_swfw_lock_reset(struct txgbe_hw *hw)
 }
 
 static int
+txgbe_handle_devarg(__rte_unused const char *key, const char *value,
+		  void *extra_args)
+{
+	uint16_t *n = extra_args;
+
+	if (value == NULL || extra_args == NULL)
+		return -EINVAL;
+
+	*n = (uint16_t)strtoul(value, NULL, 10);
+	if (*n == USHRT_MAX && errno == ERANGE)
+		return -1;
+
+	return 0;
+}
+
+static void
+txgbe_parse_devargs(struct txgbe_hw *hw, struct rte_devargs *devargs)
+{
+	struct rte_kvargs *kvlist;
+	u16 auto_neg = 1;
+	u16 poll = 0;
+	u16 present = 1;
+	u16 sgmii = 0;
+	u16 ffe_set = 0;
+	u16 ffe_main = 27;
+	u16 ffe_pre = 8;
+	u16 ffe_post = 44;
+
+	if (devargs == NULL)
+		goto null;
+
+	kvlist = rte_kvargs_parse(devargs->args, txgbe_valid_arguments);
+	if (kvlist == NULL)
+		goto null;
+
+	rte_kvargs_process(kvlist, TXGBE_DEVARG_BP_AUTO,
+			   &txgbe_handle_devarg, &auto_neg);
+	rte_kvargs_process(kvlist, TXGBE_DEVARG_KR_POLL,
+			   &txgbe_handle_devarg, &poll);
+	rte_kvargs_process(kvlist, TXGBE_DEVARG_KR_PRESENT,
+			   &txgbe_handle_devarg, &present);
+	rte_kvargs_process(kvlist, TXGBE_DEVARG_KX_SGMII,
+			   &txgbe_handle_devarg, &sgmii);
+	rte_kvargs_process(kvlist, TXGBE_DEVARG_FFE_SET,
+			   &txgbe_handle_devarg, &ffe_set);
+	rte_kvargs_process(kvlist, TXGBE_DEVARG_FFE_MAIN,
+			   &txgbe_handle_devarg, &ffe_main);
+	rte_kvargs_process(kvlist, TXGBE_DEVARG_FFE_PRE,
+			   &txgbe_handle_devarg, &ffe_pre);
+	rte_kvargs_process(kvlist, TXGBE_DEVARG_FFE_POST,
+			   &txgbe_handle_devarg, &ffe_post);
+	rte_kvargs_free(kvlist);
+
+null:
+	hw->devarg.auto_neg = auto_neg;
+	hw->devarg.poll = poll;
+	hw->devarg.present = present;
+	hw->devarg.sgmii = sgmii;
+	hw->phy.ffe_set = ffe_set;
+	hw->phy.ffe_main = ffe_main;
+	hw->phy.ffe_pre = ffe_pre;
+	hw->phy.ffe_post = ffe_post;
+}
+
+static int
 eth_txgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
@@ -537,6 +604,7 @@ eth_txgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	hw->isb_dma = TMZ_PADDR(mz);
 	hw->isb_mem = TMZ_VADDR(mz);
 
+	txgbe_parse_devargs(hw, pci_dev->device.devargs);
 	/* Initialize the shared code (base driver) */
 	err = txgbe_init_shared_code(hw);
 	if (err != 0) {
@@ -1456,6 +1524,7 @@ txgbe_dev_phy_intr_setup(struct rte_eth_dev *dev)
 	gpie |= TXGBE_GPIOBIT_6;
 	wr32(hw, TXGBE_GPIOINTEN, gpie);
 	intr->mask_misc |= TXGBE_ICRMISC_GPIO;
+	intr->mask_misc |= TXGBE_ICRMISC_ANDONE;
 }
 
 int
@@ -1689,7 +1758,8 @@ txgbe_dev_start(struct rte_eth_dev *dev)
 		hw->mac.enable_tx_laser(hw);
 	}
 
-	err = hw->mac.check_link(hw, &speed, &link_up, 0);
+	if ((hw->subsystem_device_id & 0xFF) != TXGBE_DEV_ID_KR_KX_KX4)
+		err = hw->mac.check_link(hw, &speed, &link_up, 0);
 	if (err)
 		goto error;
 	dev->data->dev_link.link_status = link_up;
@@ -1732,6 +1802,7 @@ txgbe_dev_start(struct rte_eth_dev *dev)
 skip_link_setup:
 
 	if (rte_intr_allow_others(intr_handle)) {
+		txgbe_dev_misc_interrupt_setup(dev);
 		/* check if lsc interrupt is enabled */
 		if (dev->data->dev_conf.intr_conf.lsc != 0)
 			txgbe_dev_lsc_interrupt_setup(dev, TRUE);
@@ -2505,14 +2576,11 @@ static int
 txgbe_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 {
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
-	u16 eeprom_verh, eeprom_verl;
 	u32 etrack_id;
 	int ret;
 
-	hw->rom.readw_sw(hw, TXGBE_EEPROM_VERSION_H, &eeprom_verh);
-	hw->rom.readw_sw(hw, TXGBE_EEPROM_VERSION_L, &eeprom_verl);
+	hw->phy.get_fw_version(hw, &etrack_id);
 
-	etrack_id = (eeprom_verh << 16) | eeprom_verl;
 	ret = snprintf(fw_version, fw_size, "0x%08x", etrack_id);
 
 	ret += 1; /* add the size of '\0' */
@@ -2652,7 +2720,10 @@ txgbe_dev_link_update_share(struct rte_eth_dev *dev,
 	}
 
 	if (link_up == 0) {
-		if (hw->phy.media_type == txgbe_media_type_fiber) {
+		if ((hw->subsystem_device_id & 0xFF) ==
+				TXGBE_DEV_ID_KR_KX_KX4) {
+			hw->mac.bp_down_event(hw);
+		} else if (hw->phy.media_type == txgbe_media_type_fiber) {
 			intr->flags |= TXGBE_FLAG_NEED_LINK_CONFIG;
 			rte_eal_alarm_set(10,
 				txgbe_dev_setup_link_alarm_handler, dev);
@@ -2787,6 +2858,20 @@ txgbe_dev_lsc_interrupt_setup(struct rte_eth_dev *dev, uint8_t on)
 	return 0;
 }
 
+static int
+txgbe_dev_misc_interrupt_setup(struct rte_eth_dev *dev)
+{
+	struct txgbe_interrupt *intr = TXGBE_DEV_INTR(dev);
+	u64 mask;
+
+	mask = TXGBE_ICR_MASK;
+	mask &= (1ULL << TXGBE_MISC_VEC_ID);
+	intr->mask |= mask;
+	intr->mask_misc |= TXGBE_ICRMISC_GPIO;
+	intr->mask_misc |= TXGBE_ICRMISC_ANDONE;
+	return 0;
+}
+
 /**
  * It clears the interrupt causes and enables the interrupt.
  * It will be called once only during nic initialized.
@@ -2802,9 +2887,11 @@ static int
 txgbe_dev_rxq_interrupt_setup(struct rte_eth_dev *dev)
 {
 	struct txgbe_interrupt *intr = TXGBE_DEV_INTR(dev);
+	u64 mask;
 
-	intr->mask[0] |= TXGBE_ICR_MASK;
-	intr->mask[1] |= TXGBE_ICR_MASK;
+	mask = TXGBE_ICR_MASK;
+	mask &= ~((1ULL << TXGBE_RX_VEC_START) - 1);
+	intr->mask |= mask;
 
 	return 0;
 }
@@ -2859,6 +2946,9 @@ txgbe_dev_interrupt_get_status(struct rte_eth_dev *dev)
 	/* set flag for async link update */
 	if (eicr & TXGBE_ICRMISC_LSC)
 		intr->flags |= TXGBE_FLAG_NEED_LINK_UPDATE;
+
+	if (eicr & TXGBE_ICRMISC_ANDONE)
+		intr->flags |= TXGBE_FLAG_NEED_AN_CONFIG;
 
 	if (eicr & TXGBE_ICRMISC_VFMBX)
 		intr->flags |= TXGBE_FLAG_MAILBOX;
@@ -2937,6 +3027,13 @@ txgbe_dev_interrupt_action(struct rte_eth_dev *dev,
 		intr->flags &= ~TXGBE_FLAG_PHY_INTERRUPT;
 	}
 
+	if (intr->flags & TXGBE_FLAG_NEED_AN_CONFIG) {
+		if (hw->devarg.auto_neg == 1 && hw->devarg.poll == 0) {
+			hw->mac.kr_handle(hw);
+			intr->flags &= ~TXGBE_FLAG_NEED_AN_CONFIG;
+		}
+	}
+
 	if (intr->flags & TXGBE_FLAG_NEED_LINK_UPDATE) {
 		struct rte_eth_link link;
 
@@ -2950,6 +3047,11 @@ txgbe_dev_interrupt_action(struct rte_eth_dev *dev,
 			/* handle it 1 sec later, wait it being stable */
 			timeout = TXGBE_LINK_UP_CHECK_TIMEOUT;
 		/* likely to down */
+		else if ((hw->subsystem_device_id & 0xFF) ==
+				TXGBE_DEV_ID_KR_KX_KX4 &&
+				hw->devarg.auto_neg == 1)
+			/* handle it 2 sec later for backplane AN73 */
+			timeout = 2000;
 		else
 			/* handle it 4 sec later, wait it being stable */
 			timeout = TXGBE_LINK_DOWN_CHECK_TIMEOUT;
@@ -2960,10 +3062,12 @@ txgbe_dev_interrupt_action(struct rte_eth_dev *dev,
 				      (void *)dev) < 0) {
 			PMD_DRV_LOG(ERR, "Error setting alarm");
 		} else {
-			/* remember original mask */
-			intr->mask_misc_orig = intr->mask_misc;
 			/* only disable lsc interrupt */
 			intr->mask_misc &= ~TXGBE_ICRMISC_LSC;
+
+			intr->mask_orig = intr->mask;
+			/* only disable all misc interrupts */
+			intr->mask &= ~(1ULL << TXGBE_MISC_VEC_ID);
 		}
 	}
 
@@ -3024,8 +3128,10 @@ txgbe_dev_interrupt_delayed_handler(void *param)
 	}
 
 	/* restore original mask */
-	intr->mask_misc = intr->mask_misc_orig;
-	intr->mask_misc_orig = 0;
+	intr->mask_misc |= TXGBE_ICRMISC_LSC;
+
+	intr->mask = intr->mask_orig;
+	intr->mask_orig = 0;
 
 	PMD_DRV_LOG(DEBUG, "enable intr in delayed handler S[%08x]", eicr);
 	txgbe_enable_intr(dev);
@@ -4080,27 +4186,11 @@ txgbe_add_del_ethertype_filter(struct rte_eth_dev *dev,
 }
 
 static int
-txgbe_dev_filter_ctrl(__rte_unused struct rte_eth_dev *dev,
-		     enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op,
-		     void *arg)
+txgbe_dev_flow_ops_get(__rte_unused struct rte_eth_dev *dev,
+		       const struct rte_flow_ops **ops)
 {
-	int ret = 0;
-
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
-		*(const void **)arg = &txgbe_flow_ops;
-		break;
-	default:
-		PMD_DRV_LOG(WARNING, "Filter type (%d) not supported",
-							filter_type);
-		ret = -EINVAL;
-		break;
-	}
-
-	return ret;
+	*ops = &txgbe_flow_ops;
+	return 0;
 }
 
 static u8 *
@@ -5210,7 +5300,7 @@ static const struct eth_dev_ops txgbe_eth_dev_ops = {
 	.reta_query                 = txgbe_dev_rss_reta_query,
 	.rss_hash_update            = txgbe_dev_rss_hash_update,
 	.rss_hash_conf_get          = txgbe_dev_rss_hash_conf_get,
-	.filter_ctrl                = txgbe_dev_filter_ctrl,
+	.flow_ops_get               = txgbe_dev_flow_ops_get,
 	.set_mc_addr_list           = txgbe_dev_set_mc_addr_list,
 	.rxq_info_get               = txgbe_rxq_info_get,
 	.txq_info_get               = txgbe_txq_info_get,
@@ -5237,9 +5327,19 @@ static const struct eth_dev_ops txgbe_eth_dev_ops = {
 RTE_PMD_REGISTER_PCI(net_txgbe, rte_txgbe_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_txgbe, pci_id_txgbe_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_txgbe, "* igb_uio | uio_pci_generic | vfio-pci");
+RTE_PMD_REGISTER_PARAM_STRING(net_txgbe,
+			      TXGBE_DEVARG_BP_AUTO "=<0|1>"
+			      TXGBE_DEVARG_KR_POLL "=<0|1>"
+			      TXGBE_DEVARG_KR_PRESENT "=<0|1>"
+			      TXGBE_DEVARG_KX_SGMII "=<0|1>"
+			      TXGBE_DEVARG_FFE_SET "=<0-4>"
+			      TXGBE_DEVARG_FFE_MAIN "=<uint16>"
+			      TXGBE_DEVARG_FFE_PRE "=<uint16>"
+			      TXGBE_DEVARG_FFE_POST "=<uint16>");
 
 RTE_LOG_REGISTER(txgbe_logtype_init, pmd.net.txgbe.init, NOTICE);
 RTE_LOG_REGISTER(txgbe_logtype_driver, pmd.net.txgbe.driver, NOTICE);
+RTE_LOG_REGISTER(txgbe_logtype_bp, pmd.net.txgbe.bp, NOTICE);
 
 #ifdef RTE_LIBRTE_TXGBE_DEBUG_RX
 	RTE_LOG_REGISTER(txgbe_logtype_rx, pmd.net.txgbe.rx, DEBUG);

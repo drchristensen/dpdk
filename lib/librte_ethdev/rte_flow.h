@@ -25,6 +25,7 @@
 #include <rte_sctp.h>
 #include <rte_tcp.h>
 #include <rte_udp.h>
+#include <rte_vxlan.h>
 #include <rte_byteorder.h>
 #include <rte_esp.h>
 #include <rte_higig.h>
@@ -728,22 +729,32 @@ static const struct rte_flow_item_raw rte_flow_item_raw_mask = {
  *
  * Matches an Ethernet header.
  *
- * The @p type field either stands for "EtherType" or "TPID" when followed
- * by so-called layer 2.5 pattern items such as RTE_FLOW_ITEM_TYPE_VLAN. In
- * the latter case, @p type refers to that of the outer header, with the
- * inner EtherType/TPID provided by the subsequent pattern item. This is the
- * same order as on the wire.
- * If the @p type field contains a TPID value, then only tagged packets with the
- * specified TPID will match the pattern.
- * The field @p has_vlan can be used to match any type of tagged packets,
- * instead of using the @p type field.
- * If the @p type and @p has_vlan fields are not specified, then both tagged
- * and untagged packets will match the pattern.
+ * Inside @p hdr field, the sub-field @p ether_type stands either for EtherType
+ * or TPID, depending on whether the item is followed by a VLAN item or not. If
+ * two VLAN items follow, the sub-field refers to the outer one, which, in turn,
+ * contains the inner TPID in the similar header field. The innermost VLAN item
+ * contains a layer-3 EtherType. All of that follows the order seen on the wire.
+ *
+ * If the field in question contains a TPID value, only tagged packets with the
+ * specified TPID will match the pattern. Alternatively, it's possible to match
+ * any type of tagged packets by means of the field @p has_vlan rather than use
+ * the EtherType/TPID field. Also, it's possible to leave the two fields unused.
+ * If this is the case, both tagged and untagged packets will match the pattern.
  */
+RTE_STD_C11
 struct rte_flow_item_eth {
-	struct rte_ether_addr dst; /**< Destination MAC. */
-	struct rte_ether_addr src; /**< Source MAC. */
-	rte_be16_t type; /**< EtherType or TPID. */
+	union {
+		struct {
+			/*
+			 * These fields are retained for compatibility.
+			 * Please switch to the new header field below.
+			 */
+			struct rte_ether_addr dst; /**< Destination MAC. */
+			struct rte_ether_addr src; /**< Source MAC. */
+			rte_be16_t type; /**< EtherType or TPID. */
+		};
+		struct rte_ether_hdr hdr;
+	};
 	uint32_t has_vlan:1; /**< Packet header contains at least one VLAN. */
 	uint32_t reserved:31; /**< Reserved, must be zero. */
 };
@@ -751,9 +762,9 @@ struct rte_flow_item_eth {
 /** Default mask for RTE_FLOW_ITEM_TYPE_ETH. */
 #ifndef __cplusplus
 static const struct rte_flow_item_eth rte_flow_item_eth_mask = {
-	.dst.addr_bytes = "\xff\xff\xff\xff\xff\xff",
-	.src.addr_bytes = "\xff\xff\xff\xff\xff\xff",
-	.type = RTE_BE16(0x0000),
+	.hdr.d_addr.addr_bytes = "\xff\xff\xff\xff\xff\xff",
+	.hdr.s_addr.addr_bytes = "\xff\xff\xff\xff\xff\xff",
+	.hdr.ether_type = RTE_BE16(0x0000),
 };
 #endif
 
@@ -768,13 +779,23 @@ static const struct rte_flow_item_eth rte_flow_item_eth_mask = {
  * If a @p VLAN item is present in the pattern, then only tagged packets will
  * match the pattern.
  * The field @p has_more_vlan can be used to match any type of tagged packets,
- * instead of using the @p inner_type field.
- * If the @p inner_type and @p has_more_vlan fields are not specified,
+ * instead of using the @p eth_proto field of @p hdr.
+ * If the @p eth_proto of @p hdr and @p has_more_vlan fields are not specified,
  * then any tagged packets will match the pattern.
  */
+RTE_STD_C11
 struct rte_flow_item_vlan {
-	rte_be16_t tci; /**< Tag control information. */
-	rte_be16_t inner_type; /**< Inner EtherType or TPID. */
+	union {
+		struct {
+			/*
+			 * These fields are retained for compatibility.
+			 * Please switch to the new header field below.
+			 */
+			rte_be16_t tci; /**< Tag control information. */
+			rte_be16_t inner_type; /**< Inner EtherType or TPID. */
+		};
+		struct rte_vlan_hdr hdr;
+	};
 	uint32_t has_more_vlan:1;
 	/**< Packet header contains at least one more VLAN, after this VLAN. */
 	uint32_t reserved:31; /**< Reserved, must be zero. */
@@ -783,8 +804,8 @@ struct rte_flow_item_vlan {
 /** Default mask for RTE_FLOW_ITEM_TYPE_VLAN. */
 #ifndef __cplusplus
 static const struct rte_flow_item_vlan rte_flow_item_vlan_mask = {
-	.tci = RTE_BE16(0x0fff),
-	.inner_type = RTE_BE16(0x0000),
+	.hdr.vlan_tci = RTE_BE16(0x0fff),
+	.hdr.eth_proto = RTE_BE16(0x0000),
 };
 #endif
 
@@ -935,17 +956,27 @@ static const struct rte_flow_item_sctp rte_flow_item_sctp_mask = {
  *
  * Matches a VXLAN header (RFC 7348).
  */
+RTE_STD_C11
 struct rte_flow_item_vxlan {
-	uint8_t flags; /**< Normally 0x08 (I flag). */
-	uint8_t rsvd0[3]; /**< Reserved, normally 0x000000. */
-	uint8_t vni[3]; /**< VXLAN identifier. */
-	uint8_t rsvd1; /**< Reserved, normally 0x00. */
+	union {
+		struct {
+			/*
+			 * These fields are retained for compatibility.
+			 * Please switch to the new header field below.
+			 */
+			uint8_t flags; /**< Normally 0x08 (I flag). */
+			uint8_t rsvd0[3]; /**< Reserved, normally 0x000000. */
+			uint8_t vni[3]; /**< VXLAN identifier. */
+			uint8_t rsvd1; /**< Reserved, normally 0x00. */
+		};
+		struct rte_vxlan_hdr hdr;
+	};
 };
 
 /** Default mask for RTE_FLOW_ITEM_TYPE_VXLAN. */
 #ifndef __cplusplus
 static const struct rte_flow_item_vxlan rte_flow_item_vxlan_mask = {
-	.vni = "\xff\xff\xff",
+	.hdr.vx_vni = RTE_BE32(__builtin_constant_p(0xffffff << 8)),
 };
 #endif
 

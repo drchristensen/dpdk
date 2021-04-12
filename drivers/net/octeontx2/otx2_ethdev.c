@@ -122,6 +122,14 @@ nix_lf_switch_header_type_enable(struct otx2_eth_dev *dev, bool enable)
 		   OTX2_PRIV_FLAGS_CH_LEN_24B) {
 		req->mode = OTX2_PRIV_FLAGS_CUSTOM;
 		req->pkind = NPC_RX_CHLEN24B_PKIND;
+	} else if (dev->npc_flow.switch_header_type ==
+		   OTX2_PRIV_FLAGS_EXDSA) {
+		req->mode = OTX2_PRIV_FLAGS_CUSTOM;
+		req->pkind = NPC_RX_EXDSA_PKIND;
+	} else if (dev->npc_flow.switch_header_type ==
+		   OTX2_PRIV_FLAGS_VLAN_EXDSA) {
+		req->mode = OTX2_PRIV_FLAGS_CUSTOM;
+		req->pkind = NPC_RX_VLAN_EXDSA_PKIND;
 	}
 
 	if (enable == 0)
@@ -2322,7 +2330,7 @@ static const struct eth_dev_ops otx2_eth_dev_ops = {
 	.tx_done_cleanup          = otx2_nix_tx_done_cleanup,
 	.set_queue_rate_limit     = otx2_nix_tm_set_queue_rate_limit,
 	.pool_ops_supported       = otx2_nix_pool_ops_supported,
-	.filter_ctrl              = otx2_nix_dev_filter_ctrl,
+	.flow_ops_get             = otx2_nix_dev_flow_ops_get,
 	.get_module_info          = otx2_nix_get_module_info,
 	.get_module_eeprom        = otx2_nix_get_module_eeprom,
 	.fw_version_get           = otx2_nix_fw_version_get,
@@ -2794,6 +2802,6 @@ static struct rte_pci_driver pci_nix = {
 	.remove = nix_remove,
 };
 
-RTE_PMD_REGISTER_PCI(net_octeontx2, pci_nix);
-RTE_PMD_REGISTER_PCI_TABLE(net_octeontx2, pci_nix_map);
-RTE_PMD_REGISTER_KMOD_DEP(net_octeontx2, "vfio-pci");
+RTE_PMD_REGISTER_PCI(OCTEONTX2_PMD, pci_nix);
+RTE_PMD_REGISTER_PCI_TABLE(OCTEONTX2_PMD, pci_nix_map);
+RTE_PMD_REGISTER_KMOD_DEP(OCTEONTX2_PMD, "vfio-pci");

@@ -117,10 +117,8 @@ static int iavf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev,
 					uint16_t queue_id);
 static int iavf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev,
 					 uint16_t queue_id);
-static int iavf_dev_filter_ctrl(struct rte_eth_dev *dev,
-		     enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op,
-		     void *arg);
+static int iavf_dev_flow_ops_get(struct rte_eth_dev *dev,
+				 const struct rte_flow_ops **ops);
 static int iavf_set_mc_addr_list(struct rte_eth_dev *dev,
 			struct rte_ether_addr *mc_addrs,
 			uint32_t mc_addrs_num);
@@ -195,8 +193,9 @@ static const struct eth_dev_ops iavf_eth_dev_ops = {
 	.mtu_set                    = iavf_dev_mtu_set,
 	.rx_queue_intr_enable       = iavf_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable      = iavf_dev_rx_queue_intr_disable,
-	.filter_ctrl                = iavf_dev_filter_ctrl,
+	.flow_ops_get               = iavf_dev_flow_ops_get,
 	.tx_done_cleanup	    = iavf_dev_tx_done_cleanup,
+	.get_monitor_addr           = iavf_get_monitor_addr,
 };
 
 static int
@@ -1250,8 +1249,17 @@ iavf_dev_rss_hash_update(struct rte_eth_dev *dev,
 	if (ret)
 		return ret;
 
-	if (rss_conf->rss_hf == 0)
+	if (rss_conf->rss_hf == 0) {
+		vf->rss_hf = 0;
+		ret = iavf_set_hena(adapter, 0);
+
+		/* It is a workaround, temporarily allow error to be returned
+		 * due to possible lack of PF handling for hena = 0.
+		 */
+		if (ret)
+			PMD_DRV_LOG(WARNING, "fail to clean existing RSS, lack PF support");
 		return 0;
+	}
 
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_ADV_RSS_PF) {
 		/* Clear existing RSS. */
@@ -2070,30 +2078,14 @@ iavf_dev_interrupt_handler(void *param)
 }
 
 static int
-iavf_dev_filter_ctrl(struct rte_eth_dev *dev,
-		     enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op,
-		     void *arg)
+iavf_dev_flow_ops_get(struct rte_eth_dev *dev,
+		      const struct rte_flow_ops **ops)
 {
-	int ret = 0;
-
 	if (!dev)
 		return -EINVAL;
 
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
-		*(const void **)arg = &iavf_flow_ops;
-		break;
-	default:
-		PMD_DRV_LOG(WARNING, "Filter type (%d) not supported",
-			    filter_type);
-		ret = -EINVAL;
-		break;
-	}
-
-	return ret;
+	*ops = &iavf_flow_ops;
+	return 0;
 }
 
 static void
@@ -2360,12 +2352,9 @@ RTE_PMD_REGISTER_KMOD_DEP(net_iavf, "* igb_uio | vfio-pci");
 RTE_PMD_REGISTER_PARAM_STRING(net_iavf, "cap=dcf");
 RTE_LOG_REGISTER(iavf_logtype_init, pmd.net.iavf.init, NOTICE);
 RTE_LOG_REGISTER(iavf_logtype_driver, pmd.net.iavf.driver, NOTICE);
-#ifdef RTE_LIBRTE_IAVF_DEBUG_RX
+#ifdef RTE_ETHDEV_DEBUG_RX
 RTE_LOG_REGISTER(iavf_logtype_rx, pmd.net.iavf.rx, DEBUG);
 #endif
-#ifdef RTE_LIBRTE_IAVF_DEBUG_TX
+#ifdef RTE_ETHDEV_DEBUG_TX
 RTE_LOG_REGISTER(iavf_logtype_tx, pmd.net.iavf.tx, DEBUG);
-#endif
-#ifdef RTE_LIBRTE_IAVF_DEBUG_TX_FREE
-RTE_LOG_REGISTER(iavf_logtype_tx_free, pmd.net.iavf.tx_free, DEBUG);
 #endif

@@ -145,6 +145,10 @@ __vhost_log_cache_sync(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	if (unlikely(!dev->log_base))
 		return;
 
+	/* No cache, nothing to sync */
+	if (unlikely(!vq->log_cache))
+		return;
+
 	rte_atomic_thread_fence(__ATOMIC_RELEASE);
 
 	log_base = (unsigned long *)(uintptr_t)dev->log_base;
@@ -176,6 +180,14 @@ vhost_log_cache_page(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	uint32_t bit_nr = page % (sizeof(unsigned long) << 3);
 	uint32_t offset = page / (sizeof(unsigned long) << 3);
 	int i;
+
+	if (unlikely(!vq->log_cache)) {
+		/* No logging cache allocated, write dirty log map directly */
+		rte_atomic_thread_fence(__ATOMIC_RELEASE);
+		vhost_log_page((uint8_t *)(uintptr_t)dev->log_base, page);
+
+		return;
+	}
 
 	for (i = 0; i < vq->log_cache_nb_elem; i++) {
 		struct log_cache_entry *elem = vq->log_cache + i;
@@ -353,7 +365,9 @@ free_vq(struct virtio_net *dev, struct vhost_virtqueue *vq)
 		vhost_free_async_mem(vq);
 	}
 	rte_free(vq->batch_copy_elems);
-	rte_mempool_free(vq->iotlb_pool);
+	if (vq->iotlb_pool)
+		rte_mempool_free(vq->iotlb_pool);
+	rte_free(vq->log_cache);
 	rte_free(vq);
 }
 
@@ -511,7 +525,7 @@ vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	if (log_translate(dev, vq) < 0)
 		return -1;
 
-	vq->access_ok = 1;
+	vq->access_ok = true;
 
 	return 0;
 }
@@ -522,7 +536,7 @@ vring_invalidate(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
 		vhost_user_iotlb_wr_lock(vq);
 
-	vq->access_ok = 0;
+	vq->access_ok = false;
 	vq->desc = NULL;
 	vq->avail = NULL;
 	vq->used = NULL;
@@ -556,10 +570,6 @@ init_vring_queue(struct virtio_net *dev, uint32_t vring_idx)
 	vq->kickfd = VIRTIO_UNINITIALIZED_EVENTFD;
 	vq->callfd = VIRTIO_UNINITIALIZED_EVENTFD;
 	vq->notif_enable = VIRTIO_UNINITIALIZED_NOTIF;
-
-	vhost_user_iotlb_init(dev, vring_idx);
-	/* Backends are set to -1 indicating an inactive device. */
-	vq->backend = -1;
 }
 
 static void
@@ -871,6 +881,20 @@ rte_vhost_get_negotiated_features(int vid, uint64_t *features)
 		return -1;
 
 	*features = dev->features;
+	return 0;
+}
+
+int
+rte_vhost_get_negotiated_protocol_features(int vid,
+					   uint64_t *protocol_features)
+{
+	struct virtio_net *dev;
+
+	dev = get_device(vid);
+	if (dev == NULL || protocol_features == NULL)
+		return -1;
+
+	*protocol_features = dev->protocol_features;
 	return 0;
 }
 
@@ -1440,7 +1464,7 @@ rte_vhost_rx_queue_count(int vid, uint16_t qid)
 
 	rte_spinlock_lock(&vq->access_lock);
 
-	if (unlikely(vq->enabled == 0 || vq->avail == NULL))
+	if (unlikely(!vq->enabled || vq->avail == NULL))
 		goto out;
 
 	ret = *((volatile uint16_t *)&vq->avail->idx) - vq->last_avail_idx;

@@ -499,7 +499,8 @@ static const struct mlx5_flow_expand_node mlx5_support_expansion[] = {
 			(MLX5_EXPANSION_OUTER_IPV6_UDP,
 			 MLX5_EXPANSION_OUTER_IPV6_TCP,
 			 MLX5_EXPANSION_IPV4,
-			 MLX5_EXPANSION_IPV6),
+			 MLX5_EXPANSION_IPV6,
+			 MLX5_EXPANSION_GRE),
 		.type = RTE_FLOW_ITEM_TYPE_IPV6,
 		.rss_types = ETH_RSS_IPV6 | ETH_RSS_FRAG_IPV6 |
 			ETH_RSS_NONFRAG_IPV6_OTHER,
@@ -527,7 +528,8 @@ static const struct mlx5_flow_expand_node mlx5_support_expansion[] = {
 		.type = RTE_FLOW_ITEM_TYPE_VXLAN_GPE,
 	},
 	[MLX5_EXPANSION_GRE] = {
-		.next = MLX5_FLOW_EXPAND_RSS_NEXT(MLX5_EXPANSION_IPV4),
+		.next = MLX5_FLOW_EXPAND_RSS_NEXT(MLX5_EXPANSION_IPV4,
+						  MLX5_EXPANSION_IPV6),
 		.type = RTE_FLOW_ITEM_TYPE_GRE,
 	},
 	[MLX5_EXPANSION_MPLS] = {
@@ -6496,40 +6498,20 @@ mlx5_flow_query(struct rte_eth_dev *dev,
 }
 
 /**
- * Manage filter operations.
+ * Get rte_flow callbacks.
  *
  * @param dev
  *   Pointer to Ethernet device structure.
- * @param filter_type
- *   Filter type.
- * @param filter_op
- *   Operation to perform.
- * @param arg
+ * @param ops
  *   Pointer to operation-specific structure.
  *
- * @return
- *   0 on success, a negative errno value otherwise and rte_errno is set.
+ * @return 0
  */
 int
-mlx5_dev_filter_ctrl(struct rte_eth_dev *dev,
-		     enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op,
-		     void *arg)
+mlx5_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
+		  const struct rte_flow_ops **ops)
 {
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET) {
-			rte_errno = EINVAL;
-			return -rte_errno;
-		}
-		*(const void **)arg = &mlx5_flow_ops;
-		return 0;
-	default:
-		DRV_LOG(ERR, "port %u filter type (%d) not supported",
-			dev->data->port_id, filter_type);
-		rte_errno = ENOTSUP;
-		return -rte_errno;
-	}
+	*ops = &mlx5_flow_ops;
 	return 0;
 }
 
@@ -7899,10 +7881,11 @@ static void get_tunnel_miss(struct rte_eth_dev *dev, void *x)
 
 	rte_spinlock_unlock(&thub->sl);
 	ctx->tunnel = mlx5_flow_tunnel_allocate(dev, ctx->app_tunnel);
-	ctx->tunnel->refctn = 1;
 	rte_spinlock_lock(&thub->sl);
-	if (ctx->tunnel)
+	if (ctx->tunnel) {
+		ctx->tunnel->refctn = 1;
 		LIST_INSERT_HEAD(&thub->tunnels, ctx->tunnel, chain);
+	}
 }
 
 

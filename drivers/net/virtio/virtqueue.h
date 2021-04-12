@@ -217,6 +217,10 @@ struct vq_desc_extra {
 	uint16_t next;
 };
 
+#define virtnet_rxq_to_vq(rxvq) container_of(rxvq, struct virtqueue, rxq)
+#define virtnet_txq_to_vq(txvq) container_of(txvq, struct virtqueue, txq)
+#define virtnet_cq_to_vq(cvq) container_of(cvq, struct virtqueue, cq)
+
 struct virtqueue {
 	struct virtio_hw  *hw; /**< virtio_hw structure pointer. */
 	union {
@@ -240,6 +244,15 @@ struct virtqueue {
 	uint16_t vq_avail_idx; /**< sync until needed */
 	uint16_t vq_free_thresh; /**< free threshold */
 
+	/**
+	 * Head of the free chain in the descriptor table. If
+	 * there are no free descriptors, this will be set to
+	 * VQ_RING_DESC_CHAIN_END.
+	 */
+	uint16_t  vq_desc_head_idx;
+	uint16_t  vq_desc_tail_idx;
+	uint16_t  vq_queue_index;   /**< PCI queue index */
+
 	void *vq_ring_virt_mem;  /**< linear address of vring*/
 	unsigned int vq_ring_size;
 
@@ -252,15 +265,6 @@ struct virtqueue {
 	rte_iova_t vq_ring_mem; /**< physical address of vring,
 	                         * or virtual address for virtio_user. */
 
-	/**
-	 * Head of the free chain in the descriptor table. If
-	 * there are no free descriptors, this will be set to
-	 * VQ_RING_DESC_CHAIN_END.
-	 */
-	uint16_t  vq_desc_head_idx;
-	uint16_t  vq_desc_tail_idx;
-	uint16_t  vq_queue_index;
-	uint16_t offset; /**< relative offset to obtain addr in mbuf */
 	uint16_t  *notify_addr;
 	struct rte_mbuf **sw_ring;  /**< RX software ring. */
 	struct vq_desc_extra vq_descx[0];
@@ -667,7 +671,7 @@ virtqueue_enqueue_xmit_packed(struct virtnet_tx *txvq, struct rte_mbuf *cookie,
 {
 	struct virtio_tx_region *txr = txvq->virtio_net_hdr_mz->addr;
 	struct vq_desc_extra *dxp;
-	struct virtqueue *vq = txvq->vq;
+	struct virtqueue *vq = virtnet_txq_to_vq(txvq);
 	struct vring_packed_desc *start_dp, *head_dp;
 	uint16_t idx, id, head_idx, head_flags;
 	int16_t head_size = vq->hw->vtnet_hdr_size;

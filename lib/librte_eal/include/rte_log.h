@@ -72,6 +72,7 @@ extern "C" {
 #define RTE_LOG_NOTICE   6U  /**< Normal but significant condition. */
 #define RTE_LOG_INFO     7U  /**< Informational.                    */
 #define RTE_LOG_DEBUG    8U  /**< Debug-level messages.             */
+#define RTE_LOG_MAX RTE_LOG_DEBUG /**< Most detailed log level.     */
 
 /**
  * Change the stream that will be used by the logging system.
@@ -240,6 +241,20 @@ __rte_experimental
 int rte_log_register_type_and_pick_level(const char *name, uint32_t level_def);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Dump name of each logtype, one per line.
+ *
+ * @param out
+ *   Stream where the list is sent.
+ * @param prefix
+ *   String preceding each logtype in the output.
+ */
+__rte_experimental
+void rte_log_list_types(FILE *out, const char *prefix);
+
+/**
  * Dump log information.
  *
  * Dump the global level and the registered log types.
@@ -380,6 +395,8 @@ RTE_INIT(__##type)							\
 {									\
 	type = rte_log_register_type_and_pick_level(RTE_STR(name),	\
 						    RTE_LOG_##level);	\
+	if (type < 0)                                                   \
+		type = RTE_LOGTYPE_EAL;                                 \
 }
 
 #ifdef __cplusplus

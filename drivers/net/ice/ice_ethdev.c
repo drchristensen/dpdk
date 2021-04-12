@@ -129,10 +129,8 @@ static int ice_xstats_get(struct rte_eth_dev *dev,
 static int ice_xstats_get_names(struct rte_eth_dev *dev,
 				struct rte_eth_xstat_name *xstats_names,
 				unsigned int limit);
-static int ice_dev_filter_ctrl(struct rte_eth_dev *dev,
-			enum rte_filter_type filter_type,
-			enum rte_filter_op filter_op,
-			void *arg);
+static int ice_dev_flow_ops_get(struct rte_eth_dev *dev,
+				const struct rte_flow_ops **ops);
 static int ice_dev_udp_tunnel_port_add(struct rte_eth_dev *dev,
 			struct rte_eth_udp_tunnel *udp_tunnel);
 static int ice_dev_udp_tunnel_port_del(struct rte_eth_dev *dev,
@@ -215,7 +213,7 @@ static const struct eth_dev_ops ice_eth_dev_ops = {
 	.xstats_get                   = ice_xstats_get,
 	.xstats_get_names             = ice_xstats_get_names,
 	.xstats_reset                 = ice_stats_reset,
-	.filter_ctrl                  = ice_dev_filter_ctrl,
+	.flow_ops_get                 = ice_dev_flow_ops_get,
 	.udp_tunnel_port_add          = ice_dev_udp_tunnel_port_add,
 	.udp_tunnel_port_del          = ice_dev_udp_tunnel_port_del,
 	.tx_done_cleanup              = ice_tx_done_cleanup,
@@ -809,7 +807,7 @@ ice_init_mac_address(struct rte_eth_dev *dev)
 		(struct rte_ether_addr *)hw->port_info[0].mac.perm_addr);
 
 	dev->data->mac_addrs =
-		rte_zmalloc(NULL, sizeof(struct rte_ether_addr), 0);
+		rte_zmalloc(NULL, sizeof(struct rte_ether_addr) * ICE_NUM_MACADDR_MAX, 0);
 	if (!dev->data->mac_addrs) {
 		PMD_INIT_LOG(ERR,
 			     "Failed to allocate memory to store mac address");
@@ -1652,6 +1650,7 @@ ice_pf_setup(struct ice_pf *pf)
  * Extract device serial number from PCIe Configuration Space and
  * determine the pkg file path according to the DSN.
  */
+#ifndef RTE_EXEC_ENV_WINDOWS
 static int
 ice_pkg_file_search_path(struct rte_pci_device *pci_dev, char *pkg_file)
 {
@@ -1680,21 +1679,22 @@ ice_pkg_file_search_path(struct rte_pci_device *pci_dev, char *pkg_file)
 
 	strncpy(pkg_file, ICE_PKG_FILE_SEARCH_PATH_UPDATES,
 		ICE_MAX_PKG_FILENAME_SIZE);
-	if (!access(strcat(pkg_file, opt_ddp_filename), 0))
+	if (!ice_access(strcat(pkg_file, opt_ddp_filename), 0))
 		return 0;
 
 	strncpy(pkg_file, ICE_PKG_FILE_SEARCH_PATH_DEFAULT,
 		ICE_MAX_PKG_FILENAME_SIZE);
-	if (!access(strcat(pkg_file, opt_ddp_filename), 0))
+	if (!ice_access(strcat(pkg_file, opt_ddp_filename), 0))
 		return 0;
 
 fail_dsn:
 	strncpy(pkg_file, ICE_PKG_FILE_UPDATES, ICE_MAX_PKG_FILENAME_SIZE);
-	if (!access(pkg_file, 0))
+	if (!ice_access(pkg_file, 0))
 		return 0;
 	strncpy(pkg_file, ICE_PKG_FILE_DEFAULT, ICE_MAX_PKG_FILENAME_SIZE);
 	return 0;
 }
+#endif
 
 enum ice_pkg_type
 ice_load_pkg_type(struct ice_hw *hw)
@@ -1720,6 +1720,7 @@ ice_load_pkg_type(struct ice_hw *hw)
 	return package_type;
 }
 
+#ifndef RTE_EXEC_ENV_WINDOWS
 static int ice_load_pkg(struct rte_eth_dev *dev)
 {
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1795,6 +1796,7 @@ fail_exit:
 	rte_free(buf);
 	return err;
 }
+#endif
 
 static void
 ice_base_queue_get(struct ice_pf *pf)
@@ -2075,6 +2077,7 @@ ice_dev_init(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
+#ifndef RTE_EXEC_ENV_WINDOWS
 	ret = ice_load_pkg(dev);
 	if (ret) {
 		if (ad->devargs.safe_mode_support == 0) {
@@ -2087,6 +2090,7 @@ ice_dev_init(struct rte_eth_dev *dev)
 					"Entering Safe Mode");
 		ad->is_safe_mode = 1;
 	}
+#endif
 
 	PMD_INIT_LOG(INFO, "FW %d.%d.%05d API %d.%d",
 		     hw->fw_maj_ver, hw->fw_min_ver, hw->fw_build,
@@ -2348,7 +2352,7 @@ hash_cfg_reset(struct ice_rss_hash_cfg *cfg)
 	cfg->hash_flds = 0;
 	cfg->addl_hdrs = 0;
 	cfg->symm = 0;
-	cfg->hdr_type = ICE_RSS_ANY_HEADERS;
+	cfg->hdr_type = ICE_RSS_OUTER_HEADERS;
 }
 
 static int
@@ -2833,7 +2837,7 @@ ice_rss_hash_set(struct ice_pf *pf, uint64_t rss_hf)
 			    __func__, ret);
 
 	cfg.symm = 0;
-	cfg.hdr_type = ICE_RSS_ANY_HEADERS;
+	cfg.hdr_type = ICE_RSS_OUTER_HEADERS;
 	/* Configure RSS for IPv4 with src/dst addr as input set */
 	if (rss_hf & ETH_RSS_IPV4) {
 		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_IPV4 | ICE_FLOW_SEG_HDR_IPV_OTHER;
@@ -4457,8 +4461,10 @@ ice_rss_hash_update(struct rte_eth_dev *dev,
 	if (status)
 		return status;
 
-	if (rss_conf->rss_hf == 0)
+	if (rss_conf->rss_hf == 0) {
+		pf->rss_hf = 0;
 		return 0;
+	}
 
 	/* RSS hash configuration */
 	ice_rss_hash_set(pf, rss_conf->rss_hf);
@@ -5265,30 +5271,14 @@ static int ice_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
 }
 
 static int
-ice_dev_filter_ctrl(struct rte_eth_dev *dev,
-		     enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op,
-		     void *arg)
+ice_dev_flow_ops_get(struct rte_eth_dev *dev,
+		     const struct rte_flow_ops **ops)
 {
-	int ret = 0;
-
 	if (!dev)
 		return -EINVAL;
 
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
-		*(const void **)arg = &ice_flow_ops;
-		break;
-	default:
-		PMD_DRV_LOG(WARNING, "Filter type (%d) not supported",
-					filter_type);
-		ret = -EINVAL;
-		break;
-	}
-
-	return ret;
+	*ops = &ice_flow_ops;
+	return 0;
 }
 
 /* Add UDP tunneling port */
@@ -5376,12 +5366,9 @@ RTE_PMD_REGISTER_PARAM_STRING(net_ice,
 
 RTE_LOG_REGISTER(ice_logtype_init, pmd.net.ice.init, NOTICE);
 RTE_LOG_REGISTER(ice_logtype_driver, pmd.net.ice.driver, NOTICE);
-#ifdef RTE_LIBRTE_ICE_DEBUG_RX
+#ifdef RTE_ETHDEV_DEBUG_RX
 RTE_LOG_REGISTER(ice_logtype_rx, pmd.net.ice.rx, DEBUG);
 #endif
-#ifdef RTE_LIBRTE_ICE_DEBUG_TX
+#ifdef RTE_ETHDEV_DEBUG_TX
 RTE_LOG_REGISTER(ice_logtype_tx, pmd.net.ice.tx, DEBUG);
-#endif
-#ifdef RTE_LIBRTE_ICE_DEBUG_TX_FREE
-RTE_LOG_REGISTER(ice_logtype_tx_free, pmd.net.ice.tx_free, DEBUG);
 #endif

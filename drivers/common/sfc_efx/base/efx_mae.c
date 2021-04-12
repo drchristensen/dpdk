@@ -352,6 +352,8 @@ efx_mae_get_limits(
 	emlp->eml_max_n_outer_prios = maep->em_max_n_outer_prios;
 	emlp->eml_max_n_action_prios = maep->em_max_n_action_prios;
 	emlp->eml_encap_types_supported = maep->em_encap_types_supported;
+	emlp->eml_encap_header_size_limit =
+	    MC_CMD_MAE_ENCAP_HEADER_ALLOC_IN_HDR_DATA_MAXNUM_MCDI2;
 
 	return (0);
 
@@ -991,6 +993,8 @@ efx_mae_action_set_spec_init(
 		goto fail1;
 	}
 
+	spec->ema_rsrc.emar_eh_id.id = EFX_MAE_RSRC_ID_INVALID;
+
 	*specp = spec;
 
 	return (0);
@@ -1006,6 +1010,37 @@ efx_mae_action_set_spec_fini(
 	__in				efx_mae_actions_t *spec)
 {
 	EFSYS_KMEM_FREE(enp->en_esip, sizeof (*spec), spec);
+}
+
+static	__checkReturn			efx_rc_t
+efx_mae_action_set_add_decap(
+	__in				efx_mae_actions_t *spec,
+	__in				size_t arg_size,
+	__in_bcount(arg_size)		const uint8_t *arg)
+{
+	efx_rc_t rc;
+
+	_NOTE(ARGUNUSED(spec))
+
+	if (arg_size != 0) {
+		rc = EINVAL;
+		goto fail1;
+	}
+
+	if (arg != NULL) {
+		rc = EINVAL;
+		goto fail2;
+	}
+
+	/* This action does not have any arguments, so do nothing here. */
+
+	return (0);
+
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
 }
 
 static	__checkReturn			efx_rc_t
@@ -1075,6 +1110,50 @@ efx_mae_action_set_add_vlan_push(
 
 fail3:
 	EFSYS_PROBE(fail3);
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
+static	__checkReturn			efx_rc_t
+efx_mae_action_set_add_encap(
+	__in				efx_mae_actions_t *spec,
+	__in				size_t arg_size,
+	__in_bcount(arg_size)		const uint8_t *arg)
+{
+	efx_rc_t rc;
+
+	/*
+	 * Adding this specific action to an action set spec and setting encap.
+	 * header ID in the spec are two individual steps. This design allows
+	 * the client driver to avoid encap. header allocation when it simply
+	 * needs to check the order of actions submitted by user ("validate"),
+	 * without actually allocating an action set and inserting a rule.
+	 *
+	 * For now, mark encap. header ID as invalid; the caller will invoke
+	 * efx_mae_action_set_fill_in_eh_id() to override the field prior
+	 * to action set allocation; otherwise, the allocation will fail.
+	 */
+	spec->ema_rsrc.emar_eh_id.id = EFX_MAE_RSRC_ID_INVALID;
+
+	/*
+	 * As explained above, there are no arguments to handle here.
+	 * efx_mae_action_set_fill_in_eh_id() will take care of them.
+	 */
+	if (arg_size != 0) {
+		rc = EINVAL;
+		goto fail1;
+	}
+
+	if (arg != NULL) {
+		rc = EINVAL;
+		goto fail2;
+	}
+
+	return (0);
+
 fail2:
 	EFSYS_PROBE(fail2);
 fail1:
@@ -1178,11 +1257,17 @@ typedef struct efx_mae_action_desc_s {
 } efx_mae_action_desc_t;
 
 static const efx_mae_action_desc_t efx_mae_actions[EFX_MAE_NACTIONS] = {
+	[EFX_MAE_ACTION_DECAP] = {
+		.emad_add = efx_mae_action_set_add_decap
+	},
 	[EFX_MAE_ACTION_VLAN_POP] = {
 		.emad_add = efx_mae_action_set_add_vlan_pop
 	},
 	[EFX_MAE_ACTION_VLAN_PUSH] = {
 		.emad_add = efx_mae_action_set_add_vlan_push
+	},
+	[EFX_MAE_ACTION_ENCAP] = {
+		.emad_add = efx_mae_action_set_add_encap
 	},
 	[EFX_MAE_ACTION_FLAG] = {
 		.emad_add = efx_mae_action_set_add_flag
@@ -1196,8 +1281,10 @@ static const efx_mae_action_desc_t efx_mae_actions[EFX_MAE_NACTIONS] = {
 };
 
 static const uint32_t efx_mae_action_ordered_map =
+	(1U << EFX_MAE_ACTION_DECAP) |
 	(1U << EFX_MAE_ACTION_VLAN_POP) |
 	(1U << EFX_MAE_ACTION_VLAN_PUSH) |
+	(1U << EFX_MAE_ACTION_ENCAP) |
 	(1U << EFX_MAE_ACTION_FLAG) |
 	(1U << EFX_MAE_ACTION_MARK) |
 	(1U << EFX_MAE_ACTION_DELIVER);
@@ -1291,6 +1378,14 @@ fail1:
 }
 
 	__checkReturn			efx_rc_t
+efx_mae_action_set_populate_decap(
+	__in				efx_mae_actions_t *spec)
+{
+	return (efx_mae_action_set_spec_populate(spec,
+	    EFX_MAE_ACTION_DECAP, 0, NULL));
+}
+
+	__checkReturn			efx_rc_t
 efx_mae_action_set_populate_vlan_pop(
 	__in				efx_mae_actions_t *spec)
 {
@@ -1312,6 +1407,20 @@ efx_mae_action_set_populate_vlan_push(
 
 	return (efx_mae_action_set_spec_populate(spec,
 	    EFX_MAE_ACTION_VLAN_PUSH, sizeof (action), arg));
+}
+
+	__checkReturn			efx_rc_t
+efx_mae_action_set_populate_encap(
+	__in				efx_mae_actions_t *spec)
+{
+	/*
+	 * There is no argument to pass encap. header ID, thus, one does not
+	 * need to allocate an encap. header while parsing application input.
+	 * This is useful since building an action set may be done simply to
+	 * validate a rule, whilst resource allocation usually consumes time.
+	 */
+	return (efx_mae_action_set_spec_populate(spec,
+	    EFX_MAE_ACTION_ENCAP, 0, NULL));
 }
 
 	__checkReturn			efx_rc_t
@@ -1386,7 +1495,22 @@ efx_mae_action_set_specs_equal(
 	__in				const efx_mae_actions_t *left,
 	__in				const efx_mae_actions_t *right)
 {
-	return ((memcmp(left, right, sizeof (*left)) == 0) ? B_TRUE : B_FALSE);
+	size_t cmp_size = EFX_FIELD_OFFSET(efx_mae_actions_t, ema_rsrc);
+
+	/*
+	 * An action set specification consists of two parts. The first part
+	 * indicates what actions are included in the action set, as well as
+	 * extra quantitative values (in example, the number of VLAN tags to
+	 * push). The second part comprises resource IDs used by the actions.
+	 *
+	 * A resource, in example, a counter, is allocated from the hardware
+	 * by the client, and it's the client who is responsible for keeping
+	 * track of allocated resources and comparing resource IDs if needed.
+	 *
+	 * In this API, don't compare resource IDs in the two specifications.
+	 */
+
+	return ((memcmp(left, right, cmp_size) == 0) ? B_TRUE : B_FALSE);
 }
 
 	__checkReturn			efx_rc_t
@@ -1699,6 +1823,199 @@ fail1:
 	return (rc);
 }
 
+	 __checkReturn			efx_rc_t
+efx_mae_encap_header_alloc(
+	__in				efx_nic_t *enp,
+	__in				efx_tunnel_protocol_t encap_type,
+	__in_bcount(header_size)	uint8_t *header_data,
+	__in				size_t header_size,
+	__out				efx_mae_eh_id_t *eh_idp)
+{
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(enp);
+	efx_mcdi_req_t req;
+	EFX_MCDI_DECLARE_BUF(payload,
+	    MC_CMD_MAE_ENCAP_HEADER_ALLOC_IN_LENMAX_MCDI2,
+	    MC_CMD_MAE_ENCAP_HEADER_ALLOC_OUT_LEN);
+	uint32_t encap_type_mcdi;
+	efx_mae_eh_id_t eh_id;
+	efx_rc_t rc;
+
+	EFX_STATIC_ASSERT(sizeof (eh_idp->id) ==
+	    MC_CMD_MAE_ENCAP_HEADER_ALLOC_OUT_ENCAP_HEADER_ID_LEN);
+
+	EFX_STATIC_ASSERT(EFX_MAE_RSRC_ID_INVALID ==
+	    MC_CMD_MAE_ENCAP_HEADER_ALLOC_OUT_ENCAP_HEADER_ID_NULL);
+
+	if (encp->enc_mae_supported == B_FALSE) {
+		rc = ENOTSUP;
+		goto fail1;
+	}
+
+	switch (encap_type) {
+	case EFX_TUNNEL_PROTOCOL_NONE:
+		encap_type_mcdi = MAE_MCDI_ENCAP_TYPE_NONE;
+		break;
+	case EFX_TUNNEL_PROTOCOL_VXLAN:
+		encap_type_mcdi = MAE_MCDI_ENCAP_TYPE_VXLAN;
+		break;
+	case EFX_TUNNEL_PROTOCOL_GENEVE:
+		encap_type_mcdi = MAE_MCDI_ENCAP_TYPE_GENEVE;
+		break;
+	case EFX_TUNNEL_PROTOCOL_NVGRE:
+		encap_type_mcdi = MAE_MCDI_ENCAP_TYPE_NVGRE;
+		break;
+	default:
+		rc = ENOTSUP;
+		goto fail2;
+	}
+
+	if (header_size >
+	    MC_CMD_MAE_ENCAP_HEADER_ALLOC_IN_HDR_DATA_MAXNUM_MCDI2) {
+		rc = EINVAL;
+		goto fail3;
+	}
+
+	req.emr_cmd = MC_CMD_MAE_ENCAP_HEADER_ALLOC;
+	req.emr_in_buf = payload;
+	req.emr_in_length = MC_CMD_MAE_ENCAP_HEADER_ALLOC_IN_LEN(header_size);
+	req.emr_out_buf = payload;
+	req.emr_out_length = MC_CMD_MAE_ENCAP_HEADER_ALLOC_OUT_LEN;
+
+	MCDI_IN_SET_DWORD(req,
+	    MAE_ENCAP_HEADER_ALLOC_IN_ENCAP_TYPE, encap_type_mcdi);
+
+	memcpy(payload + MC_CMD_MAE_ENCAP_HEADER_ALLOC_IN_HDR_DATA_OFST,
+	    header_data, header_size);
+
+	efx_mcdi_execute(enp, &req);
+
+	if (req.emr_rc != 0) {
+		rc = req.emr_rc;
+		goto fail4;
+	}
+
+	if (req.emr_out_length_used < MC_CMD_MAE_ENCAP_HEADER_ALLOC_OUT_LEN) {
+		rc = EMSGSIZE;
+		goto fail5;
+	}
+
+	eh_id.id = MCDI_OUT_DWORD(req,
+	    MAE_ENCAP_HEADER_ALLOC_OUT_ENCAP_HEADER_ID);
+
+	if (eh_id.id == EFX_MAE_RSRC_ID_INVALID) {
+		rc = ENOENT;
+		goto fail6;
+	}
+
+	eh_idp->id = eh_id.id;
+
+	return (0);
+
+fail6:
+	EFSYS_PROBE(fail6);
+fail5:
+	EFSYS_PROBE(fail5);
+fail4:
+	EFSYS_PROBE(fail4);
+fail3:
+	EFSYS_PROBE(fail3);
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
+	__checkReturn			efx_rc_t
+efx_mae_encap_header_free(
+	__in				efx_nic_t *enp,
+	__in				const efx_mae_eh_id_t *eh_idp)
+{
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(enp);
+	efx_mcdi_req_t req;
+	EFX_MCDI_DECLARE_BUF(payload,
+	    MC_CMD_MAE_ENCAP_HEADER_FREE_IN_LEN(1),
+	    MC_CMD_MAE_ENCAP_HEADER_FREE_OUT_LEN(1));
+	efx_rc_t rc;
+
+	if (encp->enc_mae_supported == B_FALSE) {
+		rc = ENOTSUP;
+		goto fail1;
+	}
+
+	req.emr_cmd = MC_CMD_MAE_ENCAP_HEADER_FREE;
+	req.emr_in_buf = payload;
+	req.emr_in_length = MC_CMD_MAE_ENCAP_HEADER_FREE_IN_LEN(1);
+	req.emr_out_buf = payload;
+	req.emr_out_length = MC_CMD_MAE_ENCAP_HEADER_FREE_OUT_LEN(1);
+
+	MCDI_IN_SET_DWORD(req, MAE_ENCAP_HEADER_FREE_IN_EH_ID, eh_idp->id);
+
+	efx_mcdi_execute(enp, &req);
+
+	if (req.emr_rc != 0) {
+		rc = req.emr_rc;
+		goto fail2;
+	}
+
+	if (MCDI_OUT_DWORD(req, MAE_ENCAP_HEADER_FREE_OUT_FREED_EH_ID) !=
+	    eh_idp->id) {
+		/* Firmware failed to remove the encap. header. */
+		rc = EAGAIN;
+		goto fail3;
+	}
+
+	return (0);
+
+fail3:
+	EFSYS_PROBE(fail3);
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
+	__checkReturn			efx_rc_t
+efx_mae_action_set_fill_in_eh_id(
+	__in				efx_mae_actions_t *spec,
+	__in				const efx_mae_eh_id_t *eh_idp)
+{
+	efx_rc_t rc;
+
+	if ((spec->ema_actions & (1U << EFX_MAE_ACTION_ENCAP)) == 0) {
+		/*
+		 * The caller has not intended to have action ENCAP originally,
+		 * hence, this attempt to indicate encap. header ID is invalid.
+		 */
+		rc = EINVAL;
+		goto fail1;
+	}
+
+	if (spec->ema_rsrc.emar_eh_id.id != EFX_MAE_RSRC_ID_INVALID) {
+		/* The caller attempts to indicate encap. header ID twice. */
+		rc = EINVAL;
+		goto fail2;
+	}
+
+	if (eh_idp->id == EFX_MAE_RSRC_ID_INVALID) {
+		rc = EINVAL;
+		goto fail3;
+	}
+
+	spec->ema_rsrc.emar_eh_id.id = eh_idp->id;
+
+	return (0);
+
+fail3:
+	EFSYS_PROBE(fail3);
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
 	__checkReturn			efx_rc_t
 efx_mae_action_set_alloc(
 	__in				efx_nic_t *enp,
@@ -1733,8 +2050,11 @@ efx_mae_action_set_alloc(
 	    MAE_ACTION_SET_ALLOC_IN_COUNTER_LIST_ID, EFX_MAE_RSRC_ID_INVALID);
 	MCDI_IN_SET_DWORD(req,
 	    MAE_ACTION_SET_ALLOC_IN_COUNTER_ID, EFX_MAE_RSRC_ID_INVALID);
-	MCDI_IN_SET_DWORD(req,
-	    MAE_ACTION_SET_ALLOC_IN_ENCAP_HEADER_ID, EFX_MAE_RSRC_ID_INVALID);
+
+	if ((spec->ema_actions & (1U << EFX_MAE_ACTION_DECAP)) != 0) {
+		MCDI_IN_SET_DWORD_FIELD(req, MAE_ACTION_SET_ALLOC_IN_FLAGS,
+		    MAE_ACTION_SET_ALLOC_IN_DECAP, 1);
+	}
 
 	MCDI_IN_SET_DWORD_FIELD(req, MAE_ACTION_SET_ALLOC_IN_FLAGS,
 	    MAE_ACTION_SET_ALLOC_IN_VLAN_POP, spec->ema_n_vlan_tags_to_pop);
@@ -1763,6 +2083,9 @@ efx_mae_action_set_alloc(
 		MCDI_IN_SET_WORD(req, MAE_ACTION_SET_ALLOC_IN_VLAN0_TCI_BE,
 		    spec->ema_vlan_push_descs[outer_tag_idx].emavp_tci_be);
 	}
+
+	MCDI_IN_SET_DWORD(req, MAE_ACTION_SET_ALLOC_IN_ENCAP_HEADER_ID,
+	    spec->ema_rsrc.emar_eh_id.id);
 
 	if ((spec->ema_actions & (1U << EFX_MAE_ACTION_FLAG)) != 0) {
 		MCDI_IN_SET_DWORD_FIELD(req, MAE_ACTION_SET_ALLOC_IN_FLAGS,

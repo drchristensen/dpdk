@@ -4070,6 +4070,7 @@ typedef struct efx_mae_limits_s {
 	uint32_t			eml_max_n_action_prios;
 	uint32_t			eml_max_n_outer_prios;
 	uint32_t			eml_encap_types_supported;
+	uint32_t			eml_encap_header_size_limit;
 } efx_mae_limits_t;
 
 LIBEFX_API
@@ -4241,6 +4242,11 @@ efx_mae_action_set_spec_fini(
 
 LIBEFX_API
 extern	__checkReturn			efx_rc_t
+efx_mae_action_set_populate_decap(
+	__in				efx_mae_actions_t *spec);
+
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
 efx_mae_action_set_populate_vlan_pop(
 	__in				efx_mae_actions_t *spec);
 
@@ -4250,6 +4256,15 @@ efx_mae_action_set_populate_vlan_push(
 	__in				efx_mae_actions_t *spec,
 	__in				uint16_t tpid_be,
 	__in				uint16_t tci_be);
+
+/*
+ * Use efx_mae_action_set_fill_in_eh_id() to set ID of the allocated
+ * encap. header in the specification prior to action set allocation.
+ */
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
+efx_mae_action_set_populate_encap(
+	__in				efx_mae_actions_t *spec);
 
 LIBEFX_API
 extern	__checkReturn			efx_rc_t
@@ -4323,6 +4338,33 @@ extern	__checkReturn			efx_rc_t
 efx_mae_match_spec_outer_rule_id_set(
 	__in				efx_mae_match_spec_t *spec,
 	__in				const efx_mae_rule_id_t *or_idp);
+
+/* Encap. header ID */
+typedef struct efx_mae_eh_id_s {
+	uint32_t id;
+} efx_mae_eh_id_t;
+
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
+efx_mae_encap_header_alloc(
+	__in				efx_nic_t *enp,
+	__in				efx_tunnel_protocol_t encap_type,
+	__in_bcount(header_size)	uint8_t *header_data,
+	__in				size_t header_size,
+	__out				efx_mae_eh_id_t *eh_idp);
+
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
+efx_mae_encap_header_free(
+	__in				efx_nic_t *enp,
+	__in				const efx_mae_eh_id_t *eh_idp);
+
+/* See description before efx_mae_action_set_populate_encap(). */
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
+efx_mae_action_set_fill_in_eh_id(
+	__in				efx_mae_actions_t *spec,
+	__in				const efx_mae_eh_id_t *eh_idp);
 
 /* Action set ID */
 typedef struct efx_mae_aset_id_s {

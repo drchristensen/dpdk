@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2020 Hisilicon Limited.
+ * Copyright(c) 2020-2021 HiSilicon Limited.
  */
 
 #include <arm_sve.h>
@@ -408,8 +408,9 @@ hns3_tx_fill_hw_ring_sve(struct hns3_tx_queue *txq,
 				(uint64_t *)&txdp->tx.outer_vlan_tag,
 				offsets, svdup_n_u64(0));
 		/* save offset 24~31byte of every BD */
-		svst1_scatter_u64offset_u64(pg, (uint64_t *)&txdp->tx.paylen,
-					    offsets, svdup_n_u64(valid_bit));
+		svst1_scatter_u64offset_u64(pg,
+				(uint64_t *)&txdp->tx.paylen_fd_dop_ol4cs,
+				offsets, svdup_n_u64(valid_bit));
 
 		/* Increment bytes counter */
 		uint32_t idx;
@@ -438,7 +439,7 @@ hns3_xmit_fixed_burst_vec_sve(void *__restrict tx_queue,
 
 	nb_pkts = RTE_MIN(txq->tx_bd_ready, nb_pkts);
 	if (unlikely(nb_pkts == 0)) {
-		txq->queue_full_cnt++;
+		txq->dfx_stats.queue_full_cnt++;
 		return 0;
 	}
 

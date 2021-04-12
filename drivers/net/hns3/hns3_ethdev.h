@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #ifndef _HNS3_ETHDEV_H_
@@ -46,6 +46,9 @@
 
 #define HNS3_UNLIMIT_PROMISC_MODE       0
 #define HNS3_LIMIT_PROMISC_MODE         1
+
+#define HNS3_SPECIAL_PORT_SW_CKSUM_MODE         0
+#define HNS3_SPECIAL_PORT_HW_CKSUM_MODE         1
 
 #define HNS3_UC_MACADDR_NUM		128
 #define HNS3_VF_UC_MACADDR_NUM		48
@@ -426,6 +429,9 @@ struct hns3_queue_intr {
 #define HNS3_TSO_SW_CAL_PSEUDO_H_CSUM		0
 #define HNS3_TSO_HW_CAL_PSEUDO_H_CSUM		1
 
+#define HNS3_PKTS_DROP_STATS_MODE1		0
+#define HNS3_PKTS_DROP_STATS_MODE2		1
+
 struct hns3_hw {
 	struct rte_eth_dev_data *data;
 	void *io_base;
@@ -433,13 +439,13 @@ struct hns3_hw {
 	struct hns3_cmq cmq;
 	struct hns3_mbx_resp_status mbx_resp; /* mailbox response */
 	struct hns3_mbx_arq_ring arq;         /* mailbox async rx queue */
-	pthread_t irq_thread_id;
 	struct hns3_mac mac;
 	unsigned int secondary_cnt; /* Number of secondary processes init'd. */
 	struct hns3_tqp_stats tqp_stats;
 	/* Include Mac stats | Rx stats | Tx stats */
 	struct hns3_mac_stats mac_stats;
 	struct hns3_rx_missed_stats imissed_stats;
+	uint64_t oerror_stats;
 	uint32_t fw_version;
 
 	uint16_t num_msi;
@@ -544,7 +550,41 @@ struct hns3_hw {
 	 *     port won't be copied to the function which has set promisc mode.
 	 */
 	uint8_t promisc_mode;
+
+	/*
+	 * drop_stats_mode mode.
+	 * value range:
+	 *      HNS3_PKTS_DROP_STATS_MODE1/HNS3_PKTS_DROP_STATS_MODE2
+	 *
+	 *  - HNS3_PKTS_DROP_STATS_MODE1
+	 *     This mode for kunpeng920. In this mode, port level imissed stats
+	 *     is supported. It only includes RPU drop stats.
+	 *
+	 *  - HNS3_PKTS_DROP_STATS_MODE2
+	 *     This mode for kunpeng930. In this mode, imissed stats and oerrors
+	 *     stats is supported. Function level imissed stats is supported. It
+	 *     includes RPU drop stats in VF, and includes both RPU drop stats
+	 *     and SSU drop stats in PF. Oerror stats is also supported in PF.
+	 */
+	uint8_t drop_stats_mode;
+
 	uint8_t max_non_tso_bd_num; /* max BD number of one non-TSO packet */
+	/*
+	 * udp checksum mode.
+	 * value range:
+	 *      HNS3_SPECIAL_PORT_HW_CKSUM_MODE/HNS3_SPECIAL_PORT_SW_CKSUM_MODE
+	 *
+	 *  - HNS3_SPECIAL_PORT_SW_CKSUM_MODE
+	 *     In this mode, HW can not do checksum for special UDP port like
+	 *     4789, 4790, 6081 for non-tunnel UDP packets and UDP tunnel
+	 *     packets without the PKT_TX_TUNEL_MASK in the mbuf. So, PMD need
+	 *     do the checksum for these packets to avoid a checksum error.
+	 *
+	 *  - HNS3_SPECIAL_PORT_HW_CKSUM_MODE
+	 *     In this mode, HW does not have the preceding problems and can
+	 *     directly calculate the checksum of these UDP packets.
+	 */
+	uint8_t udp_cksum_mode;
 
 	struct hns3_port_base_vlan_config port_base_vlan_cfg;
 	/*
@@ -560,38 +600,6 @@ struct hns3_hw {
 
 #define HNS3_FLAG_TC_BASE_SCH_MODE		1
 #define HNS3_FLAG_VNET_BASE_SCH_MODE		2
-
-struct hns3_err_msix_intr_stats {
-	uint64_t mac_afifo_tnl_int_cnt;
-	uint64_t ppu_mpf_abn_int_st2_msix_cnt;
-	uint64_t ssu_port_based_pf_int_cnt;
-	uint64_t ppp_pf_abnormal_int_cnt;
-	uint64_t ppu_pf_abnormal_int_msix_cnt;
-
-	uint64_t imp_tcm_ecc_int_cnt;
-	uint64_t cmdq_mem_ecc_int_cnt;
-	uint64_t imp_rd_poison_int_cnt;
-	uint64_t tqp_int_ecc_int_cnt;
-	uint64_t msix_ecc_int_cnt;
-	uint64_t ssu_ecc_multi_bit_int_0_cnt;
-	uint64_t ssu_ecc_multi_bit_int_1_cnt;
-	uint64_t ssu_common_ecc_int_cnt;
-	uint64_t igu_int_cnt;
-	uint64_t ppp_mpf_abnormal_int_st1_cnt;
-	uint64_t ppp_mpf_abnormal_int_st3_cnt;
-	uint64_t ppu_mpf_abnormal_int_st1_cnt;
-	uint64_t ppu_mpf_abn_int_st2_ras_cnt;
-	uint64_t ppu_mpf_abnormal_int_st3_cnt;
-	uint64_t tm_sch_int_cnt;
-	uint64_t qcn_fifo_int_cnt;
-	uint64_t qcn_ecc_int_cnt;
-	uint64_t ncsi_ecc_int_cnt;
-	uint64_t ssu_port_based_err_int_cnt;
-	uint64_t ssu_fifo_overflow_int_cnt;
-	uint64_t ssu_ets_tcg_int_cnt;
-	uint64_t igu_egu_tnl_int_cnt;
-	uint64_t ppu_pf_abnormal_int_ras_cnt;
-};
 
 /* vlan entry information. */
 struct hns3_user_vlan_table {
@@ -738,11 +746,13 @@ struct hns3_pf {
 	uint16_t max_umv_size;
 	uint16_t used_umv_size;
 
-	/* Statistics information for abnormal interrupt */
-	struct hns3_err_msix_intr_stats abn_int_stats;
-
 	bool support_sfp_query;
 	uint32_t fec_mode; /* current FEC mode for ethdev */
+
+	bool ptp_enable;
+
+	/* Stores timestamp of last received packet on dev */
+	uint64_t rx_timestamp;
 
 	struct hns3_vtag_cfg vtag_config;
 	LIST_HEAD(vlan_tbl, hns3_user_vlan_table) vlan_list;
@@ -772,8 +782,22 @@ struct hns3_adapter {
 	bool tx_simple_allowed;
 	bool tx_vec_allowed;
 
+	uint32_t rx_func_hint;
+	uint32_t tx_func_hint;
+
 	struct hns3_ptype_table ptype_tbl __rte_cache_min_aligned;
 };
+
+enum {
+	HNS3_IO_FUNC_HINT_NONE = 0,
+	HNS3_IO_FUNC_HINT_VEC,
+	HNS3_IO_FUNC_HINT_SVE,
+	HNS3_IO_FUNC_HINT_SIMPLE,
+	HNS3_IO_FUNC_HINT_COMMON
+};
+
+#define HNS3_DEVARG_RX_FUNC_HINT	"rx_func_hint"
+#define HNS3_DEVARG_TX_FUNC_HINT	"tx_func_hint"
 
 #define HNS3_DEV_SUPPORT_DCB_B			0x0
 #define HNS3_DEV_SUPPORT_COPPER_B		0x1
@@ -784,6 +808,7 @@ struct hns3_adapter {
 #define HNS3_DEV_SUPPORT_INDEP_TXRX_B		0x6
 #define HNS3_DEV_SUPPORT_STASH_B		0x7
 #define HNS3_DEV_SUPPORT_RXD_ADV_LAYOUT_B	0x9
+#define HNS3_DEV_SUPPORT_OUTER_UDP_CKSUM_B	0xA
 
 #define hns3_dev_dcb_supported(hw) \
 	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_DCB_B)
@@ -816,6 +841,9 @@ struct hns3_adapter {
 
 #define hns3_dev_rxd_adv_layout_supported(hw) \
 	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_RXD_ADV_LAYOUT_B)
+
+#define hns3_dev_outer_udp_cksum_supported(hw) \
+	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_OUTER_UDP_CKSUM_B)
 
 #define HNS3_DEV_PRIVATE_TO_HW(adapter) \
 	(&((struct hns3_adapter *)adapter)->hw)
@@ -963,9 +991,8 @@ hns3_test_and_clear_bit(unsigned int nr, volatile uint64_t *addr)
 }
 
 int hns3_buffer_alloc(struct hns3_hw *hw);
-int hns3_dev_filter_ctrl(struct rte_eth_dev *dev,
-			 enum rte_filter_type filter_type,
-			 enum rte_filter_op filter_op, void *arg);
+int hns3_dev_flow_ops_get(struct rte_eth_dev *dev,
+			  const struct rte_flow_ops **ops);
 bool hns3_is_reset_pending(struct hns3_adapter *hns);
 bool hns3vf_is_reset_pending(struct hns3_adapter *hns);
 void hns3_update_link_status_and_event(struct hns3_hw *hw);
@@ -975,6 +1002,22 @@ int hns3_dev_infos_get(struct rte_eth_dev *eth_dev,
 		       struct rte_eth_dev_info *info);
 void hns3vf_update_link_status(struct hns3_hw *hw, uint8_t link_status,
 			  uint32_t link_speed, uint8_t link_duplex);
+void hns3_parse_devargs(struct rte_eth_dev *dev);
+int hns3_restore_ptp(struct hns3_adapter *hns);
+int hns3_mbuf_dyn_rx_timestamp_register(struct rte_eth_dev *dev,
+				    struct rte_eth_conf *conf);
+int hns3_ptp_init(struct hns3_hw *hw);
+int hns3_timesync_enable(struct rte_eth_dev *dev);
+int hns3_timesync_disable(struct rte_eth_dev *dev);
+int hns3_timesync_read_rx_timestamp(struct rte_eth_dev *dev,
+				struct timespec *timestamp,
+				uint32_t flags __rte_unused);
+int hns3_timesync_read_tx_timestamp(struct rte_eth_dev *dev,
+				struct timespec *timestamp);
+int hns3_timesync_read_time(struct rte_eth_dev *dev, struct timespec *ts);
+int hns3_timesync_write_time(struct rte_eth_dev *dev,
+			const struct timespec *ts);
+int hns3_timesync_adjust_time(struct rte_eth_dev *dev, int64_t delta);
 
 static inline bool
 is_reset_pending(struct hns3_adapter *hns)

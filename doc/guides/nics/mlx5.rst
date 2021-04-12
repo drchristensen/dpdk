@@ -367,14 +367,23 @@ Limitations
 
 - Sample flow:
 
-  - Supports ``RTE_FLOW_ACTION_TYPE_SAMPLE`` action only within NIC Rx and E-Switch steering domain.
-  - The E-Switch Sample flow must have the eswitch_manager VPORT destination (PF or ECPF) and no additional actions.
-  - For ConnectX-5, the ``RTE_FLOW_ACTION_TYPE_SAMPLE`` is typically used as first action in the E-Switch egress flow if with header modify or encapsulation actions.
+  - Supports ``RTE_FLOW_ACTION_TYPE_SAMPLE`` action only within NIC Rx and
+    E-Switch steering domain.
+  - For E-Switch Sampling flow with sample ratio > 1, additional actions are not
+    supported in the sample actions list.
+  - For ConnectX-5, the ``RTE_FLOW_ACTION_TYPE_SAMPLE`` is typically used as
+    first action in the E-Switch egress flow if with header modify or
+    encapsulation actions.
+  - For NIC Rx flow, supports ``MARK``, ``COUNT``, ``QUEUE``, ``RSS`` in the
+    sample actions list.
+  - For E-Switch mirroring flow, supports ``RAW ENCAP``, ``Port ID``,
+    ``VXLAN ENCAP``, ``NVGRE ENCAP`` in the sample actions list.
 
 - Modify Field flow:
 
   - Supports the 'set' operation only for ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD`` action.
   - Modification of an arbitrary place in a packet via the special ``RTE_FLOW_FIELD_START`` Field ID is not supported.
+  - Modification of the 802.1Q Tag, VXLAN Network or GENEVE Network ID's is not supported.
   - Encapsulation levels are not supported, can modify outermost header fields only.
   - Offsets must be 32-bits aligned, cannot skip past the boundary of a field.
 
@@ -923,14 +932,22 @@ Driver options
 - ``representor`` parameter [list]
 
   This parameter can be used to instantiate DPDK Ethernet devices from
-  existing port (or VF) representors configured on the device.
+  existing port (PF, VF or SF) representors configured on the device.
 
   It is a standard parameter whose format is described in
   :ref:`ethernet_device_standard_device_arguments`.
 
-  For instance, to probe port representors 0 through 2::
+  For instance, to probe VF port representors 0 through 2::
 
-    representor=[0-2]
+    <PCI_BDF>,representor=vf[0-2]
+
+  To probe SF port representors 0 through 2::
+
+    <PCI_BDF>,representor=sf[0-2]
+
+  To probe VF port representors 0 through 2 on both PFs of bonding device::
+
+    <Primary_PCI_BDF>,representor=pf[0,1]vf[0-2]
 
 - ``max_dump_files_num`` parameter [int]
 
@@ -1343,15 +1360,15 @@ Quick Start Guide on OFED/EN
 Enable switchdev mode
 ---------------------
 
-Switchdev mode is a mode in E-Switch, that binds between representor and VF.
-Representor is a port in DPDK that is connected to a VF in such a way
-that assuming there are no offload flows, each packet that is sent from the VF
-will be received by the corresponding representor. While each packet that is
-sent to a representor will be received by the VF.
+Switchdev mode is a mode in E-Switch, that binds between representor and VF or SF.
+Representor is a port in DPDK that is connected to a VF or SF in such a way
+that assuming there are no offload flows, each packet that is sent from the VF or SF
+will be received by the corresponding representor. While each packet that is or SF
+sent to a representor will be received by the VF or SF.
 This is very useful in case of SRIOV mode, where the first packet that is sent
-by the VF will be received by the DPDK application which will decide if this
+by the VF or SF will be received by the DPDK application which will decide if this
 flow should be offloaded to the E-Switch. After offloading the flow packet
-that the VF that are matching the flow will not be received any more by
+that the VF or SF that are matching the flow will not be received any more by
 the DPDK application.
 
 1. Enable SRIOV mode::
@@ -1377,6 +1394,40 @@ the DPDK application.
 5. Enbale switchdev mode::
 
         echo switchdev > /sys/class/net/<net device>/compat/devlink/mode
+
+SubFunction representor support
+-------------------------------
+SubFunction is a portion of the PCI device, a SF netdev has its own
+dedicated queues(txq, rxq). A SF netdev supports E-Switch representation
+offload similar to existing PF and VF representors. A SF shares PCI
+level resources with other SFs and/or with its parent PCI function.
+
+1. Configure SF feature::
+
+        mlxconfig -d <mst device> set PF_BAR2_SIZE=<0/1/2/3> PF_BAR2_ENABLE=1
+
+        Value of PF_BAR2_SIZE:
+
+            0: 8 SFs
+            1: 16 SFs
+            2: 32 SFs
+            3: 64 SFs
+
+2. Reset the FW::
+
+        mlxfwreset -d <mst device> reset
+
+3. Enable switchdev mode::
+
+        echo switchdev > /sys/class/net/<net device>/compat/devlink/mode
+
+4. Create SF::
+
+        mlnx-sf -d <PCI_BDF> -a create
+
+5. Probe SF representor::
+
+        testpmd> port attach <PCI_BDF>,representor=sf0,dv_flow_en=1
 
 Performance tuning
 ------------------

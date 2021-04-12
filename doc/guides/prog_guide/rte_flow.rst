@@ -22,11 +22,6 @@ defined in ``rte_flow.h``.
   queues, to virtual/physical device functions or ports, performing tunnel
   offloads, adding marks and so on.
 
-It is slightly higher-level than the legacy filtering framework which it
-encompasses and supersedes (including all functions and filter types) in
-order to expose a single interface with an unambiguous behavior that is
-common to all poll-mode drivers (PMDs).
-
 Flow rule
 ---------
 
@@ -2784,6 +2779,7 @@ can be used as both source and destination fields as set by ``field``.
 The immediate value ``RTE_FLOW_FIELD_VALUE`` (or a pointer to it
 ``RTE_FLOW_FIELD_POINTER``) is allowed as a source only.
 ``RTE_FLOW_FIELD_START`` is used to point to the beginning of a packet.
+See ``enum rte_flow_field_id`` for the list of supported fields.
 
 ``op`` selects the operation to perform on a destination field.
 - ``set`` copies the data from ``src`` field to ``dst`` field.
@@ -2817,12 +2813,15 @@ for ``RTE_FLOW_FIELD_VALUE`` and ``RTE_FLOW_FIELD_POINTER`` respectively.
 
 .. table:: MODIFY_FIELD
 
-   +-----------------------------------------+
+   +---------------+-------------------------+
    | Field         | Value                   |
    +===============+=========================+
    | ``op``        | operation to perform    |
+   +---------------+-------------------------+
    | ``dst``       | destination field       |
+   +---------------+-------------------------+
    | ``src``       | source field            |
+   +---------------+-------------------------+
    | ``width``     | number of bits to use   |
    +---------------+-------------------------+
 
@@ -2830,12 +2829,15 @@ for ``RTE_FLOW_FIELD_VALUE`` and ``RTE_FLOW_FIELD_POINTER`` respectively.
 
 .. table:: destination/source field definition
 
-   +--------------------------------------------------------------------------+
+   +---------------+----------------------------------------------------------+
    | Field         | Value                                                    |
    +===============+==========================================================+
    | ``field``     | ID: packet field, mark, meta, tag, immediate, pointer    |
+   +---------------+----------------------------------------------------------+
    | ``level``     | encapsulation level of a packet field or tag array index |
+   +---------------+----------------------------------------------------------+
    | ``offset``    | number of bits to skip at the beginning                  |
+   +---------------+----------------------------------------------------------+
    | ``value``     | immediate value or a pointer to this value               |
    +---------------+----------------------------------------------------------+
 
@@ -3104,7 +3106,6 @@ port and may return errors such as ``ENOTSUP`` ("not supported"):
 - Configuring MAC addresses.
 - Configuring multicast addresses.
 - Configuring VLAN filters.
-- Configuring Rx filters through the legacy API (e.g. FDIR).
 - Configuring global RSS settings.
 
 .. code-block:: c
@@ -3331,13 +3332,7 @@ The PMD interface is defined in ``rte_flow_driver.h``. It is not subject to
 API/ABI versioning constraints as it is not exposed to applications and may
 evolve independently.
 
-It is currently implemented on top of the legacy filtering framework through
-filter type *RTE_ETH_FILTER_GENERIC* that accepts the single operation
-*RTE_ETH_FILTER_GET* to return PMD-specific *rte_flow* callbacks wrapped
-inside ``struct rte_flow_ops``.
-
-This overhead is temporarily necessary in order to keep compatibility with
-the legacy filtering framework, which should eventually disappear.
+The PMD interface is based on callbacks pointed by the ``struct rte_flow_ops``.
 
 - PMD callbacks implement exactly the interface described in `Rules
   management`_, except for the port ID argument which has already been

@@ -479,10 +479,11 @@ static int bnxt_setup_one_vnic(struct bnxt *bp, uint16_t vnic_id)
 
 	bnxt_hwrm_vnic_plcmode_cfg(bp, vnic);
 
-	if (rx_offloads & DEV_RX_OFFLOAD_TCP_LRO)
-		bnxt_hwrm_vnic_tpa_cfg(bp, vnic, 1);
-	else
-		bnxt_hwrm_vnic_tpa_cfg(bp, vnic, 0);
+	rc = bnxt_hwrm_vnic_tpa_cfg(bp, vnic,
+				    (rx_offloads & DEV_RX_OFFLOAD_TCP_LRO) ?
+				    true : false);
+	if (rc)
+		goto err_out;
 
 	return 0;
 err_out:
@@ -793,7 +794,7 @@ skip_cosq_cfg:
 			PMD_DRV_LOG(ERR, "Failed to allocate %d rx_queues"
 				" intr_vec", bp->eth_dev->data->nb_rx_queues);
 			rc = -ENOMEM;
-			goto err_disable;
+			goto err_out;
 		}
 		PMD_DRV_LOG(DEBUG, "intr_handle->intr_vec = %p "
 			"intr_handle->nb_efd = %d intr_handle->max_intr = %d\n",
@@ -813,12 +814,12 @@ skip_cosq_cfg:
 #ifndef RTE_EXEC_ENV_FREEBSD
 	/* In FreeBSD OS, nic_uio driver does not support interrupts */
 	if (rc)
-		goto err_free;
+		goto err_out;
 #endif
 
 	rc = bnxt_update_phy_setting(bp);
 	if (rc)
-		goto err_free;
+		goto err_out;
 
 	bp->mark_table = rte_zmalloc("bnxt_mark_table", BNXT_MARK_TABLE_SZ, 0);
 	if (!bp->mark_table)
@@ -826,10 +827,6 @@ skip_cosq_cfg:
 
 	return 0;
 
-err_free:
-	rte_free(intr_handle->intr_vec);
-err_disable:
-	rte_intr_efd_disable(intr_handle);
 err_out:
 	/* Some of the error status returned by FW may not be from errno.h */
 	if (rc > 0)
@@ -889,8 +886,6 @@ uint32_t bnxt_get_speed_capabilities(struct bnxt *bp)
 	if (bp->link_info->auto_mode ==
 	    HWRM_PORT_PHY_QCFG_OUTPUT_AUTO_MODE_NONE)
 		speed_capa |= ETH_LINK_SPEED_FIXED;
-	else
-		speed_capa |= ETH_LINK_SPEED_AUTONEG;
 
 	return speed_capa;
 }
@@ -1268,6 +1263,9 @@ static int bnxt_dev_set_link_up_op(struct rte_eth_dev *eth_dev)
 	struct bnxt *bp = eth_dev->data->dev_private;
 	int rc = 0;
 
+	if (!BNXT_SINGLE_PF(bp))
+		return -ENOTSUP;
+
 	if (!bp->link_info->link_up)
 		rc = bnxt_set_hwrm_link_config(bp, true);
 	if (!rc)
@@ -1280,6 +1278,9 @@ static int bnxt_dev_set_link_up_op(struct rte_eth_dev *eth_dev)
 static int bnxt_dev_set_link_down_op(struct rte_eth_dev *eth_dev)
 {
 	struct bnxt *bp = eth_dev->data->dev_private;
+
+	if (!BNXT_SINGLE_PF(bp))
+		return -ENOTSUP;
 
 	eth_dev->data->dev_link.link_status = 0;
 	bnxt_set_hwrm_link_config(bp, false);
@@ -2531,6 +2532,10 @@ static int bnxt_free_one_vnic(struct bnxt *bp, uint16_t vnic_id)
 	}
 	bnxt_del_dflt_mac_filter(bp, vnic);
 
+	rc = bnxt_hwrm_vnic_ctx_free(bp, vnic);
+	if (rc)
+		return rc;
+
 	rc = bnxt_hwrm_vnic_free(bp, vnic);
 	if (rc)
 		return rc;
@@ -3226,9 +3231,8 @@ bnxt_tx_descriptor_status_op(void *tx_queue, uint16_t offset)
 }
 
 int
-bnxt_filter_ctrl_op(struct rte_eth_dev *dev,
-		    enum rte_filter_type filter_type,
-		    enum rte_filter_op filter_op, void *arg)
+bnxt_flow_ops_get_op(struct rte_eth_dev *dev,
+		     const struct rte_flow_ops **ops)
 {
 	struct bnxt *bp = dev->data->dev_private;
 	int ret = 0;
@@ -3241,10 +3245,8 @@ bnxt_filter_ctrl_op(struct rte_eth_dev *dev,
 		bp = vfr->parent_dev->data->dev_private;
 		/* parent is deleted while children are still valid */
 		if (!bp) {
-			PMD_DRV_LOG(DEBUG, "BNXT Port:%d VFR Error %d:%d\n",
-				    dev->data->port_id,
-				    filter_type,
-				    filter_op);
+			PMD_DRV_LOG(DEBUG, "BNXT Port:%d VFR Error\n",
+				    dev->data->port_id);
 			return -EIO;
 		}
 	}
@@ -3253,27 +3255,16 @@ bnxt_filter_ctrl_op(struct rte_eth_dev *dev,
 	if (ret)
 		return ret;
 
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
+	/* PMD supports thread-safe flow operations.  rte_flow API
+	 * functions can avoid mutex for multi-thread safety.
+	 */
+	dev->data->dev_flags |= RTE_ETH_DEV_FLOW_OPS_THREAD_SAFE;
 
-		/* PMD supports thread-safe flow operations.  rte_flow API
-		 * functions can avoid mutex for multi-thread safety.
-		 */
-		dev->data->dev_flags |= RTE_ETH_DEV_FLOW_OPS_THREAD_SAFE;
+	if (BNXT_TRUFLOW_EN(bp))
+		*ops = &bnxt_ulp_rte_flow_ops;
+	else
+		*ops = &bnxt_flow_ops;
 
-		if (BNXT_TRUFLOW_EN(bp))
-			*(const void **)arg = &bnxt_ulp_rte_flow_ops;
-		else
-			*(const void **)arg = &bnxt_flow_ops;
-		break;
-	default:
-		PMD_DRV_LOG(ERR,
-			"Filter type (%d) not supported", filter_type);
-		ret = -EINVAL;
-		break;
-	}
 	return ret;
 }
 
@@ -3377,6 +3368,7 @@ static int bnxt_get_tx_ts(struct bnxt *bp, uint64_t *ts)
 				ptp->tx_mapped_regs[BNXT_PTP_TX_TS_L]));
 	*ts |= (uint64_t)rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
 				ptp->tx_mapped_regs[BNXT_PTP_TX_TS_H])) << 32;
+	rte_read32((uint8_t *)bp->bar0 + ptp->tx_mapped_regs[BNXT_PTP_TX_SEQ]);
 
 	return 0;
 }
@@ -3387,9 +3379,6 @@ static int bnxt_get_rx_ts(struct bnxt *bp, uint64_t *ts)
 	struct bnxt_pf_info *pf = bp->pf;
 	uint16_t port_id;
 	uint32_t fifo;
-
-	if (!ptp)
-		return -ENODEV;
 
 	fifo = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
 				ptp->rx_mapped_regs[BNXT_PTP_RX_FIFO]));
@@ -3423,7 +3412,7 @@ bnxt_timesync_write_time(struct rte_eth_dev *dev, const struct timespec *ts)
 	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
 
 	if (!ptp)
-		return 0;
+		return -ENOTSUP;
 
 	ns = rte_timespec_to_ns(ts);
 	/* Set the timecounters to a new value. */
@@ -3443,7 +3432,7 @@ bnxt_timesync_read_time(struct rte_eth_dev *dev, struct timespec *ts)
 	int rc = 0;
 
 	if (!ptp)
-		return 0;
+		return -ENOTSUP;
 
 	if (BNXT_CHIP_P5(bp))
 		rc = bnxt_hwrm_port_ts_query(bp, BNXT_PTP_FLAGS_CURRENT_TIME,
@@ -3465,7 +3454,7 @@ bnxt_timesync_enable(struct rte_eth_dev *dev)
 	int rc;
 
 	if (!ptp)
-		return 0;
+		return -ENOTSUP;
 
 	ptp->rx_filter = 1;
 	ptp->tx_tstamp_en = 1;
@@ -3506,7 +3495,7 @@ bnxt_timesync_disable(struct rte_eth_dev *dev)
 	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
 
 	if (!ptp)
-		return 0;
+		return -ENOTSUP;
 
 	ptp->rx_filter = 0;
 	ptp->tx_tstamp_en = 0;
@@ -3533,7 +3522,7 @@ bnxt_timesync_read_rx_timestamp(struct rte_eth_dev *dev,
 	uint64_t ns;
 
 	if (!ptp)
-		return 0;
+		return -ENOTSUP;
 
 	if (BNXT_CHIP_P5(bp))
 		rx_tstamp_cycles = ptp->rx_timestamp;
@@ -3556,7 +3545,7 @@ bnxt_timesync_read_tx_timestamp(struct rte_eth_dev *dev,
 	int rc = 0;
 
 	if (!ptp)
-		return 0;
+		return -ENOTSUP;
 
 	if (BNXT_CHIP_P5(bp))
 		rc = bnxt_hwrm_port_ts_query(bp, BNXT_PTP_FLAGS_PATH_TX,
@@ -3577,7 +3566,7 @@ bnxt_timesync_adjust_time(struct rte_eth_dev *dev, int64_t delta)
 	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
 
 	if (!ptp)
-		return 0;
+		return -ENOTSUP;
 
 	ptp->tc.nsec += delta;
 	ptp->tx_tstamp_tc.nsec += delta;
@@ -3792,7 +3781,7 @@ static const struct eth_dev_ops bnxt_dev_ops = {
 	.rx_queue_stop = bnxt_rx_queue_stop,
 	.tx_queue_start = bnxt_tx_queue_start,
 	.tx_queue_stop = bnxt_tx_queue_stop,
-	.filter_ctrl = bnxt_filter_ctrl_op,
+	.flow_ops_get = bnxt_flow_ops_get_op,
 	.dev_supported_ptypes_get = bnxt_dev_supported_ptypes_get_op,
 	.get_eeprom_length    = bnxt_get_eeprom_length_op,
 	.get_eeprom           = bnxt_get_eeprom_op,
@@ -3860,13 +3849,19 @@ static void bnxt_write_fw_reset_reg(struct bnxt *bp, uint32_t index)
 	uint32_t val = info->reset_reg_val[index];
 	uint32_t reg = info->reset_reg[index];
 	uint32_t type, offset;
+	int ret;
 
 	type = BNXT_FW_STATUS_REG_TYPE(reg);
 	offset = BNXT_FW_STATUS_REG_OFF(reg);
 
 	switch (type) {
 	case BNXT_FW_STATUS_REG_TYPE_CFG:
-		rte_pci_write_config(bp->pdev, &val, sizeof(val), offset);
+		ret = rte_pci_write_config(bp->pdev, &val, sizeof(val), offset);
+		if (ret < 0) {
+			PMD_DRV_LOG(ERR, "Failed to write %#x at PCI offset %#x",
+				    val, offset);
+			return;
+		}
 		break;
 	case BNXT_FW_STATUS_REG_TYPE_GRC:
 		offset = bnxt_map_reset_regs(bp, offset);
@@ -5470,40 +5465,49 @@ bnxt_parse_devarg_rep_fc_f2r(__rte_unused const char *key,
 	return 0;
 }
 
-static void
+static int
 bnxt_parse_dev_args(struct bnxt *bp, struct rte_devargs *devargs)
 {
 	struct rte_kvargs *kvlist;
+	int ret;
 
 	if (devargs == NULL)
-		return;
+		return 0;
 
 	kvlist = rte_kvargs_parse(devargs->args, bnxt_dev_args);
 	if (kvlist == NULL)
-		return;
+		return -EINVAL;
 
 	/*
 	 * Handler for "truflow" devarg.
 	 * Invoked as for ex: "-a 0000:00:0d.0,host-based-truflow=1"
 	 */
-	rte_kvargs_process(kvlist, BNXT_DEVARG_TRUFLOW,
-			   bnxt_parse_devarg_truflow, bp);
+	ret = rte_kvargs_process(kvlist, BNXT_DEVARG_TRUFLOW,
+				 bnxt_parse_devarg_truflow, bp);
+	if (ret)
+		goto err;
 
 	/*
 	 * Handler for "flow_xstat" devarg.
 	 * Invoked as for ex: "-a 0000:00:0d.0,flow_xstat=1"
 	 */
-	rte_kvargs_process(kvlist, BNXT_DEVARG_FLOW_XSTAT,
-			   bnxt_parse_devarg_flow_xstat, bp);
+	ret = rte_kvargs_process(kvlist, BNXT_DEVARG_FLOW_XSTAT,
+				 bnxt_parse_devarg_flow_xstat, bp);
+	if (ret)
+		goto err;
 
 	/*
 	 * Handler for "max_num_kflows" devarg.
 	 * Invoked as for ex: "-a 000:00:0d.0,max_num_kflows=32"
 	 */
-	rte_kvargs_process(kvlist, BNXT_DEVARG_MAX_NUM_KFLOWS,
-			   bnxt_parse_devarg_max_num_kflows, bp);
+	ret = rte_kvargs_process(kvlist, BNXT_DEVARG_MAX_NUM_KFLOWS,
+				 bnxt_parse_devarg_max_num_kflows, bp);
+	if (ret)
+		goto err;
 
+err:
 	rte_kvargs_free(kvlist);
+	return ret;
 }
 
 static int bnxt_alloc_switch_domain(struct bnxt *bp)
@@ -5585,7 +5589,7 @@ static int bnxt_drv_init(struct rte_eth_dev *eth_dev)
 	rc = bnxt_alloc_hwrm_resources(bp);
 	if (rc) {
 		PMD_DRV_LOG(ERR,
-			    "Failed to allocate hwrm resource rc: %x\n", rc);
+			    "Failed to allocate response buffer rc: %x\n", rc);
 		return rc;
 	}
 	rc = bnxt_alloc_leds_info(bp);
@@ -5638,7 +5642,9 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev, void *params __rte_unused)
 	bp = eth_dev->data->dev_private;
 
 	/* Parse dev arguments passed on when starting the DPDK application. */
-	bnxt_parse_dev_args(bp, pci_dev->device.devargs);
+	rc = bnxt_parse_dev_args(bp, pci_dev->device.devargs);
+	if (rc)
+		goto error_free;
 
 	rc = bnxt_drv_init(eth_dev);
 	if (rc)

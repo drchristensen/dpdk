@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright(c) 2018-2019 Hisilicon Limited
+# Copyright(c) 2018-2021 Hisilicon Limited
 
 if not is_linux
 	build = false
@@ -26,7 +26,8 @@ sources = files('hns3_cmd.c',
 	'hns3_rxtx.c',
 	'hns3_stats.c',
 	'hns3_mp.c',
-	'hns3_tm.c')
+	'hns3_tm.c',
+	'hns3_ptp.c')
 
 deps += ['hash']
 

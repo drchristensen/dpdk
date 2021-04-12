@@ -5,6 +5,7 @@
 subdirs = [
 	'common',
 	'bus',
+	'common/cnxk', # depends on bus.
 	'common/mlx5', # depends on bus.
 	'common/qat', # depends on bus.
 	'common/sfc_efx', # depends on bus.
@@ -171,15 +172,17 @@ foreach subpath:subdirs
 				endif
 			else
 				lk_args = ['-Wl,--version-script=' + version_map]
-				# on unix systems check the output of the
-				# check-symbols.sh script, using it as a
-				# dependency of the .so build
-				lk_deps += custom_target(lib_name + '.sym_chk',
-					command: [check_symbols,
-						version_map, '@INPUT@'],
-					capture: true,
-					input: static_lib,
-					output: lib_name + '.sym_chk')
+				if developer_mode
+					# on unix systems check the output of the
+					# check-symbols.sh script, using it as a
+					# dependency of the .so build
+					lk_deps += custom_target(lib_name + '.sym_chk',
+						command: [check_symbols,
+							version_map, '@INPUT@'],
+						capture: true,
+						input: static_lib,
+						output: lib_name + '.sym_chk')
+				endif
 			endif
 
 			shared_lib = shared_library(lib_name,
@@ -209,8 +212,10 @@ foreach subpath:subdirs
 			set_variable('shared_@0@'.format(lib_name), shared_dep)
 			set_variable('static_@0@'.format(lib_name), static_dep)
 			dependency_name = ''.join(lib_name.split('rte_'))
-			message('drivers/@0@: Defining dependency "@1@"'.format(
-					drv_path, dependency_name))
+			if developer_mode
+				message('drivers/@0@: Defining dependency "@1@"'.format(
+						drv_path, dependency_name))
+			endif
 		endif # build
 	endforeach
 

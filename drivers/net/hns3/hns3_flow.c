@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #include <rte_flow_driver.h>
@@ -158,7 +158,10 @@ hns3_counter_new(struct rte_eth_dev *dev, uint32_t shared, uint32_t id,
 {
 	struct hns3_adapter *hns = dev->data->dev_private;
 	struct hns3_pf *pf = &hns->pf;
+	struct hns3_hw *hw = &hns->hw;
 	struct hns3_flow_counter *cnt;
+	uint64_t value;
+	int ret;
 
 	cnt = hns3_counter_lookup(dev, id);
 	if (cnt) {
@@ -170,6 +173,13 @@ hns3_counter_new(struct rte_eth_dev *dev, uint32_t shared, uint32_t id,
 		cnt->ref_cnt++;
 		return 0;
 	}
+
+	/* Clear the counter by read ops because the counter is read-clear */
+	ret = hns3_get_count(hw, id, &value);
+	if (ret)
+		return rte_flow_error_set(error, EIO,
+					  RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
+					  "Clear counter failed!");
 
 	cnt = rte_zmalloc("hns3 counter", sizeof(*cnt), 0);
 	if (cnt == NULL)
@@ -2001,34 +2011,16 @@ static const struct rte_flow_ops hns3_flow_ops = {
 	.isolate = NULL,
 };
 
-/*
- * The entry of flow API.
- * @param dev
- *   Pointer to Ethernet device.
- * @return
- *   0 on success, a negative errno value otherwise is set.
- */
 int
-hns3_dev_filter_ctrl(struct rte_eth_dev *dev, enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op, void *arg)
+hns3_dev_flow_ops_get(struct rte_eth_dev *dev,
+		      const struct rte_flow_ops **ops)
 {
 	struct hns3_hw *hw;
-	int ret = 0;
 
 	hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
-		if (hw->adapter_state >= HNS3_NIC_CLOSED)
-			return -ENODEV;
-		*(const void **)arg = &hns3_flow_ops;
-		break;
-	default:
-		hns3_err(hw, "Filter type (%d) not supported", filter_type);
-		ret = -EOPNOTSUPP;
-		break;
-	}
+	if (hw->adapter_state >= HNS3_NIC_CLOSED)
+		return -ENODEV;
 
-	return ret;
+	*ops = &hns3_flow_ops;
+	return 0;
 }

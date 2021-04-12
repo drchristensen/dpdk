@@ -406,6 +406,11 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 	if (validate_msg_fds(msg, 0) != 0)
 		return RTE_VHOST_MSG_RESULT_ERR;
 
+	if (msg->payload.state.num > 32768) {
+		VHOST_LOG_CONFIG(ERR, "invalid virtqueue size %u\n", msg->payload.state.num);
+		return RTE_VHOST_MSG_RESULT_ERR;
+	}
+
 	vq->size = msg->payload.state.num;
 
 	/* VIRTIO 1.0, 2.4 Virtqueues says:
@@ -423,12 +428,6 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 				"invalid virtqueue size %u\n", vq->size);
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}
-	}
-
-	if (vq->size > 32768) {
-		VHOST_LOG_CONFIG(ERR,
-			"invalid virtqueue size %u\n", vq->size);
-		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 
 	if (vq_is_packed(dev)) {
@@ -470,6 +469,10 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 
+	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)) {
+		if (vhost_user_iotlb_init(dev, msg->payload.state.index))
+			return RTE_VHOST_MSG_RESULT_ERR;
+	}
 	return RTE_VHOST_MSG_RESULT_OK;
 }
 
@@ -575,7 +578,7 @@ out:
 	dev->virtqueue[index] = vq;
 	vhost_devices[dev->vid] = dev;
 
-	if (old_vq != vq)
+	if (old_vq != vq && (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)))
 		vhost_user_iotlb_init(dev, index);
 
 	return dev;
@@ -713,7 +716,7 @@ translate_ring_addresses(struct virtio_net *dev, int vq_index)
 			return dev;
 		}
 
-		vq->access_ok = 1;
+		vq->access_ok = true;
 		return dev;
 	}
 
@@ -771,7 +774,7 @@ translate_ring_addresses(struct virtio_net *dev, int vq_index)
 		vq->last_avail_idx = vq->used->idx;
 	}
 
-	vq->access_ok = 1;
+	vq->access_ok = true;
 
 	VHOST_LOG_CONFIG(DEBUG, "(%d) mapped address desc: %p\n",
 			dev->vid, vq->desc);
@@ -1658,7 +1661,7 @@ vhost_user_set_vring_call(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	vq = dev->virtqueue[file.index];
 
 	if (vq->ready) {
-		vq->ready = 0;
+		vq->ready = false;
 		vhost_user_notify_queue_state(dev, file.index, 0);
 	}
 
@@ -1918,14 +1921,14 @@ vhost_user_set_vring_kick(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	 * the SET_VRING_ENABLE message.
 	 */
 	if (!(dev->features & (1ULL << VHOST_USER_F_PROTOCOL_FEATURES))) {
-		vq->enabled = 1;
+		vq->enabled = true;
 		if (dev->notify_ops->vring_state_changed)
 			dev->notify_ops->vring_state_changed(
 				dev->vid, file.index, 1);
 	}
 
 	if (vq->ready) {
-		vq->ready = 0;
+		vq->ready = false;
 		vhost_user_notify_queue_state(dev, file.index, 0);
 	}
 
@@ -2022,6 +2025,9 @@ vhost_user_get_vring_base(struct virtio_net **pdev,
 	rte_free(vq->batch_copy_elems);
 	vq->batch_copy_elems = NULL;
 
+	rte_free(vq->log_cache);
+	vq->log_cache = NULL;
+
 	msg->size = sizeof(msg->payload.state);
 	msg->fd_num = 0;
 
@@ -2040,7 +2046,7 @@ vhost_user_set_vring_enable(struct virtio_net **pdev,
 			int main_fd __rte_unused)
 {
 	struct virtio_net *dev = *pdev;
-	int enable = (int)msg->payload.state.num;
+	bool enable = !!msg->payload.state.num;
 	int index = (int)msg->payload.state.index;
 
 	if (validate_msg_fds(msg, 0) != 0)
@@ -2121,6 +2127,7 @@ vhost_user_set_log_base(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	int fd = msg->fds[0];
 	uint64_t size, off;
 	void *addr;
+	uint32_t i;
 
 	if (validate_msg_fds(msg, 1) != 0)
 		return RTE_VHOST_MSG_RESULT_ERR;
@@ -2173,6 +2180,23 @@ vhost_user_set_log_base(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	dev->log_addr = (uint64_t)(uintptr_t)addr;
 	dev->log_base = dev->log_addr + off;
 	dev->log_size = size;
+
+	for (i = 0; i < dev->nr_vring; i++) {
+		struct vhost_virtqueue *vq = dev->virtqueue[i];
+
+		rte_free(vq->log_cache);
+		vq->log_cache = NULL;
+		vq->log_cache_nb_elem = 0;
+		vq->log_cache = rte_zmalloc("vq log cache",
+				sizeof(struct log_cache_entry) * VHOST_LOG_CACHE_NR,
+				0);
+		/*
+		 * If log cache alloc fail, don't fail migration, but no
+		 * caching will be done, which will impact performance
+		 */
+		if (!vq->log_cache)
+			VHOST_LOG_CONFIG(ERR, "Failed to allocate VQ logging cache\n");
+	}
 
 	/*
 	 * The spec is not clear about it (yet), but QEMU doesn't expect

@@ -333,7 +333,6 @@ M: Narcisa Ana Maria Vasile <navasile@linux.microsoft.com>
 M: Dmitry Malloy <dmitrym@microsoft.com>
 M: Pallavi Kadam <pallavi.kadam@intel.com>
 F: lib/librte_eal/windows/
-F: lib/librte_eal/rte_eal_exports.def
 F: buildtools/map_to_win.py
 F: doc/guides/windows_gsg/
 
@@ -500,6 +499,13 @@ Bucket memory pool
 M: Artem V. Andreev <artem.andreev@oktetlabs.ru>
 M: Andrew Rybchenko <andrew.rybchenko@oktetlabs.ru>
 F: drivers/mempool/bucket/
+
+Marvell cnxk
+M: Ashwin Sekhar T K <asekhar@marvell.com>
+M: Pavan Nikhilesh <pbhagavatula@marvell.com>
+T: git://dpdk.org/next/dpdk-next-net-mrvl
+F: drivers/mempool/cnxk/
+F: doc/guides/mempool/cnxk.rst
 
 Marvell OCTEON TX2
 M: Jerin Jacob <jerinj@marvell.com>
@@ -731,6 +737,15 @@ T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/ipn3ke/
 F: doc/guides/nics/ipn3ke.rst
 F: doc/guides/nics/features/ipn3ke.ini
+
+Marvell cnxk
+M: Nithin Dabilpuram <ndabilpuram@marvell.com>
+M: Kiran Kumar K <kirankumark@marvell.com>
+M: Sunil Kumar Kori <skori@marvell.com>
+M: Satha Rao <skoteshwar@marvell.com>
+T: git://dpdk.org/next/dpdk-next-net-mrvl
+F: drivers/common/cnxk/
+F: doc/guides/platform/cnxk.rst
 
 Marvell mvpp2
 M: Liron Himi <lironh@marvell.com>
@@ -1237,7 +1252,7 @@ F: drivers/event/dsw/
 F: doc/guides/eventdevs/dsw.rst
 
 Software OPDL Eventdev PMD
-M: Liang Ma <liang.j.ma@intel.com>
+M: Liang Ma <liangma@liangbit.com>
 M: Peter Mccarthy <peter.mccarthy@intel.com>
 F: drivers/event/opdl/
 F: doc/guides/eventdevs/opdl.rst

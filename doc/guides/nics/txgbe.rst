@@ -84,6 +84,61 @@ TXGBE PMD provides the following log types available for control:
 
   Extra logging of the messages during PMD initialization.
 
+- ``pmd.net.txgbe.bp`` (default level is **notice**)
+
+  Extra logging of auto-negtiation process for backplane NICs.
+  Supply ``--log-level=pmd.net.txgbe.bp:debug`` to view messages.
+
+Runtime Options
+~~~~~~~~~~~~~~~
+
+The following ``devargs`` options can be enabled at runtime. They must
+be passed as part of EAL arguments. For example,
+
+.. code-block:: console
+
+   dpdk-testpmd -a 01:00.0,auto_neg=1 -- -i
+
+Please note that following ``devargs`` are only set for backplane NICs.
+
+- ``auto_neg`` (default **1**)
+
+  Toggle behavior to use auto-negotiation mode or force mode to
+  link up backplane NICs.
+
+- ``poll`` (default **0**)
+
+  Toggle behavior to enable/disable polling mode to receive AN interrupt.
+
+- ``present`` (default **1**)
+
+  Toggle behavior to use present mode or init mode.
+
+- ``sgmii`` (default **0**)
+
+  Special treatment for KX SGMII cards.
+
+- ``ffe_set`` (default **0**)
+
+  Use to set PHY link mode and enable FFE parameters for user debugging.
+  If disabled, the FFE parameters will not take effect. Otherwise, set 1
+  for SFI mode, set 2 for KR mode, set 3 for KX4 mode, set 4 for KX mode.
+
+- ``ffe_main`` (default **27**)
+
+  PHY parameter used for user debugging. Setting other values to
+  take effect requires setting the ``ffe_set``.
+
+- ``ffe_pre`` (default **8**)
+
+  PHY parameter used for user debugging. Setting other values to
+  take effect requires setting the ``ffe_set``.
+
+- ``ffe_post`` (default **44**)
+
+  PHY parameter used for user debugging. Setting other values to
+  take effect requires setting the ``ffe_set``.
+
 Driver compilation and testing
 ------------------------------
 

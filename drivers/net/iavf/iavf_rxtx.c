@@ -57,6 +57,31 @@ iavf_proto_xtr_type_to_rxdid(uint8_t flex_type)
 				rxdid_map[flex_type] : IAVF_RXDID_COMMS_OVS_1;
 }
 
+int
+iavf_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
+{
+	struct iavf_rx_queue *rxq = rx_queue;
+	volatile union iavf_rx_desc *rxdp;
+	uint16_t desc;
+
+	desc = rxq->rx_tail;
+	rxdp = &rxq->rx_ring[desc];
+	/* watch for changes in status bit */
+	pmc->addr = &rxdp->wb.qword1.status_error_len;
+
+	/*
+	 * we expect the DD bit to be set to 1 if this descriptor was already
+	 * written to.
+	 */
+	pmc->val = rte_cpu_to_le_64(1 << IAVF_RX_DESC_STATUS_DD_SHIFT);
+	pmc->mask = rte_cpu_to_le_64(1 << IAVF_RX_DESC_STATUS_DD_SHIFT);
+
+	/* registers are 64-bit */
+	pmc->size = sizeof(uint64_t);
+
+	return 0;
+}
+
 static inline int
 check_rx_thresh(uint16_t nb_desc, uint16_t thresh)
 {
@@ -1979,9 +2004,9 @@ iavf_xmit_cleanup(struct iavf_tx_queue *txq)
 	if ((txd[desc_to_clean_to].cmd_type_offset_bsz &
 			rte_cpu_to_le_64(IAVF_TXD_QW1_DTYPE_MASK)) !=
 			rte_cpu_to_le_64(IAVF_TX_DESC_DTYPE_DESC_DONE)) {
-		PMD_TX_FREE_LOG(DEBUG, "TX descriptor %4u is not done "
-				"(port=%d queue=%d)", desc_to_clean_to,
-				txq->port_id, txq->queue_id);
+		PMD_TX_LOG(DEBUG, "TX descriptor %4u is not done "
+			   "(port=%d queue=%d)", desc_to_clean_to,
+			   txq->port_id, txq->queue_id);
 		return -1;
 	}
 
@@ -2335,7 +2360,7 @@ iavf_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 			return i;
 		}
 
-#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+#ifdef RTE_ETHDEV_DEBUG_TX
 		ret = rte_validate_tx_offload(m);
 		if (ret != 0) {
 			rte_errno = -ret;

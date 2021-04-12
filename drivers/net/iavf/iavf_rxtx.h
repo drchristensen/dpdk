@@ -34,7 +34,7 @@
 #define DEFAULT_TX_RS_THRESH     32
 #define DEFAULT_TX_FREE_THRESH   32
 
-#define IAVF_MIN_TSO_MSS          256
+#define IAVF_MIN_TSO_MSS          88
 #define IAVF_MAX_TSO_MSS          9668
 #define IAVF_TSO_MAX_SEG          UINT8_MAX
 #define IAVF_TX_MAX_MTU_SEG       8
@@ -469,6 +469,7 @@ uint16_t iavf_xmit_pkts_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 			    uint16_t nb_pkts);
 uint16_t iavf_xmit_pkts_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 				 uint16_t nb_pkts);
+int iavf_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc);
 int iavf_rx_vec_dev_check(struct rte_eth_dev *dev);
 int iavf_tx_vec_dev_check(struct rte_eth_dev *dev);
 int iavf_rxq_vec_setup(struct iavf_rx_queue *rxq);

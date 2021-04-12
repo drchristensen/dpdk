@@ -356,6 +356,26 @@ static const struct mlx5_indexed_pool_config mlx5_ipool_cfg[] = {
 #define MLX5_FLOW_TABLE_HLIST_ARRAY_SIZE 4096
 
 /**
+ * Decide whether representor ID is a HPF(host PF) port on BF2.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ *
+ * @return
+ *   Non-zero if HPF, otherwise 0.
+ */
+bool
+mlx5_is_hpf(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	uint16_t repr = MLX5_REPRESENTOR_REPR(priv->representor_id);
+	int type = MLX5_REPRESENTOR_TYPE(priv->representor_id);
+
+	return priv->representor != 0 && type == RTE_ETH_REPRESENTOR_VF &&
+	       MLX5_REPRESENTOR_REPR(-1) == repr;
+}
+
+/**
  * Initialize the ASO aging management structure.
  *
  * @param[in] sh
@@ -905,6 +925,8 @@ mlx5_alloc_shared_dev_ctx(const struct mlx5_dev_spawn_data *spawn,
 		rte_errno  = ENOMEM;
 		goto exit;
 	}
+	if (spawn->bond_info)
+		sh->bond = *spawn->bond_info;
 	err = mlx5_os_open_device(spawn, config, sh);
 	if (!sh->ctx)
 		goto error;
@@ -914,7 +936,6 @@ mlx5_alloc_shared_dev_ctx(const struct mlx5_dev_spawn_data *spawn,
 		goto error;
 	}
 	sh->refcnt = 1;
-	sh->bond_dev = UINT16_MAX;
 	sh->max_port = spawn->max_port;
 	strncpy(sh->ibdev_name, mlx5_os_get_ctx_device_name(sh->ctx),
 		sizeof(sh->ibdev_name) - 1);
@@ -1451,6 +1472,7 @@ const struct eth_dev_ops mlx5_dev_ops = {
 	.xstats_get_names = mlx5_xstats_get_names,
 	.fw_version_get = mlx5_fw_version_get,
 	.dev_infos_get = mlx5_dev_infos_get,
+	.representor_info_get = mlx5_representor_info_get,
 	.read_clock = mlx5_txpp_read_clock,
 	.dev_supported_ptypes_get = mlx5_dev_supported_ptypes_get,
 	.vlan_filter_set = mlx5_vlan_filter_set,
@@ -1477,7 +1499,7 @@ const struct eth_dev_ops mlx5_dev_ops = {
 	.reta_query = mlx5_dev_rss_reta_query,
 	.rss_hash_update = mlx5_rss_hash_update,
 	.rss_hash_conf_get = mlx5_rss_hash_conf_get,
-	.filter_ctrl = mlx5_dev_filter_ctrl,
+	.flow_ops_get = mlx5_flow_ops_get,
 	.rxq_info_get = mlx5_rxq_info_get,
 	.txq_info_get = mlx5_txq_info_get,
 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
@@ -1562,7 +1584,7 @@ const struct eth_dev_ops mlx5_dev_ops_isolate = {
 	.mtu_set = mlx5_dev_set_mtu,
 	.vlan_strip_queue_set = mlx5_vlan_strip_queue_set,
 	.vlan_offload_set = mlx5_vlan_offload_set,
-	.filter_ctrl = mlx5_dev_filter_ctrl,
+	.flow_ops_get = mlx5_flow_ops_get,
 	.rxq_info_get = mlx5_rxq_info_get,
 	.txq_info_get = mlx5_txq_info_get,
 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
@@ -2094,7 +2116,7 @@ mlx5_eth_find_next(uint16_t port_id, struct rte_pci_device *pci_dev)
 		    (dev->device == &pci_dev->device ||
 		     (dev->device->driver &&
 		     dev->device->driver->name &&
-		     !strcmp(dev->device->driver->name, MLX5_DRIVER_NAME))))
+		     !strcmp(dev->device->driver->name, MLX5_PCI_DRIVER_NAME))))
 			break;
 		port_id++;
 	}
@@ -2215,7 +2237,7 @@ static struct mlx5_pci_driver mlx5_driver = {
 	.driver_class = MLX5_CLASS_NET,
 	.pci_driver = {
 		.driver = {
-			.name = MLX5_DRIVER_NAME,
+			.name = MLX5_PCI_DRIVER_NAME,
 		},
 		.id_table = mlx5_pci_id_map,
 		.probe = mlx5_os_pci_probe,

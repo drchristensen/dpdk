@@ -297,7 +297,7 @@ static const struct eth_dev_ops eth_igc_ops = {
 	.vlan_offload_set	= eth_igc_vlan_offload_set,
 	.vlan_tpid_set		= eth_igc_vlan_tpid_set,
 	.vlan_strip_queue_set	= eth_igc_vlan_strip_queue_set,
-	.filter_ctrl		= eth_igc_filter_ctrl,
+	.flow_ops_get		= eth_igc_flow_ops_get,
 };
 
 /*
@@ -340,6 +340,9 @@ eth_igc_configure(struct rte_eth_dev *dev)
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
 
 	ret  = igc_check_mq_mode(dev);
 	if (ret != 0)
@@ -1901,8 +1904,7 @@ eth_igc_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 
 	/* Rx Errors */
 	rte_stats->imissed = stats->mpc;
-	rte_stats->ierrors = stats->crcerrs +
-			stats->rlec + stats->ruc + stats->roc +
+	rte_stats->ierrors = stats->crcerrs + stats->rlec +
 			stats->rxerrc + stats->algnerrc;
 
 	/* Tx Errors */

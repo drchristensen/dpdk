@@ -582,6 +582,8 @@ struct rte_flow_action_queue sample_queue[RAW_SAMPLE_CONFS_MAX_NUM];
 struct rte_flow_action_count sample_count[RAW_SAMPLE_CONFS_MAX_NUM];
 struct rte_flow_action_port_id sample_port_id[RAW_SAMPLE_CONFS_MAX_NUM];
 struct rte_flow_action_raw_encap sample_encap[RAW_SAMPLE_CONFS_MAX_NUM];
+struct action_vxlan_encap_data sample_vxlan_encap[RAW_SAMPLE_CONFS_MAX_NUM];
+struct action_nvgre_encap_data sample_nvgre_encap[RAW_SAMPLE_CONFS_MAX_NUM];
 struct action_rss_data sample_rss_data[RAW_SAMPLE_CONFS_MAX_NUM];
 struct rte_flow_action_vf sample_vf[RAW_SAMPLE_CONFS_MAX_NUM];
 
@@ -1615,6 +1617,8 @@ static const enum index next_action_sample[] = {
 	ACTION_COUNT,
 	ACTION_PORT_ID,
 	ACTION_RAW_ENCAP,
+	ACTION_VXLAN_ENCAP,
+	ACTION_NVGRE_ENCAP,
 	ACTION_NEXT,
 	ZERO,
 };
@@ -5244,31 +5248,11 @@ end:
 	return len;
 }
 
-/** Parse VXLAN encap action. */
+/** Setup VXLAN encap configuration. */
 static int
-parse_vc_action_vxlan_encap(struct context *ctx, const struct token *token,
-			    const char *str, unsigned int len,
-			    void *buf, unsigned int size)
+parse_setup_vxlan_encap_data(struct action_vxlan_encap_data *action_vxlan_encap_data)
 {
-	struct buffer *out = buf;
-	struct rte_flow_action *action;
-	struct action_vxlan_encap_data *action_vxlan_encap_data;
-	int ret;
-
-	ret = parse_vc(ctx, token, str, len, buf, size);
-	if (ret < 0)
-		return ret;
-	/* Nothing else to do if there is no buffer. */
-	if (!out)
-		return ret;
-	if (!out->args.vc.actions_n)
-		return -1;
-	action = &out->args.vc.actions[out->args.vc.actions_n - 1];
-	/* Point to selected object. */
-	ctx->object = out->args.vc.data;
-	ctx->objmask = NULL;
 	/* Set up default configuration. */
-	action_vxlan_encap_data = ctx->object;
 	*action_vxlan_encap_data = (struct action_vxlan_encap_data){
 		.conf = (struct rte_flow_action_vxlan_encap){
 			.definition = action_vxlan_encap_data->items,
@@ -5372,19 +5356,18 @@ parse_vc_action_vxlan_encap(struct context *ctx, const struct token *token,
 	}
 	memcpy(action_vxlan_encap_data->item_vxlan.vni, vxlan_encap_conf.vni,
 	       RTE_DIM(vxlan_encap_conf.vni));
-	action->conf = &action_vxlan_encap_data->conf;
-	return ret;
+	return 0;
 }
 
-/** Parse NVGRE encap action. */
+/** Parse VXLAN encap action. */
 static int
-parse_vc_action_nvgre_encap(struct context *ctx, const struct token *token,
+parse_vc_action_vxlan_encap(struct context *ctx, const struct token *token,
 			    const char *str, unsigned int len,
 			    void *buf, unsigned int size)
 {
 	struct buffer *out = buf;
 	struct rte_flow_action *action;
-	struct action_nvgre_encap_data *action_nvgre_encap_data;
+	struct action_vxlan_encap_data *action_vxlan_encap_data;
 	int ret;
 
 	ret = parse_vc(ctx, token, str, len, buf, size);
@@ -5399,8 +5382,17 @@ parse_vc_action_nvgre_encap(struct context *ctx, const struct token *token,
 	/* Point to selected object. */
 	ctx->object = out->args.vc.data;
 	ctx->objmask = NULL;
+	action_vxlan_encap_data = ctx->object;
+	parse_setup_vxlan_encap_data(action_vxlan_encap_data);
+	action->conf = &action_vxlan_encap_data->conf;
+	return ret;
+}
+
+/** Setup NVGRE encap configuration. */
+static int
+parse_setup_nvgre_encap_data(struct action_nvgre_encap_data *action_nvgre_encap_data)
+{
 	/* Set up default configuration. */
-	action_nvgre_encap_data = ctx->object;
 	*action_nvgre_encap_data = (struct action_nvgre_encap_data){
 		.conf = (struct rte_flow_action_nvgre_encap){
 			.definition = action_nvgre_encap_data->items,
@@ -5439,6 +5431,8 @@ parse_vc_action_nvgre_encap(struct context *ctx, const struct token *token,
 		       .src_addr = nvgre_encap_conf.ipv4_src,
 		       .dst_addr = nvgre_encap_conf.ipv4_dst,
 		},
+		.item_nvgre.c_k_s_rsvd0_ver = RTE_BE16(0x2000),
+		.item_nvgre.protocol = RTE_BE16(RTE_ETHER_TYPE_TEB),
 		.item_nvgre.flow_id = 0,
 	};
 	memcpy(action_nvgre_encap_data->item_eth.dst.addr_bytes,
@@ -5463,6 +5457,34 @@ parse_vc_action_nvgre_encap(struct context *ctx, const struct token *token,
 			RTE_FLOW_ITEM_TYPE_VOID;
 	memcpy(action_nvgre_encap_data->item_nvgre.tni, nvgre_encap_conf.tni,
 	       RTE_DIM(nvgre_encap_conf.tni));
+	return 0;
+}
+
+/** Parse NVGRE encap action. */
+static int
+parse_vc_action_nvgre_encap(struct context *ctx, const struct token *token,
+			    const char *str, unsigned int len,
+			    void *buf, unsigned int size)
+{
+	struct buffer *out = buf;
+	struct rte_flow_action *action;
+	struct action_nvgre_encap_data *action_nvgre_encap_data;
+	int ret;
+
+	ret = parse_vc(ctx, token, str, len, buf, size);
+	if (ret < 0)
+		return ret;
+	/* Nothing else to do if there is no buffer. */
+	if (!out)
+		return ret;
+	if (!out->args.vc.actions_n)
+		return -1;
+	action = &out->args.vc.actions[out->args.vc.actions_n - 1];
+	/* Point to selected object. */
+	ctx->object = out->args.vc.data;
+	ctx->objmask = NULL;
+	action_nvgre_encap_data = ctx->object;
+	parse_setup_nvgre_encap_data(action_nvgre_encap_data);
 	action->conf = &action_nvgre_encap_data->conf;
 	return ret;
 }
@@ -7926,6 +7948,16 @@ cmd_set_raw_parsed_sample(const struct buffer *in)
 			rte_memcpy(&sample_vf[idx],
 					(const void *)action->conf, size);
 			action->conf = &sample_vf[idx];
+			break;
+		case RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP:
+			size = sizeof(struct rte_flow_action_vxlan_encap);
+			parse_setup_vxlan_encap_data(&sample_vxlan_encap[idx]);
+			action->conf = &sample_vxlan_encap[idx].conf;
+			break;
+		case RTE_FLOW_ACTION_TYPE_NVGRE_ENCAP:
+			size = sizeof(struct rte_flow_action_nvgre_encap);
+			parse_setup_nvgre_encap_data(&sample_nvgre_encap[idx]);
+			action->conf = &sample_nvgre_encap[idx];
 			break;
 		default:
 			printf("Error - Not supported action\n");
