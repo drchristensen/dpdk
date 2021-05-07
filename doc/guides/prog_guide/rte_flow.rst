@@ -1398,6 +1398,36 @@ Matches a eCPRI header.
 - ``hdr``: eCPRI header definition (``rte_ecpri.h``).
 - Default ``mask`` matches nothing, for all eCPRI messages.
 
+Item: ``PACKET_INTEGRITY_CHECKS``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Matches packet integrity.
+For some devices application needs to enable integration checks in HW
+before using this item.
+
+- ``level``: the encapsulation level that should be checked:
+   - ``level == 0`` means the default PMD mode (can be inner most / outermost).
+   - ``level == 1`` means outermost header.
+   - ``level > 1``  means inner header. See also RSS level.
+- ``packet_ok``: All HW packet integrity checks have passed based on the
+  topmost network layer. For example, for ICMP packet the topmost network
+  layer is L3 and for TCP or UDP packet the topmost network layer is L4.
+- ``l2_ok``: all layer 2 HW integrity checks passed.
+- ``l3_ok``: all layer 3 HW integrity checks passed.
+- ``l4_ok``: all layer 4 HW integrity checks passed.
+- ``l2_crc_ok``: layer 2 CRC check passed.
+- ``ipv4_csum_ok``: IPv4 checksum check passed.
+- ``l4_csum_ok``: layer 4 checksum check passed.
+- ``l3_len_ok``: the layer 3 length is smaller than the frame length.
+
+Item: ``CONNTRACK``
+^^^^^^^^^^^^^^^^^^^
+
+Matches a conntrack state after conntrack action.
+
+- ``flags``: conntrack packet state flags.
+- Default ``mask`` matches all state bits.
+
 Actions
 ~~~~~~~
 
@@ -1719,7 +1749,7 @@ that counter.
 For ports within the same switch domain then the counter id namespace extends
 to all ports within that switch domain.
 
-The shared flag is DEPRECATED and ``SHARED`` ``COUNT`` action should be used
+The shared flag is DEPRECATED and ``INDIRECT`` ``COUNT`` action should be used
 to make shared counters.
 
 .. _table_rte_flow_action_count:
@@ -2742,25 +2772,26 @@ packets, and must have a fate action.
    | ``actions``  | sub-action list for sampling    |
    +--------------+---------------------------------+
 
-Action: ``SHARED``
-^^^^^^^^^^^^^^^^^^
+Action: ``INDIRECT``
+^^^^^^^^^^^^^^^^^^^^
 
-Flow utilize shared action by handle as returned from
-``rte_flow_shared_action_create()``.
+Flow utilize indirect action by handle as returned from
+``rte_flow_action_handle_create()``.
 
-The behaviour of the shared action defined by ``action`` argument of type
-``struct rte_flow_action`` passed to ``rte_flow_shared_action_create()``.
+The behaviour of the indirect action defined by ``action`` argument of type
+``struct rte_flow_action`` passed to ``rte_flow_action_handle_create()``.
 
-Multiple flows can use the same shared action.
-The shared action can be in-place updated by ``rte_flow_shared_action_update()``
-without destroying flow and creating flow again.
+The indirect action can be used by a single flow or shared among multiple flows.
+The indirect action can be in-place updated by ``rte_flow_action_handle_update()``
+without destroying flow and creating flow again. The fields that could be
+updated depend on the type of the ``action`` and different for every type.
 
-The shared action specified data (e.g. counter) can be queried by
-``rte_flow_shared_action_query()``.
+The indirect action specified data (e.g. counter) can be queried by
+``rte_flow_action_handle_query()``.
 
-.. _table_rte_flow_shared_action:
+.. _table_rte_flow_action_handle:
 
-.. table:: SHARED
+.. table:: INDIRECT
 
    +---------------+
    | Field         |
@@ -2840,6 +2871,137 @@ for ``RTE_FLOW_FIELD_VALUE`` and ``RTE_FLOW_FIELD_POINTER`` respectively.
    +---------------+----------------------------------------------------------+
    | ``value``     | immediate value or a pointer to this value               |
    +---------------+----------------------------------------------------------+
+
+Action: ``CONNTRACK``
+^^^^^^^^^^^^^^^^^^^^^
+
+Create a conntrack (connection tracking) context with the provided information.
+
+In stateful session like TCP, the conntrack action provides the ability to
+examine every packet of this connection and associate the state to every
+packet. It will help to realize the stateful offload of connections with little
+software participation. For example, the packets with invalid state may be
+handled by the software. The control packets could be handled in the hardware.
+The software just need to query the state of a connection when needed, and then
+decide how to handle the flow rules and conntrack context.
+
+A conntrack context should be created via ``rte_flow_action_handle_create()``
+before using. Then the handle with ``INDIRECT`` type is used for a flow rule
+creation. If a flow rule with an opposite direction needs to be created, the
+``rte_flow_action_handle_update()`` should be used to modify the direction.
+
+Not all the fields of the ``struct rte_flow_action_conntrack`` will be used
+for a conntrack context creating, depending on the HW, and they should be
+in host byte order. PMD should convert them into network byte order when
+needed by the HW.
+
+The ``struct rte_flow_modify_conntrack`` should be used for an updating.
+
+The current conntrack context information could be queried via the
+``rte_flow_action_handle_query()`` interface.
+
+.. _table_rte_flow_action_conntrack:
+
+.. table:: CONNTRACK
+
+   +--------------------------+-------------------------------------------------------------+
+   | Field                    | Value                                                       |
+   +==========================+=============================================================+
+   | ``peer_port``            | peer port number                                            |
+   +--------------------------+-------------------------------------------------------------+
+   | ``is_original_dir``      | direction of this connection for creating flow rule         |
+   +--------------------------+-------------------------------------------------------------+
+   | ``enable``               | enable the conntrack context                                |
+   +--------------------------+-------------------------------------------------------------+
+   | ``live_connection``      | one ack was seen for this connection                        |
+   +--------------------------+-------------------------------------------------------------+
+   | ``selective_ack``        | SACK enabled                                                |
+   +--------------------------+-------------------------------------------------------------+
+   | ``challenge_ack_passed`` | a challenge ack has passed                                  |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_direction``       | direction of the last passed packet                         |
+   +--------------------------+-------------------------------------------------------------+
+   | ``liberal_mode``         | only report state change                                    |
+   +--------------------------+-------------------------------------------------------------+
+   | ``state``                | current state                                               |
+   +--------------------------+-------------------------------------------------------------+
+   | ``max_ack_window``       | maximal window scaling factor                               |
+   +--------------------------+-------------------------------------------------------------+
+   | ``retransmission_limit`` | maximal retransmission times                                |
+   +--------------------------+-------------------------------------------------------------+
+   | ``original_dir``         | TCP parameters of the original direction                    |
+   +--------------------------+-------------------------------------------------------------+
+   | ``reply_dir``            | TCP parameters of the reply direction                       |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_window``          | window size of the last passed packet                       |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_seq``             | sequence number of the last passed packet                   |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_ack``             | acknowledgment number the last passed packet                |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_end``             | sum of ack number and length of the last passed packet      |
+   +--------------------------+-------------------------------------------------------------+
+
+.. _table_rte_flow_tcp_dir_param:
+
+.. table:: configuration parameters for each direction
+
+   +---------------------+---------------------------------------------------------+
+   | Field               | Value                                                   |
+   +=====================+=========================================================+
+   | ``scale``           | TCP window scaling factor                               |
+   +---------------------+---------------------------------------------------------+
+   | ``close_initiated`` | FIN sent from this direction                            |
+   +---------------------+---------------------------------------------------------+
+   | ``last_ack_seen``   | an ACK packet received                                  |
+   +---------------------+---------------------------------------------------------+
+   | ``data_unacked``    | unacknowledged data for packets from this direction     |
+   +---------------------+---------------------------------------------------------+
+   | ``sent_end``        | max{seq + len} seen in sent packets                     |
+   +---------------------+---------------------------------------------------------+
+   | ``reply_end``       | max{sack + max{win, 1}} seen in reply packets           |
+   +---------------------+---------------------------------------------------------+
+   | ``max_win``         | max{max{win, 1}} + {sack - ack} seen in sent packets    |
+   +---------------------+---------------------------------------------------------+
+   | ``max_ack``         | max{ack} + seen in sent packets                         |
+   +---------------------+---------------------------------------------------------+
+
+.. _table_rte_flow_modify_conntrack:
+
+.. table:: update a conntrack context
+
+   +----------------+-------------------------------------------------+
+   | Field          | Value                                           |
+   +================+=================================================+
+   | ``new_ct``     | new conntrack information                       |
+   +----------------+-------------------------------------------------+
+   | ``direction``  | direction will be updated                       |
+   +----------------+-------------------------------------------------+
+   | ``state``      | other fields except direction will be updated   |
+   +----------------+-------------------------------------------------+
+   | ``reserved``   | reserved bits                                   |
+   +----------------+-------------------------------------------------+
+
+Action: ``METER_COLOR``
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Color the packet to reflect the meter color result.
+
+The meter action must be configured before meter color action.
+Meter color action is set to a color to reflect the meter color result.
+Set the meter color in the mbuf to the selected color.
+The meter color action output color is the output color of the packet,
+which is set in the packet meta-data (i.e. struct ``rte_mbuf::sched::color``)
+
+.. _table_rte_flow_action_meter_color:
+
+.. table:: METER_COLOR
+
+   +-----------------+--------------+
+   | Field           | Value        |
+   +=================+==============+
+   | ``meter_color`` | Packet color |
+   +-----------------+--------------+
 
 Negative types
 ~~~~~~~~~~~~~~

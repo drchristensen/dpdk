@@ -35,7 +35,7 @@ The ``meson`` tool is used to configure a DPDK build. On most Linux
 distributions this can be got using the local package management system,
 e.g. ``dnf install meson`` or ``apt-get install meson``. If meson is not
 available as a suitable package, it can also be installed using the Python
-3 ``pip`` tool, e.g. ``pip3 install meson``. Version 0.47.1 of meson is
+3 ``pip`` tool, e.g. ``pip3 install meson``. Version 0.49.2 of meson is
 required - if the version packaged is too old, the latest version is
 generally available from "pip".
 
@@ -45,6 +45,12 @@ Installing meson will, in many cases, also install ninja, but, if not
 already installed, it too is generally packaged by most Linux distributions.
 If not available as a package, it can be downloaded as source or binary from
 https://ninja-build.org/
+
+It is best advised to go over the following links for the complete dependencies:
+
+* :doc:`Linux <../linux_gsg/sys_reqs>`
+* :doc:`FreeBSD <../freebsd_gsg/build_dpdk>`
+* :doc:`Windows <../windows_gsg/build_dpdk>`
 
 
 Configuring the Build

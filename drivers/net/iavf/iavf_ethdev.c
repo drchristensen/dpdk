@@ -125,6 +125,10 @@ static int iavf_set_mc_addr_list(struct rte_eth_dev *dev,
 
 static const struct rte_pci_id pci_id_iavf_map[] = {
 	{ RTE_PCI_DEVICE(IAVF_INTEL_VENDOR_ID, IAVF_DEV_ID_ADAPTIVE_VF) },
+	{ RTE_PCI_DEVICE(IAVF_INTEL_VENDOR_ID, IAVF_DEV_ID_VF) },
+	{ RTE_PCI_DEVICE(IAVF_INTEL_VENDOR_ID, IAVF_DEV_ID_VF_HV) },
+	{ RTE_PCI_DEVICE(IAVF_INTEL_VENDOR_ID, IAVF_DEV_ID_X722_VF) },
+	{ RTE_PCI_DEVICE(IAVF_INTEL_VENDOR_ID, IAVF_DEV_ID_X722_A0_VF) },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 
@@ -242,6 +246,107 @@ iavf_set_mc_addr_list(struct rte_eth_dev *dev,
 }
 
 static int
+iavf_config_rss_hf(struct iavf_adapter *adapter, uint64_t rss_hf)
+{
+	static const uint64_t map_hena_rss[] = {
+		/* IPv4 */
+		[IAVF_FILTER_PCTYPE_NONF_UNICAST_IPV4_UDP] =
+				ETH_RSS_NONFRAG_IPV4_UDP,
+		[IAVF_FILTER_PCTYPE_NONF_MULTICAST_IPV4_UDP] =
+				ETH_RSS_NONFRAG_IPV4_UDP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV4_UDP] =
+				ETH_RSS_NONFRAG_IPV4_UDP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV4_TCP_SYN_NO_ACK] =
+				ETH_RSS_NONFRAG_IPV4_TCP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV4_TCP] =
+				ETH_RSS_NONFRAG_IPV4_TCP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV4_SCTP] =
+				ETH_RSS_NONFRAG_IPV4_SCTP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV4_OTHER] =
+				ETH_RSS_NONFRAG_IPV4_OTHER,
+		[IAVF_FILTER_PCTYPE_FRAG_IPV4] = ETH_RSS_FRAG_IPV4,
+
+		/* IPv6 */
+		[IAVF_FILTER_PCTYPE_NONF_UNICAST_IPV6_UDP] =
+				ETH_RSS_NONFRAG_IPV6_UDP,
+		[IAVF_FILTER_PCTYPE_NONF_MULTICAST_IPV6_UDP] =
+				ETH_RSS_NONFRAG_IPV6_UDP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV6_UDP] =
+				ETH_RSS_NONFRAG_IPV6_UDP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV6_TCP_SYN_NO_ACK] =
+				ETH_RSS_NONFRAG_IPV6_TCP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV6_TCP] =
+				ETH_RSS_NONFRAG_IPV6_TCP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV6_SCTP] =
+				ETH_RSS_NONFRAG_IPV6_SCTP,
+		[IAVF_FILTER_PCTYPE_NONF_IPV6_OTHER] =
+				ETH_RSS_NONFRAG_IPV6_OTHER,
+		[IAVF_FILTER_PCTYPE_FRAG_IPV6] = ETH_RSS_FRAG_IPV6,
+
+		/* L2 Payload */
+		[IAVF_FILTER_PCTYPE_L2_PAYLOAD] = ETH_RSS_L2_PAYLOAD
+	};
+
+	const uint64_t ipv4_rss = ETH_RSS_NONFRAG_IPV4_UDP |
+				  ETH_RSS_NONFRAG_IPV4_TCP |
+				  ETH_RSS_NONFRAG_IPV4_SCTP |
+				  ETH_RSS_NONFRAG_IPV4_OTHER |
+				  ETH_RSS_FRAG_IPV4;
+
+	const uint64_t ipv6_rss = ETH_RSS_NONFRAG_IPV6_UDP |
+				  ETH_RSS_NONFRAG_IPV6_TCP |
+				  ETH_RSS_NONFRAG_IPV6_SCTP |
+				  ETH_RSS_NONFRAG_IPV6_OTHER |
+				  ETH_RSS_FRAG_IPV6;
+
+	struct iavf_info *vf =  IAVF_DEV_PRIVATE_TO_VF(adapter);
+	uint64_t caps = 0, hena = 0, valid_rss_hf = 0;
+	uint32_t i;
+	int ret;
+
+	ret = iavf_get_hena_caps(adapter, &caps);
+	if (ret)
+		return ret;
+	/**
+	 * ETH_RSS_IPV4 and ETH_RSS_IPV6 can be considered as 2
+	 * generalizations of all other IPv4 and IPv6 RSS types.
+	 */
+	if (rss_hf & ETH_RSS_IPV4)
+		rss_hf |= ipv4_rss;
+
+	if (rss_hf & ETH_RSS_IPV6)
+		rss_hf |= ipv6_rss;
+
+	RTE_BUILD_BUG_ON(RTE_DIM(map_hena_rss) > sizeof(uint64_t) * CHAR_BIT);
+
+	for (i = 0; i < RTE_DIM(map_hena_rss); i++) {
+		uint64_t bit = BIT_ULL(i);
+
+		if ((caps & bit) && (map_hena_rss[i] & rss_hf)) {
+			valid_rss_hf |= map_hena_rss[i];
+			hena |= bit;
+		}
+	}
+
+	ret = iavf_set_hena(adapter, hena);
+	if (ret)
+		return ret;
+
+	if (valid_rss_hf & ipv4_rss)
+		valid_rss_hf |= rss_hf & ETH_RSS_IPV4;
+
+	if (valid_rss_hf & ipv6_rss)
+		valid_rss_hf |= rss_hf & ETH_RSS_IPV6;
+
+	if (rss_hf & ~valid_rss_hf)
+		PMD_DRV_LOG(WARNING, "Unsupported rss_hf 0x%" PRIx64,
+			    rss_hf & ~valid_rss_hf);
+
+	vf->rss_hf = valid_rss_hf;
+	return 0;
+}
+
+static int
 iavf_init_rss(struct iavf_adapter *adapter)
 {
 	struct iavf_info *vf =  IAVF_DEV_PRIVATE_TO_VF(adapter);
@@ -256,14 +361,6 @@ iavf_init_rss(struct iavf_adapter *adapter)
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF)) {
 		PMD_DRV_LOG(DEBUG, "RSS is not supported");
 		return -ENOTSUP;
-	}
-	if (adapter->eth_dev->data->dev_conf.rxmode.mq_mode != ETH_MQ_RX_RSS) {
-		PMD_DRV_LOG(WARNING, "RSS is enabled by PF by default");
-		/* set all lut items to default queue */
-		for (i = 0; i < vf->vf_res->rss_lut_size; i++)
-			vf->rss_lut[i] = 0;
-		ret = iavf_configure_rss_lut(adapter);
-		return ret;
 	}
 
 	/* configure RSS key */
@@ -297,6 +394,10 @@ iavf_init_rss(struct iavf_adapter *adapter)
 			PMD_DRV_LOG(ERR, "fail to set default RSS");
 			return ret;
 		}
+	} else {
+		ret = iavf_config_rss_hf(adapter, rss_conf->rss_hf);
+		if (ret != -ENOTSUP)
+			return ret;
 	}
 
 	return 0;
@@ -997,7 +1098,7 @@ iavf_dev_add_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *addr,
 		return -EINVAL;
 	}
 
-	err = iavf_add_del_eth_addr(adapter, addr, true);
+	err = iavf_add_del_eth_addr(adapter, addr, true, VIRTCHNL_ETHER_ADDR_EXTRA);
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to add MAC address");
 		return -EIO;
@@ -1019,7 +1120,7 @@ iavf_dev_del_mac_addr(struct rte_eth_dev *dev, uint32_t index)
 
 	addr = &dev->data->mac_addrs[index];
 
-	err = iavf_add_del_eth_addr(adapter, addr, false);
+	err = iavf_add_del_eth_addr(adapter, addr, false, VIRTCHNL_ETHER_ADDR_EXTRA);
 	if (err)
 		PMD_DRV_LOG(ERR, "fail to delete MAC address");
 
@@ -1278,6 +1379,10 @@ iavf_dev_rss_hash_update(struct rte_eth_dev *dev,
 			PMD_DRV_LOG(ERR, "fail to set new RSS");
 			return ret;
 		}
+	} else {
+		ret = iavf_config_rss_hf(adapter, rss_conf->rss_hf);
+		if (ret != -ENOTSUP)
+			return ret;
 	}
 
 	return 0;
@@ -1339,17 +1444,15 @@ iavf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(adapter);
-	struct rte_ether_addr *perm_addr, *old_addr;
+	struct rte_ether_addr *old_addr;
 	int ret;
 
 	old_addr = (struct rte_ether_addr *)hw->mac.addr;
-	perm_addr = (struct rte_ether_addr *)hw->mac.perm_addr;
 
-	/* If the MAC address is configured by host, skip the setting */
-	if (rte_is_valid_assigned_ether_addr(perm_addr))
-		return -EPERM;
+	if (rte_is_same_ether_addr(old_addr, mac_addr))
+		return 0;
 
-	ret = iavf_add_del_eth_addr(adapter, old_addr, false);
+	ret = iavf_add_del_eth_addr(adapter, old_addr, false, VIRTCHNL_ETHER_ADDR_PRIMARY);
 	if (ret)
 		PMD_DRV_LOG(ERR, "Fail to delete old MAC:"
 			    " %02X:%02X:%02X:%02X:%02X:%02X",
@@ -1360,7 +1463,7 @@ iavf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
 			    old_addr->addr_bytes[4],
 			    old_addr->addr_bytes[5]);
 
-	ret = iavf_add_del_eth_addr(adapter, mac_addr, true);
+	ret = iavf_add_del_eth_addr(adapter, mac_addr, true, VIRTCHNL_ETHER_ADDR_PRIMARY);
 	if (ret)
 		PMD_DRV_LOG(ERR, "Fail to add new MAC:"
 			    " %02X:%02X:%02X:%02X:%02X:%02X",
@@ -2094,7 +2197,7 @@ iavf_default_rss_disable(struct iavf_adapter *adapter)
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	int ret = 0;
 
-	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_ADV_RSS_PF) {
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF) {
 		/* Set hena = 0 to ask PF to cleanup all existing RSS. */
 		ret = iavf_set_hena(adapter, 0);
 		if (ret)
@@ -2323,10 +2426,59 @@ exit:
 	return ret;
 }
 
+static int
+iavf_drv_i40evf_check_handler(__rte_unused const char *key,
+			      const char *value, __rte_unused void *opaque)
+{
+	if (strcmp(value, "i40evf"))
+		return -1;
+
+	return 0;
+}
+
+static int
+iavf_drv_i40evf_selected(struct rte_devargs *devargs, uint16_t device_id)
+{
+	struct rte_kvargs *kvlist;
+	const char *key = "driver";
+	int ret = 0;
+
+	if (device_id != IAVF_DEV_ID_VF &&
+	    device_id != IAVF_DEV_ID_VF_HV &&
+	    device_id != IAVF_DEV_ID_X722_VF &&
+	    device_id != IAVF_DEV_ID_X722_A0_VF)
+		return 0;
+
+	if (devargs == NULL)
+		return 0;
+
+	kvlist = rte_kvargs_parse(devargs->args, NULL);
+	if (kvlist == NULL)
+		return 0;
+
+	if (!rte_kvargs_count(kvlist, key))
+		goto exit;
+
+	/* i40evf driver selected when there's a key-value pair:
+	 * driver=i40evf
+	 */
+	if (rte_kvargs_process(kvlist, key,
+			       iavf_drv_i40evf_check_handler, NULL) < 0)
+		goto exit;
+
+	ret = 1;
+
+exit:
+	rte_kvargs_free(kvlist);
+	return ret;
+}
+
 static int eth_iavf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			     struct rte_pci_device *pci_dev)
 {
-	if (iavf_dcf_cap_selected(pci_dev->device.devargs))
+	if (iavf_dcf_cap_selected(pci_dev->device.devargs) ||
+	    iavf_drv_i40evf_selected(pci_dev->device.devargs,
+				     pci_dev->id.device_id))
 		return 1;
 
 	return rte_eth_dev_pci_generic_probe(pci_dev,
@@ -2349,7 +2501,7 @@ static struct rte_pci_driver rte_iavf_pmd = {
 RTE_PMD_REGISTER_PCI(net_iavf, rte_iavf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_iavf, pci_id_iavf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_iavf, "* igb_uio | vfio-pci");
-RTE_PMD_REGISTER_PARAM_STRING(net_iavf, "cap=dcf");
+RTE_PMD_REGISTER_PARAM_STRING(net_iavf, "cap=dcf driver=i40evf");
 RTE_LOG_REGISTER(iavf_logtype_init, pmd.net.iavf.init, NOTICE);
 RTE_LOG_REGISTER(iavf_logtype_driver, pmd.net.iavf.driver, NOTICE);
 #ifdef RTE_ETHDEV_DEBUG_RX

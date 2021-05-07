@@ -27,6 +27,7 @@
 #include <rte_tailq.h>
 #include <rte_hash_crc.h>
 #include <rte_bitmap.h>
+#include <rte_os_shim.h>
 
 #include "i40e_logs.h"
 #include "base/i40e_prototype.h"
@@ -852,6 +853,8 @@ floating_veb_list_handler(__rte_unused const char *key,
 		errno = 0;
 		idx = strtoul(floating_veb_value, &end, 10);
 		if (errno || end == NULL)
+			return -1;
+		if (idx < 0)
 			return -1;
 		while (isblank(*end))
 			end++;
@@ -2306,7 +2309,8 @@ i40e_phy_conf_link(struct i40e_hw *hw,
 	phy_conf.phy_type = is_up ? cpu_to_le32(phy_type_mask) : 0;
 	phy_conf.phy_type_ext = is_up ? (I40E_AQ_PHY_TYPE_EXT_25G_KR |
 		I40E_AQ_PHY_TYPE_EXT_25G_CR | I40E_AQ_PHY_TYPE_EXT_25G_SR |
-		I40E_AQ_PHY_TYPE_EXT_25G_LR) : 0;
+		I40E_AQ_PHY_TYPE_EXT_25G_LR | I40E_AQ_PHY_TYPE_EXT_25G_AOC |
+		I40E_AQ_PHY_TYPE_EXT_25G_ACC) : 0;
 	phy_conf.fec_config = phy_ab.fec_cfg_curr_mod_ext_info;
 	phy_conf.eee_capability = phy_ab.eee_capability;
 	phy_conf.eeer = phy_ab.eeer_val;
@@ -3685,9 +3689,11 @@ i40e_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 		 ((hw->nvm.version >> 4) & 0xff),
 		 (hw->nvm.version & 0xf), hw->nvm.eetrack,
 		 ver, build, patch);
+	if (ret < 0)
+		return -EINVAL;
 
 	ret += 1; /* add the size of '\0' */
-	if (fw_size < (u32)ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;

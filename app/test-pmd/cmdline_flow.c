@@ -54,7 +54,11 @@ enum index {
 	PORT_ID,
 	GROUP_ID,
 	PRIORITY_LEVEL,
-	SHARED_ACTION_ID,
+	INDIRECT_ACTION_ID,
+	POLICY_ID,
+
+	/* TOP-level command. */
+	ADD,
 
 	/* Top-level command. */
 	SET,
@@ -68,7 +72,7 @@ enum index {
 	/* Top-level command. */
 	FLOW,
 	/* Sub-level commands. */
-	SHARED_ACTION,
+	INDIRECT_ACTION,
 	VALIDATE,
 	CREATE,
 	DESTROY,
@@ -108,21 +112,25 @@ enum index {
 	TUNNEL_SET,
 	TUNNEL_MATCH,
 
-	/* Shared action arguments */
-	SHARED_ACTION_CREATE,
-	SHARED_ACTION_UPDATE,
-	SHARED_ACTION_DESTROY,
-	SHARED_ACTION_QUERY,
+	/* Dump arguments */
+	DUMP_ALL,
+	DUMP_ONE,
 
-	/* Shared action create arguments */
-	SHARED_ACTION_CREATE_ID,
-	SHARED_ACTION_INGRESS,
-	SHARED_ACTION_EGRESS,
-	SHARED_ACTION_TRANSFER,
-	SHARED_ACTION_SPEC,
+	/* Indirect action arguments */
+	INDIRECT_ACTION_CREATE,
+	INDIRECT_ACTION_UPDATE,
+	INDIRECT_ACTION_DESTROY,
+	INDIRECT_ACTION_QUERY,
 
-	/* Shared action destroy arguments */
-	SHARED_ACTION_DESTROY_ID,
+	/* Indirect action create arguments */
+	INDIRECT_ACTION_CREATE_ID,
+	INDIRECT_ACTION_INGRESS,
+	INDIRECT_ACTION_EGRESS,
+	INDIRECT_ACTION_TRANSFER,
+	INDIRECT_ACTION_SPEC,
+
+	/* Indirect action destroy arguments */
+	INDIRECT_ACTION_DESTROY_ID,
 
 	/* Validate/create pattern. */
 	PATTERN,
@@ -166,6 +174,7 @@ enum index {
 	ITEM_VLAN_HAS_MORE_VLAN,
 	ITEM_IPV4,
 	ITEM_IPV4_TOS,
+	ITEM_IPV4_ID,
 	ITEM_IPV4_FRAGMENT_OFFSET,
 	ITEM_IPV4_TTL,
 	ITEM_IPV4_PROTO,
@@ -236,6 +245,7 @@ enum index {
 	ITEM_IPV6_FRAG_EXT,
 	ITEM_IPV6_FRAG_EXT_NEXT_HDR,
 	ITEM_IPV6_FRAG_EXT_FRAG_DATA,
+	ITEM_IPV6_FRAG_EXT_ID,
 	ITEM_ICMP6,
 	ITEM_ICMP6_TYPE,
 	ITEM_ICMP6_CODE,
@@ -289,6 +299,13 @@ enum index {
 	ITEM_GENEVE_OPT_TYPE,
 	ITEM_GENEVE_OPT_LENGTH,
 	ITEM_GENEVE_OPT_DATA,
+	ITEM_INTEGRITY,
+	ITEM_INTEGRITY_LEVEL,
+	ITEM_INTEGRITY_VALUE,
+	ITEM_CONNTRACK,
+	ITEM_POL_PORT,
+	ITEM_POL_METER,
+	ITEM_POL_POLICY,
 
 	/* Validate/create actions. */
 	ACTIONS,
@@ -412,8 +429,8 @@ enum index {
 	ACTION_SAMPLE_RATIO,
 	ACTION_SAMPLE_INDEX,
 	ACTION_SAMPLE_INDEX_VALUE,
-	ACTION_SHARED,
-	SHARED_ACTION_ID2PTR,
+	ACTION_INDIRECT,
+	INDIRECT_ACTION_ID2PTR,
 	ACTION_MODIFY_FIELD,
 	ACTION_MODIFY_FIELD_OP,
 	ACTION_MODIFY_FIELD_OP_VALUE,
@@ -427,6 +444,13 @@ enum index {
 	ACTION_MODIFY_FIELD_SRC_OFFSET,
 	ACTION_MODIFY_FIELD_SRC_VALUE,
 	ACTION_MODIFY_FIELD_WIDTH,
+	ACTION_CONNTRACK,
+	ACTION_CONNTRACK_UPDATE,
+	ACTION_CONNTRACK_UPDATE_DIR,
+	ACTION_CONNTRACK_UPDATE_CTX,
+	ACTION_POL_G,
+	ACTION_POL_Y,
+	ACTION_POL_R,
 };
 
 /** Maximum size for pattern in struct rte_flow_item_raw. */
@@ -564,6 +588,8 @@ struct mplsogre_decap_conf mplsogre_decap_conf;
 struct mplsoudp_encap_conf mplsoudp_encap_conf;
 
 struct mplsoudp_decap_conf mplsoudp_decap_conf;
+
+struct rte_flow_action_conntrack conntrack_context;
 
 #define ACTION_SAMPLE_ACTIONS_NUM 10
 #define RAW_SAMPLE_CONFS_MAX_NUM 8
@@ -774,10 +800,10 @@ struct buffer {
 		struct {
 			uint32_t *action_id;
 			uint32_t action_id_n;
-		} sa_destroy; /**< Shared action destroy arguments. */
+		} ia_destroy; /**< Indirect action destroy arguments. */
 		struct {
 			uint32_t action_id;
-		} sa; /* Shared action query arguments */
+		} ia; /* Indirect action query arguments */
 		struct {
 			struct rte_flow_attr attr;
 			struct tunnel_ops tunnel_ops;
@@ -793,6 +819,8 @@ struct buffer {
 		} destroy; /**< Destroy arguments. */
 		struct {
 			char file[128];
+			bool mode;
+			uint32_t rule;
 		} dump; /**< Dump arguments. */
 		struct {
 			uint32_t rule;
@@ -808,6 +836,9 @@ struct buffer {
 		struct {
 			int destroy;
 		} aged; /**< Aged arguments. */
+		struct {
+			uint32_t policy_id;
+		} policy;/**< Policy arguments. */
 	} args; /**< Command arguments. */
 };
 
@@ -835,20 +866,26 @@ struct parse_action_priv {
 		.size = s, \
 	})
 
-static const enum index next_sa_create_attr[] = {
-	SHARED_ACTION_CREATE_ID,
-	SHARED_ACTION_INGRESS,
-	SHARED_ACTION_EGRESS,
-	SHARED_ACTION_TRANSFER,
-	SHARED_ACTION_SPEC,
+static const enum index next_ia_create_attr[] = {
+	INDIRECT_ACTION_CREATE_ID,
+	INDIRECT_ACTION_INGRESS,
+	INDIRECT_ACTION_EGRESS,
+	INDIRECT_ACTION_TRANSFER,
+	INDIRECT_ACTION_SPEC,
 	ZERO,
 };
 
-static const enum index next_sa_subcmd[] = {
-	SHARED_ACTION_CREATE,
-	SHARED_ACTION_UPDATE,
-	SHARED_ACTION_DESTROY,
-	SHARED_ACTION_QUERY,
+static const enum index next_dump_subcmd[] = {
+	DUMP_ALL,
+	DUMP_ONE,
+	ZERO,
+};
+
+static const enum index next_ia_subcmd[] = {
+	INDIRECT_ACTION_CREATE,
+	INDIRECT_ACTION_UPDATE,
+	INDIRECT_ACTION_DESTROY,
+	INDIRECT_ACTION_QUERY,
 	ZERO,
 };
 
@@ -888,8 +925,8 @@ static const enum index next_aged_attr[] = {
 	ZERO,
 };
 
-static const enum index next_sa_destroy_attr[] = {
-	SHARED_ACTION_DESTROY_ID,
+static const enum index next_ia_destroy_attr[] = {
+	INDIRECT_ACTION_DESTROY_ID,
 	END,
 	ZERO,
 };
@@ -956,6 +993,8 @@ static const enum index next_item[] = {
 	ITEM_PFCP,
 	ITEM_ECPRI,
 	ITEM_GENEVE_OPT,
+	ITEM_INTEGRITY,
+	ITEM_CONNTRACK,
 	END_SET,
 	ZERO,
 };
@@ -1028,6 +1067,7 @@ static const enum index item_vlan[] = {
 
 static const enum index item_ipv4[] = {
 	ITEM_IPV4_TOS,
+	ITEM_IPV4_ID,
 	ITEM_IPV4_FRAGMENT_OFFSET,
 	ITEM_IPV4_TTL,
 	ITEM_IPV4_PROTO,
@@ -1164,6 +1204,7 @@ static const enum index item_ipv6_ext[] = {
 static const enum index item_ipv6_frag_ext[] = {
 	ITEM_IPV6_FRAG_EXT_NEXT_HDR,
 	ITEM_IPV6_FRAG_EXT_FRAG_DATA,
+	ITEM_IPV6_FRAG_EXT_ID,
 	ITEM_NEXT,
 	ZERO,
 };
@@ -1307,6 +1348,19 @@ static const enum index item_geneve_opt[] = {
 	ZERO,
 };
 
+static const enum index item_integrity[] = {
+	ITEM_INTEGRITY_LEVEL,
+	ITEM_INTEGRITY_VALUE,
+	ZERO,
+};
+
+static const enum index item_integrity_lv[] = {
+	ITEM_INTEGRITY_LEVEL,
+	ITEM_INTEGRITY_VALUE,
+	ITEM_NEXT,
+	ZERO,
+};
+
 static const enum index next_action[] = {
 	ACTION_END,
 	ACTION_VOID,
@@ -1368,8 +1422,10 @@ static const enum index next_action[] = {
 	ACTION_SET_IPV6_DSCP,
 	ACTION_AGE,
 	ACTION_SAMPLE,
-	ACTION_SHARED,
+	ACTION_INDIRECT,
 	ACTION_MODIFY_FIELD,
+	ACTION_CONNTRACK,
+	ACTION_CONNTRACK_UPDATE,
 	ZERO,
 };
 
@@ -1638,6 +1694,13 @@ static const enum index action_modify_field_src[] = {
 	ZERO,
 };
 
+static const enum index action_update_conntrack[] = {
+	ACTION_CONNTRACK_UPDATE_DIR,
+	ACTION_CONNTRACK_UPDATE_CTX,
+	ACTION_NEXT,
+	ZERO,
+};
+
 static int parse_set_raw_encap_decap(struct context *, const struct token *,
 				     const char *, unsigned int,
 				     void *, unsigned int);
@@ -1728,6 +1791,10 @@ static int
 parse_vc_modify_field_id(struct context *ctx, const struct token *token,
 				const char *str, unsigned int len, void *buf,
 				unsigned int size);
+static int
+parse_vc_action_conntrack_update(struct context *ctx, const struct token *token,
+			 const char *str, unsigned int len, void *buf,
+			 unsigned int size);
 static int parse_destroy(struct context *, const struct token *,
 			 const char *, unsigned int,
 			 void *, unsigned int);
@@ -1785,15 +1852,18 @@ static int parse_ipv6_addr(struct context *, const struct token *,
 static int parse_port(struct context *, const struct token *,
 		      const char *, unsigned int,
 		      void *, unsigned int);
-static int parse_sa(struct context *, const struct token *,
+static int parse_ia(struct context *, const struct token *,
 		    const char *, unsigned int,
 		    void *, unsigned int);
-static int parse_sa_destroy(struct context *ctx, const struct token *token,
+static int parse_ia_destroy(struct context *ctx, const struct token *token,
 			    const char *str, unsigned int len,
 			    void *buf, unsigned int size);
-static int parse_sa_id2ptr(struct context *ctx, const struct token *token,
+static int parse_ia_id2ptr(struct context *ctx, const struct token *token,
 			   const char *str, unsigned int len, void *buf,
 			   unsigned int size);
+static int parse_mp(struct context *, const struct token *,
+		    const char *, unsigned int,
+		    void *, unsigned int);
 static int comp_none(struct context *, const struct token *,
 		     unsigned int, char *, unsigned int);
 static int comp_boolean(struct context *, const struct token *,
@@ -1823,7 +1893,7 @@ static const struct token token_list[] = {
 	[ZERO] = {
 		.name = "ZERO",
 		.help = "null entry, abused as the entry point",
-		.next = NEXT(NEXT_ENTRY(FLOW)),
+		.next = NEXT(NEXT_ENTRY(FLOW, ADD)),
 	},
 	[END] = {
 		.name = "",
@@ -1938,10 +2008,17 @@ static const struct token token_list[] = {
 		.call = parse_int,
 		.comp = comp_none,
 	},
-	[SHARED_ACTION_ID] = {
-		.name = "{shared_action_id}",
-		.type = "SHARED_ACTION_ID",
-		.help = "shared action id",
+	[INDIRECT_ACTION_ID] = {
+		.name = "{indirect_action_id}",
+		.type = "INDIRECT_ACTION_ID",
+		.help = "indirect action id",
+		.call = parse_int,
+		.comp = comp_none,
+	},
+	[POLICY_ID] = {
+		.name = "{policy_id}",
+		.type = "POLCIY_ID",
+		.help = "policy id",
 		.call = parse_int,
 		.comp = comp_none,
 	},
@@ -1951,7 +2028,7 @@ static const struct token token_list[] = {
 		.type = "{command} {port_id} [{arg} [...]]",
 		.help = "manage ingress/egress flow rules",
 		.next = NEXT(NEXT_ENTRY
-			     (SHARED_ACTION,
+			     (INDIRECT_ACTION,
 			      VALIDATE,
 			      CREATE,
 			      DESTROY,
@@ -1965,42 +2042,42 @@ static const struct token token_list[] = {
 		.call = parse_init,
 	},
 	/* Top-level command. */
-	[SHARED_ACTION] = {
-		.name = "shared_action",
+	[INDIRECT_ACTION] = {
+		.name = "indirect_action",
 		.type = "{command} {port_id} [{arg} [...]]",
-		.help = "manage shared actions",
-		.next = NEXT(next_sa_subcmd, NEXT_ENTRY(PORT_ID)),
+		.help = "manage indirect actions",
+		.next = NEXT(next_ia_subcmd, NEXT_ENTRY(PORT_ID)),
 		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
-		.call = parse_sa,
+		.call = parse_ia,
 	},
 	/* Sub-level commands. */
-	[SHARED_ACTION_CREATE] = {
+	[INDIRECT_ACTION_CREATE] = {
 		.name = "create",
-		.help = "create shared action",
-		.next = NEXT(next_sa_create_attr),
-		.call = parse_sa,
+		.help = "create indirect action",
+		.next = NEXT(next_ia_create_attr),
+		.call = parse_ia,
 	},
-	[SHARED_ACTION_UPDATE] = {
+	[INDIRECT_ACTION_UPDATE] = {
 		.name = "update",
-		.help = "update shared action",
-		.next = NEXT(NEXT_ENTRY(SHARED_ACTION_SPEC),
-			     NEXT_ENTRY(SHARED_ACTION_ID)),
+		.help = "update indirect action",
+		.next = NEXT(NEXT_ENTRY(INDIRECT_ACTION_SPEC),
+			     NEXT_ENTRY(INDIRECT_ACTION_ID)),
 		.args = ARGS(ARGS_ENTRY(struct buffer, args.vc.attr.group)),
-		.call = parse_sa,
+		.call = parse_ia,
 	},
-	[SHARED_ACTION_DESTROY] = {
+	[INDIRECT_ACTION_DESTROY] = {
 		.name = "destroy",
-		.help = "destroy shared action",
-		.next = NEXT(NEXT_ENTRY(SHARED_ACTION_DESTROY_ID)),
+		.help = "destroy indirect action",
+		.next = NEXT(NEXT_ENTRY(INDIRECT_ACTION_DESTROY_ID)),
 		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
-		.call = parse_sa_destroy,
+		.call = parse_ia_destroy,
 	},
-	[SHARED_ACTION_QUERY] = {
+	[INDIRECT_ACTION_QUERY] = {
 		.name = "query",
-		.help = "query shared action",
-		.next = NEXT(NEXT_ENTRY(END), NEXT_ENTRY(SHARED_ACTION_ID)),
-		.args = ARGS(ARGS_ENTRY(struct buffer, args.sa.action_id)),
-		.call = parse_sa,
+		.help = "query indirect action",
+		.next = NEXT(NEXT_ENTRY(END), NEXT_ENTRY(INDIRECT_ACTION_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, args.ia.action_id)),
+		.call = parse_ia,
 	},
 	[VALIDATE] = {
 		.name = "validate",
@@ -2032,10 +2109,9 @@ static const struct token token_list[] = {
 	},
 	[DUMP] = {
 		.name = "dump",
-		.help = "dump all flow rules to file",
-		.next = NEXT(next_dump_attr, NEXT_ENTRY(PORT_ID)),
-		.args = ARGS(ARGS_ENTRY(struct buffer, args.dump.file),
-			     ARGS_ENTRY(struct buffer, port)),
+		.help = "dump single/all flow rules to file",
+		.next = NEXT(next_dump_subcmd, NEXT_ENTRY(PORT_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
 		.call = parse_dump,
 	},
 	[QUERY] = {
@@ -2124,6 +2200,22 @@ static const struct token token_list[] = {
 		.next = NEXT(next_destroy_attr, NEXT_ENTRY(RULE_ID)),
 		.args = ARGS(ARGS_ENTRY_PTR(struct buffer, args.destroy.rule)),
 		.call = parse_destroy,
+	},
+	/* Dump arguments. */
+	[DUMP_ALL] = {
+		.name = "all",
+		.help = "dump all",
+		.next = NEXT(next_dump_attr),
+		.args = ARGS(ARGS_ENTRY(struct buffer, args.dump.file)),
+		.call = parse_dump,
+	},
+	[DUMP_ONE] = {
+		.name = "rule",
+		.help = "dump one rule",
+		.next = NEXT(next_dump_attr, NEXT_ENTRY(RULE_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, args.dump.file),
+				ARGS_ENTRY(struct buffer, args.dump.rule)),
+		.call = parse_dump,
 	},
 	/* Query arguments. */
 	[QUERY_ACTION] = {
@@ -2465,6 +2557,13 @@ static const struct token token_list[] = {
 		.next = NEXT(item_ipv4, NEXT_ENTRY(UNSIGNED), item_param),
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ipv4,
 					     hdr.type_of_service)),
+	},
+	[ITEM_IPV4_ID] = {
+		.name = "packet_id",
+		.help = "fragment packet id",
+		.next = NEXT(item_ipv4, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ipv4,
+					     hdr.packet_id)),
 	},
 	[ITEM_IPV4_FRAGMENT_OFFSET] = {
 		.name = "fragment_offset",
@@ -2969,11 +3068,19 @@ static const struct token token_list[] = {
 	},
 	[ITEM_IPV6_FRAG_EXT_FRAG_DATA] = {
 		.name = "frag_data",
-		.help = "Fragment flags and offset",
+		.help = "fragment flags and offset",
 		.next = NEXT(item_ipv6_frag_ext, NEXT_ENTRY(UNSIGNED),
 			     item_param),
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ipv6_frag_ext,
 					     hdr.frag_data)),
+	},
+	[ITEM_IPV6_FRAG_EXT_ID] = {
+		.name = "packet_id",
+		.help = "fragment packet id",
+		.next = NEXT(item_ipv6_frag_ext, NEXT_ENTRY(UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ipv6_frag_ext,
+					     hdr.id)),
 	},
 	[ITEM_ICMP6] = {
 		.name = "icmp6",
@@ -3372,6 +3479,35 @@ static const struct token token_list[] = {
 			     ARGS_ENTRY_ARB
 				(sizeof(struct rte_flow_item_geneve_opt),
 				ITEM_GENEVE_OPT_DATA_SIZE)),
+	},
+	[ITEM_INTEGRITY] = {
+		.name = "integrity",
+		.help = "match packet integrity",
+		.priv = PRIV_ITEM(INTEGRITY,
+				  sizeof(struct rte_flow_item_integrity)),
+		.next = NEXT(item_integrity),
+		.call = parse_vc,
+	},
+	[ITEM_INTEGRITY_LEVEL] = {
+		.name = "level",
+		.help = "integrity level",
+		.next = NEXT(item_integrity_lv, NEXT_ENTRY(UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_integrity, level)),
+	},
+	[ITEM_INTEGRITY_VALUE] = {
+		.name = "value",
+		.help = "integrity value",
+		.next = NEXT(item_integrity_lv, NEXT_ENTRY(UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_integrity, value)),
+	},
+	[ITEM_CONNTRACK] = {
+		.name = "conntrack",
+		.help = "conntrack state",
+		.next = NEXT(NEXT_ENTRY(ITEM_NEXT), NEXT_ENTRY(UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_conntrack, flags)),
 	},
 	/* Validate/create actions. */
 	[ACTIONS] = {
@@ -4471,62 +4607,138 @@ static const struct token token_list[] = {
 		.call = parse_vc_action_sample_index,
 		.comp = comp_set_sample_index,
 	},
-	/* Shared action destroy arguments. */
-	[SHARED_ACTION_DESTROY_ID] = {
-		.name = "action_id",
-		.help = "specify a shared action id to destroy",
-		.next = NEXT(next_sa_destroy_attr,
-			     NEXT_ENTRY(SHARED_ACTION_ID)),
-		.args = ARGS(ARGS_ENTRY_PTR(struct buffer,
-					    args.sa_destroy.action_id)),
-		.call = parse_sa_destroy,
+	[ACTION_CONNTRACK] = {
+		.name = "conntrack",
+		.help = "create a conntrack object",
+		.next = NEXT(NEXT_ENTRY(ACTION_NEXT)),
+		.priv = PRIV_ACTION(CONNTRACK,
+				    sizeof(struct rte_flow_action_conntrack)),
+		.call = parse_vc,
 	},
-	/* Shared action create arguments. */
-	[SHARED_ACTION_CREATE_ID] = {
+	[ACTION_CONNTRACK_UPDATE] = {
+		.name = "conntrack_update",
+		.help = "update a conntrack object",
+		.next = NEXT(action_update_conntrack),
+		.priv = PRIV_ACTION(CONNTRACK,
+				    sizeof(struct rte_flow_modify_conntrack)),
+		.call = parse_vc,
+	},
+	[ACTION_CONNTRACK_UPDATE_DIR] = {
+		.name = "dir",
+		.help = "update a conntrack object direction",
+		.next = NEXT(action_update_conntrack),
+		.call = parse_vc_action_conntrack_update,
+	},
+	[ACTION_CONNTRACK_UPDATE_CTX] = {
+		.name = "ctx",
+		.help = "update a conntrack object context",
+		.next = NEXT(action_update_conntrack),
+		.call = parse_vc_action_conntrack_update,
+	},
+	/* Indirect action destroy arguments. */
+	[INDIRECT_ACTION_DESTROY_ID] = {
 		.name = "action_id",
-		.help = "specify a shared action id to create",
-		.next = NEXT(next_sa_create_attr,
-			     NEXT_ENTRY(SHARED_ACTION_ID)),
+		.help = "specify a indirect action id to destroy",
+		.next = NEXT(next_ia_destroy_attr,
+			     NEXT_ENTRY(INDIRECT_ACTION_ID)),
+		.args = ARGS(ARGS_ENTRY_PTR(struct buffer,
+					    args.ia_destroy.action_id)),
+		.call = parse_ia_destroy,
+	},
+	/* Indirect action create arguments. */
+	[INDIRECT_ACTION_CREATE_ID] = {
+		.name = "action_id",
+		.help = "specify a indirect action id to create",
+		.next = NEXT(next_ia_create_attr,
+			     NEXT_ENTRY(INDIRECT_ACTION_ID)),
 		.args = ARGS(ARGS_ENTRY(struct buffer, args.vc.attr.group)),
 	},
-	[ACTION_SHARED] = {
-		.name = "shared",
-		.help = "apply shared action by id",
-		.priv = PRIV_ACTION(SHARED, 0),
-		.next = NEXT(NEXT_ENTRY(SHARED_ACTION_ID2PTR)),
+	[ACTION_INDIRECT] = {
+		.name = "indirect",
+		.help = "apply indirect action by id",
+		.priv = PRIV_ACTION(INDIRECT, 0),
+		.next = NEXT(NEXT_ENTRY(INDIRECT_ACTION_ID2PTR)),
 		.args = ARGS(ARGS_ENTRY_ARB(0, sizeof(uint32_t))),
 		.call = parse_vc,
 	},
-	[SHARED_ACTION_ID2PTR] = {
+	[INDIRECT_ACTION_ID2PTR] = {
 		.name = "{action_id}",
-		.type = "SHARED_ACTION_ID",
-		.help = "shared action id",
+		.type = "INDIRECT_ACTION_ID",
+		.help = "indirect action id",
 		.next = NEXT(NEXT_ENTRY(ACTION_NEXT)),
-		.call = parse_sa_id2ptr,
+		.call = parse_ia_id2ptr,
 		.comp = comp_none,
 	},
-	[SHARED_ACTION_INGRESS] = {
+	[INDIRECT_ACTION_INGRESS] = {
 		.name = "ingress",
 		.help = "affect rule to ingress",
-		.next = NEXT(next_sa_create_attr),
-		.call = parse_sa,
+		.next = NEXT(next_ia_create_attr),
+		.call = parse_ia,
 	},
-	[SHARED_ACTION_EGRESS] = {
+	[INDIRECT_ACTION_EGRESS] = {
 		.name = "egress",
 		.help = "affect rule to egress",
-		.next = NEXT(next_sa_create_attr),
-		.call = parse_sa,
+		.next = NEXT(next_ia_create_attr),
+		.call = parse_ia,
 	},
-	[SHARED_ACTION_TRANSFER] = {
+	[INDIRECT_ACTION_TRANSFER] = {
 		.name = "transfer",
 		.help = "affect rule to transfer",
-		.next = NEXT(next_sa_create_attr),
-		.call = parse_sa,
+		.next = NEXT(next_ia_create_attr),
+		.call = parse_ia,
 	},
-	[SHARED_ACTION_SPEC] = {
+	[INDIRECT_ACTION_SPEC] = {
 		.name = "action",
-		.help = "specify action to share",
+		.help = "specify action to create indirect handle",
 		.next = NEXT(next_action),
+	},
+	[ACTION_POL_G] = {
+		.name = "g_actions",
+		.help = "submit a list of associated actions for green",
+		.next = NEXT(next_action),
+		.call = parse_mp,
+	},
+	[ACTION_POL_Y] = {
+		.name = "y_actions",
+		.help = "submit a list of associated actions for yellow",
+		.next = NEXT(next_action),
+	},
+	[ACTION_POL_R] = {
+		.name = "r_actions",
+		.help = "submit a list of associated actions for red",
+		.next = NEXT(next_action),
+	},
+
+	/* Top-level command. */
+	[ADD] = {
+		.name = "add",
+		.type = "port meter policy {port_id} {arg}",
+		.help = "add port meter policy",
+		.next = NEXT(NEXT_ENTRY(ITEM_POL_PORT)),
+		.call = parse_init,
+	},
+	/* Sub-level commands. */
+	[ITEM_POL_PORT] = {
+		.name = "port",
+		.help = "add port meter policy",
+		.next = NEXT(NEXT_ENTRY(ITEM_POL_METER)),
+	},
+	[ITEM_POL_METER] = {
+		.name = "meter",
+		.help = "add port meter policy",
+		.next = NEXT(NEXT_ENTRY(ITEM_POL_POLICY)),
+	},
+	[ITEM_POL_POLICY] = {
+		.name = "policy",
+		.help = "add port meter policy",
+		.next = NEXT(NEXT_ENTRY(ACTION_POL_R),
+				NEXT_ENTRY(ACTION_POL_Y),
+				NEXT_ENTRY(ACTION_POL_G),
+				NEXT_ENTRY(POLICY_ID),
+				NEXT_ENTRY(PORT_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, args.policy.policy_id),
+				ARGS_ENTRY(struct buffer, port)),
+		.call = parse_mp,
 	},
 };
 
@@ -4712,9 +4924,9 @@ parse_init(struct context *ctx, const struct token *token,
 	return len;
 }
 
-/** Parse tokens for shared action commands. */
+/** Parse tokens for indirect action commands. */
 static int
-parse_sa(struct context *ctx, const struct token *token,
+parse_ia(struct context *ctx, const struct token *token,
 	 const char *str, unsigned int len,
 	 void *buf, unsigned int size)
 {
@@ -4727,7 +4939,7 @@ parse_sa(struct context *ctx, const struct token *token,
 	if (!out)
 		return len;
 	if (!out->command) {
-		if (ctx->curr != SHARED_ACTION)
+		if (ctx->curr != INDIRECT_ACTION)
 			return -1;
 		if (sizeof(*out) > size)
 			return -1;
@@ -4739,26 +4951,26 @@ parse_sa(struct context *ctx, const struct token *token,
 		return len;
 	}
 	switch (ctx->curr) {
-	case SHARED_ACTION_CREATE:
-	case SHARED_ACTION_UPDATE:
+	case INDIRECT_ACTION_CREATE:
+	case INDIRECT_ACTION_UPDATE:
 		out->args.vc.actions =
 			(void *)RTE_ALIGN_CEIL((uintptr_t)(out + 1),
 					       sizeof(double));
 		out->args.vc.attr.group = UINT32_MAX;
 		/* fallthrough */
-	case SHARED_ACTION_QUERY:
+	case INDIRECT_ACTION_QUERY:
 		out->command = ctx->curr;
 		ctx->objdata = 0;
 		ctx->object = out;
 		ctx->objmask = NULL;
 		return len;
-	case SHARED_ACTION_EGRESS:
+	case INDIRECT_ACTION_EGRESS:
 		out->args.vc.attr.egress = 1;
 		return len;
-	case SHARED_ACTION_INGRESS:
+	case INDIRECT_ACTION_INGRESS:
 		out->args.vc.attr.ingress = 1;
 		return len;
-	case SHARED_ACTION_TRANSFER:
+	case INDIRECT_ACTION_TRANSFER:
 		out->args.vc.attr.transfer = 1;
 		return len;
 	default:
@@ -4767,9 +4979,9 @@ parse_sa(struct context *ctx, const struct token *token,
 }
 
 
-/** Parse tokens for shared action destroy command. */
+/** Parse tokens for indirect action destroy command. */
 static int
-parse_sa_destroy(struct context *ctx, const struct token *token,
+parse_ia_destroy(struct context *ctx, const struct token *token,
 		 const char *str, unsigned int len,
 		 void *buf, unsigned int size)
 {
@@ -4782,8 +4994,8 @@ parse_sa_destroy(struct context *ctx, const struct token *token,
 	/* Nothing else to do if there is no buffer. */
 	if (!out)
 		return len;
-	if (!out->command || out->command == SHARED_ACTION) {
-		if (ctx->curr != SHARED_ACTION_DESTROY)
+	if (!out->command || out->command == INDIRECT_ACTION) {
+		if (ctx->curr != INDIRECT_ACTION_DESTROY)
 			return -1;
 		if (sizeof(*out) > size)
 			return -1;
@@ -4791,19 +5003,60 @@ parse_sa_destroy(struct context *ctx, const struct token *token,
 		ctx->objdata = 0;
 		ctx->object = out;
 		ctx->objmask = NULL;
-		out->args.sa_destroy.action_id =
+		out->args.ia_destroy.action_id =
 			(void *)RTE_ALIGN_CEIL((uintptr_t)(out + 1),
 					       sizeof(double));
 		return len;
 	}
-	action_id = out->args.sa_destroy.action_id
-		    + out->args.sa_destroy.action_id_n++;
+	action_id = out->args.ia_destroy.action_id
+		    + out->args.ia_destroy.action_id_n++;
 	if ((uint8_t *)action_id > (uint8_t *)out + size)
 		return -1;
 	ctx->objdata = 0;
 	ctx->object = action_id;
 	ctx->objmask = NULL;
 	return len;
+}
+
+/** Parse tokens for meter policy action commands. */
+static int
+parse_mp(struct context *ctx, const struct token *token,
+	const char *str, unsigned int len,
+	void *buf, unsigned int size)
+{
+	struct buffer *out = buf;
+
+	/* Token name must match. */
+	if (parse_default(ctx, token, str, len, NULL, 0) < 0)
+		return -1;
+	/* Nothing else to do if there is no buffer. */
+	if (!out)
+		return len;
+	if (!out->command) {
+		if (ctx->curr != ITEM_POL_POLICY)
+			return -1;
+		if (sizeof(*out) > size)
+			return -1;
+		out->command = ctx->curr;
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+		out->args.vc.data = (uint8_t *)out + size;
+		return len;
+	}
+	switch (ctx->curr) {
+	case ACTION_POL_G:
+		out->args.vc.actions =
+			(void *)RTE_ALIGN_CEIL((uintptr_t)(out + 1),
+					sizeof(double));
+		out->command = ctx->curr;
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+		return len;
+	default:
+		return -1;
+	}
 }
 
 /** Parse tokens for validate/create commands. */
@@ -6277,6 +6530,42 @@ parse_vc_modify_field_id(struct context *ctx, const struct token *token,
 	return len;
 }
 
+/** Parse the conntrack update, not a rte_flow_action. */
+static int
+parse_vc_action_conntrack_update(struct context *ctx, const struct token *token,
+			 const char *str, unsigned int len, void *buf,
+			 unsigned int size)
+{
+	struct buffer *out = buf;
+	struct rte_flow_modify_conntrack *ct_modify = NULL;
+
+	(void)size;
+	if (ctx->curr != ACTION_CONNTRACK_UPDATE_CTX &&
+	    ctx->curr != ACTION_CONNTRACK_UPDATE_DIR)
+		return -1;
+	/* Token name must match. */
+	if (parse_default(ctx, token, str, len, NULL, 0) < 0)
+		return -1;
+	ct_modify = (struct rte_flow_modify_conntrack *)out->args.vc.data;
+	/* Nothing else to do if there is no buffer. */
+	if (!out)
+		return len;
+	if (ctx->curr == ACTION_CONNTRACK_UPDATE_DIR) {
+		ct_modify->new_ct.is_original_dir =
+				conntrack_context.is_original_dir;
+		ct_modify->direction = 1;
+	} else {
+		uint32_t old_dir;
+
+		old_dir = ct_modify->new_ct.is_original_dir;
+		memcpy(&ct_modify->new_ct, &conntrack_context,
+		       sizeof(conntrack_context));
+		ct_modify->new_ct.is_original_dir = old_dir;
+		ct_modify->state = 1;
+	}
+	return len;
+}
+
 /** Parse tokens for destroy command. */
 static int
 parse_destroy(struct context *ctx, const struct token *token,
@@ -6364,8 +6653,20 @@ parse_dump(struct context *ctx, const struct token *token,
 		ctx->objdata = 0;
 		ctx->object = out;
 		ctx->objmask = NULL;
+		return len;
 	}
-	return len;
+	switch (ctx->curr) {
+	case DUMP_ALL:
+	case DUMP_ONE:
+		out->args.dump.mode = (ctx->curr == DUMP_ALL) ? true : false;
+		out->command = ctx->curr;
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+		return len;
+	default:
+		return -1;
+	}
 }
 
 /** Parse tokens for query command. */
@@ -7063,7 +7364,7 @@ parse_port(struct context *ctx, const struct token *token,
 }
 
 static int
-parse_sa_id2ptr(struct context *ctx, const struct token *token,
+parse_ia_id2ptr(struct context *ctx, const struct token *token,
 		const char *str, unsigned int len,
 		void *buf, unsigned int size)
 {
@@ -7080,9 +7381,9 @@ parse_sa_id2ptr(struct context *ctx, const struct token *token,
 	ctx->object = action;
 	if (ret != (int)len)
 		return ret;
-	/* set shared action */
+	/* set indirect action */
 	if (action) {
-		action->conf = port_shared_action_get_by_id(ctx->port, id);
+		action->conf = port_action_handle_get_by_id(ctx->port, id);
 		ret = (action->conf) ? ret : -1;
 	}
 	return ret;
@@ -7620,27 +7921,27 @@ static void
 cmd_flow_parsed(const struct buffer *in)
 {
 	switch (in->command) {
-	case SHARED_ACTION_CREATE:
-		port_shared_action_create(
+	case INDIRECT_ACTION_CREATE:
+		port_action_handle_create(
 				in->port, in->args.vc.attr.group,
-				&((const struct rte_flow_shared_action_conf) {
+				&((const struct rte_flow_indir_action_conf) {
 					.ingress = in->args.vc.attr.ingress,
 					.egress = in->args.vc.attr.egress,
 					.transfer = in->args.vc.attr.transfer,
 				}),
 				in->args.vc.actions);
 		break;
-	case SHARED_ACTION_DESTROY:
-		port_shared_action_destroy(in->port,
-					   in->args.sa_destroy.action_id_n,
-					   in->args.sa_destroy.action_id);
+	case INDIRECT_ACTION_DESTROY:
+		port_action_handle_destroy(in->port,
+					   in->args.ia_destroy.action_id_n,
+					   in->args.ia_destroy.action_id);
 		break;
-	case SHARED_ACTION_UPDATE:
-		port_shared_action_update(in->port, in->args.vc.attr.group,
+	case INDIRECT_ACTION_UPDATE:
+		port_action_handle_update(in->port, in->args.vc.attr.group,
 					  in->args.vc.actions);
 		break;
-	case SHARED_ACTION_QUERY:
-		port_shared_action_query(in->port, in->args.sa.action_id);
+	case INDIRECT_ACTION_QUERY:
+		port_action_handle_query(in->port, in->args.ia.action_id);
 		break;
 	case VALIDATE:
 		port_flow_validate(in->port, &in->args.vc.attr,
@@ -7659,8 +7960,10 @@ cmd_flow_parsed(const struct buffer *in)
 	case FLUSH:
 		port_flow_flush(in->port);
 		break;
-	case DUMP:
-		port_flow_dump(in->port, in->args.dump.file);
+	case DUMP_ONE:
+	case DUMP_ALL:
+		port_flow_dump(in->port, in->args.dump.mode,
+				in->args.dump.rule, in->args.dump.file);
 		break;
 	case QUERY:
 		port_flow_query(in->port, in->args.query.rule,
@@ -7684,6 +7987,10 @@ cmd_flow_parsed(const struct buffer *in)
 		break;
 	case TUNNEL_LIST:
 		port_flow_tunnel_list(in->port);
+		break;
+	case ACTION_POL_G:
+		port_meter_policy_add(in->port, in->args.policy.policy_id,
+					in->args.vc.actions);
 		break;
 	default:
 		break;

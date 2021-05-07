@@ -23,7 +23,7 @@
 #include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_flow.h"
-#include "mlx5_rxtx.h"
+#include "mlx5_rx.h"
 
 #define VERBS_SPEC_INNER(item_flags) \
 	(!!((item_flags) & MLX5_FLOW_LAYER_TUNNEL) ? IBV_FLOW_SPEC_INNER : 0)
@@ -357,7 +357,7 @@ flow_verbs_counter_release(struct rte_eth_dev *dev, uint32_t counter)
 	struct mlx5_flow_counter *cnt;
 
 	cnt = flow_verbs_counter_get_by_idx(dev, counter, &pool);
-	if (IS_SHARED_CNT(counter) &&
+	if (IS_LEGACY_SHARED_CNT(counter) &&
 	    mlx5_l3t_clear_entry(priv->sh->cnt_id_tbl, cnt->shared_info.id))
 		return;
 #if defined(HAVE_IBV_DEVICE_COUNTERS_SET_V42)

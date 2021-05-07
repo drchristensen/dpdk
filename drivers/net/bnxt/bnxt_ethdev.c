@@ -219,16 +219,19 @@ uint16_t bnxt_rss_hash_tbl_size(const struct bnxt *bp)
 static void bnxt_free_parent_info(struct bnxt *bp)
 {
 	rte_free(bp->parent);
+	bp->parent = NULL;
 }
 
 static void bnxt_free_pf_info(struct bnxt *bp)
 {
 	rte_free(bp->pf);
+	bp->pf = NULL;
 }
 
 static void bnxt_free_link_info(struct bnxt *bp)
 {
 	rte_free(bp->link_info);
+	bp->link_info = NULL;
 }
 
 static void bnxt_free_leds_info(struct bnxt *bp)
@@ -249,7 +252,9 @@ static void bnxt_free_flow_stats_info(struct bnxt *bp)
 static void bnxt_free_cos_queues(struct bnxt *bp)
 {
 	rte_free(bp->rx_cos_queue);
+	bp->rx_cos_queue = NULL;
 	rte_free(bp->tx_cos_queue);
+	bp->tx_cos_queue = NULL;
 }
 
 static void bnxt_free_mem(struct bnxt *bp, bool reconfig)
@@ -417,12 +422,13 @@ static int bnxt_setup_one_vnic(struct bnxt *bp, uint16_t vnic_id)
 	if (dev_conf->rxmode.mq_mode & ETH_MQ_RX_RSS) {
 		int j, nr_ctxs = bnxt_rss_ctxts(bp);
 
+		/* RSS table size in Thor is 512.
+		 * Cap max Rx rings to same value
+		 */
 		if (bp->rx_nr_rings > BNXT_RSS_TBL_SIZE_P5) {
 			PMD_DRV_LOG(ERR, "RxQ cnt %d > reta_size %d\n",
 				    bp->rx_nr_rings, BNXT_RSS_TBL_SIZE_P5);
-			PMD_DRV_LOG(ERR,
-				    "Only queues 0-%d will be in RSS table\n",
-				    BNXT_RSS_TBL_SIZE_P5 - 1);
+			goto err_out;
 		}
 
 		rc = 0;
@@ -849,8 +855,13 @@ static int bnxt_shutdown_nic(struct bnxt *bp)
 
 uint32_t bnxt_get_speed_capabilities(struct bnxt *bp)
 {
-	uint32_t link_speed = bp->link_info->support_speeds;
+	uint32_t link_speed = 0;
 	uint32_t speed_capa = 0;
+
+	if (bp->link_info == NULL)
+		return 0;
+
+	link_speed = bp->link_info->support_speeds;
 
 	/* If PAM4 is configured, use PAM4 supported speed */
 	if (link_speed == 0 && bp->link_info->support_pam4_speeds > 0)
@@ -1293,12 +1304,13 @@ static void bnxt_free_switch_domain(struct bnxt *bp)
 {
 	int rc = 0;
 
-	if (bp->switch_domain_id) {
-		rc = rte_eth_switch_domain_free(bp->switch_domain_id);
-		if (rc)
-			PMD_DRV_LOG(ERR, "free switch domain:%d fail: %d\n",
-				    bp->switch_domain_id, rc);
-	}
+	if (!(BNXT_PF(bp) || BNXT_VF_IS_TRUSTED(bp)))
+		return;
+
+	rc = rte_eth_switch_domain_free(bp->switch_domain_id);
+	if (rc)
+		PMD_DRV_LOG(ERR, "free switch domain:%d fail: %d\n",
+			    bp->switch_domain_id, rc);
 }
 
 static void bnxt_ptp_get_current_time(void *arg)
@@ -1545,11 +1557,9 @@ bnxt_uninit_locks(struct bnxt *bp)
 
 static void bnxt_drv_uninit(struct bnxt *bp)
 {
-	bnxt_free_switch_domain(bp);
 	bnxt_free_leds_info(bp);
 	bnxt_free_cos_queues(bp);
 	bnxt_free_link_info(bp);
-	bnxt_free_pf_info(bp);
 	bnxt_free_parent_info(bp);
 	bnxt_uninit_locks(bp);
 
@@ -1559,6 +1569,7 @@ static void bnxt_drv_uninit(struct bnxt *bp)
 	bp->rx_mem_zone = NULL;
 
 	bnxt_free_vf_info(bp);
+	bnxt_free_pf_info(bp);
 
 	rte_free(bp->grp_info);
 	bp->grp_info = NULL;
@@ -1720,6 +1731,10 @@ int bnxt_link_update_op(struct rte_eth_dev *eth_dev, int wait_to_complete)
 		return rc;
 
 	memset(&new, 0, sizeof(new));
+
+	if (bp->link_info == NULL)
+		goto out;
+
 	do {
 		/* Retrieve link info from hardware */
 		rc = bnxt_get_hwrm_link_config(bp, &new);
@@ -2182,8 +2197,9 @@ static int bnxt_flow_ctrl_set_op(struct rte_eth_dev *dev,
 	if (rc)
 		return rc;
 
-	if (!BNXT_SINGLE_PF(bp) || BNXT_VF(bp)) {
-		PMD_DRV_LOG(ERR, "Flow Control Settings cannot be modified\n");
+	if (!BNXT_SINGLE_PF(bp)) {
+		PMD_DRV_LOG(ERR,
+			    "Flow Control Settings cannot be modified on VF or on shared PF\n");
 		return -ENOTSUP;
 	}
 
@@ -2779,9 +2795,11 @@ bnxt_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 
 	ret = snprintf(fw_version, fw_size, "%d.%d.%d.%d",
 			fw_major, fw_minor, fw_updt, fw_rsvd);
+	if (ret < 0)
+		return -EINVAL;
 
 	ret += 1; /* add the size of '\0' */
-	if (fw_size < (uint32_t)ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;
@@ -2977,9 +2995,8 @@ bnxt_vlan_pvid_set_op(struct rte_eth_dev *dev, uint16_t pvid, int on)
 	if (rc)
 		return rc;
 
-	if (!BNXT_SINGLE_PF(bp) || BNXT_VF(bp)) {
-		PMD_DRV_LOG(ERR,
-			"PVID cannot be modified for this function\n");
+	if (!BNXT_SINGLE_PF(bp)) {
+		PMD_DRV_LOG(ERR, "PVID cannot be modified on VF or on shared PF\n");
 		return -ENOTSUP;
 	}
 	bp->vlan = on ? pvid : 0;
@@ -3373,6 +3390,38 @@ static int bnxt_get_tx_ts(struct bnxt *bp, uint64_t *ts)
 	return 0;
 }
 
+static int bnxt_clr_rx_ts(struct bnxt *bp, uint64_t *last_ts)
+{
+	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
+	struct bnxt_pf_info *pf = bp->pf;
+	uint16_t port_id;
+	int i = 0;
+	uint32_t fifo;
+
+	if (!ptp || (bp->flags & BNXT_FLAG_CHIP_P5))
+		return -EINVAL;
+
+	port_id = pf->port_id;
+	fifo = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
+				ptp->rx_mapped_regs[BNXT_PTP_RX_FIFO]));
+	while ((fifo & BNXT_PTP_RX_FIFO_PENDING) && (i < BNXT_PTP_RX_PND_CNT)) {
+		rte_write32(1 << port_id, (uint8_t *)bp->bar0 +
+			    ptp->rx_mapped_regs[BNXT_PTP_RX_FIFO_ADV]);
+		fifo = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
+					ptp->rx_mapped_regs[BNXT_PTP_RX_FIFO]));
+		*last_ts = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
+					ptp->rx_mapped_regs[BNXT_PTP_RX_TS_L]));
+		*last_ts |= (uint64_t)rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
+					ptp->rx_mapped_regs[BNXT_PTP_RX_TS_H])) << 32;
+		i++;
+	}
+
+	if (i >= BNXT_PTP_RX_PND_CNT)
+		return -EBUSY;
+
+	return 0;
+}
+
 static int bnxt_get_rx_ts(struct bnxt *bp, uint64_t *ts)
 {
 	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
@@ -3391,10 +3440,8 @@ static int bnxt_get_rx_ts(struct bnxt *bp, uint64_t *ts)
 
 	fifo = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
 				   ptp->rx_mapped_regs[BNXT_PTP_RX_FIFO]));
-	if (fifo & BNXT_PTP_RX_FIFO_PENDING) {
-/*		bnxt_clr_rx_ts(bp);	  TBD  */
-		return -EBUSY;
-	}
+	if (fifo & BNXT_PTP_RX_FIFO_PENDING)
+		return bnxt_clr_rx_ts(bp, ts);
 
 	*ts = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
 				ptp->rx_mapped_regs[BNXT_PTP_RX_TS_L]));
@@ -3942,7 +3989,7 @@ static int bnxt_restore_mac_filters(struct bnxt *bp)
 	struct rte_ether_addr *addr;
 	uint64_t pool_mask;
 	uint32_t pool = 0;
-	uint16_t i;
+	uint32_t i;
 	int rc;
 
 	if (BNXT_VF(bp) && !BNXT_VF_IS_TRUSTED(bp))
@@ -4112,13 +4159,17 @@ uint32_t bnxt_read_fw_status_reg(struct bnxt *bp, uint32_t index)
 	struct bnxt_error_recovery_info *info = bp->recovery_info;
 	uint32_t reg = info->status_regs[index];
 	uint32_t type, offset, val = 0;
+	int ret = 0;
 
 	type = BNXT_FW_STATUS_REG_TYPE(reg);
 	offset = BNXT_FW_STATUS_REG_OFF(reg);
 
 	switch (type) {
 	case BNXT_FW_STATUS_REG_TYPE_CFG:
-		rte_pci_read_config(bp->pdev, &val, sizeof(val), offset);
+		ret = rte_pci_read_config(bp->pdev, &val, sizeof(val), offset);
+		if (ret < 0)
+			PMD_DRV_LOG(ERR, "Failed to read PCI offset %#x",
+				    offset);
 		break;
 	case BNXT_FW_STATUS_REG_TYPE_GRC:
 		offset = info->mapped_status_regs[index];
@@ -4224,6 +4275,8 @@ reset:
 	bp->flags |= BNXT_FLAG_FATAL_ERROR;
 	bp->flags |= BNXT_FLAG_FW_RESET;
 
+	bnxt_stop_rxtx(bp);
+
 	PMD_DRV_LOG(ERR, "Detected FW dead condition\n");
 
 	if (bnxt_is_master_func(bp))
@@ -4259,9 +4312,6 @@ done:
 
 static void bnxt_cancel_fw_health_check(struct bnxt *bp)
 {
-	if (!bnxt_is_recovery_enabled(bp))
-		return;
-
 	rte_eal_alarm_cancel(bnxt_check_fw_health, (void *)bp);
 	bp->flags &= ~BNXT_FLAG_FW_HEALTH_CHECK_SCHEDULED;
 }
@@ -5748,7 +5798,10 @@ bnxt_uninit_resources(struct bnxt *bp, bool reconfig_dev)
 	bnxt_free_mem(bp, reconfig_dev);
 
 	bnxt_hwrm_func_buf_unrgtr(bp);
-	rte_free(bp->pf->vf_req_buf);
+	if (bp->pf != NULL) {
+		rte_free(bp->pf->vf_req_buf);
+		bp->pf->vf_req_buf = NULL;
+	}
 
 	rc = bnxt_hwrm_func_driver_unregister(bp, 0);
 	bp->flags &= ~BNXT_FLAG_REGISTERED;
@@ -5761,6 +5814,8 @@ bnxt_uninit_resources(struct bnxt *bp, bool reconfig_dev)
 	bnxt_uninit_ctx_mem(bp);
 
 	bnxt_free_flow_stats_info(bp);
+	if (bp->rep_info != NULL)
+		bnxt_free_switch_domain(bp);
 	bnxt_free_rep_info(bp);
 	rte_free(bp->ptp_cfg);
 	bp->ptp_cfg = NULL;

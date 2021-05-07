@@ -13,6 +13,7 @@
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
 #include <ethdev_driver.h>
+#include <rte_bus_pci.h>
 #include <rte_common.h>
 #include <rte_eal_paging.h>
 
@@ -23,6 +24,7 @@
 #include "mlx5_defs.h"
 #include "mlx5_utils.h"
 #include "mlx5.h"
+#include "mlx5_tx.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_autoconf.h"
 

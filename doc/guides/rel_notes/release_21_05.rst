@@ -55,6 +55,16 @@ New Features
      Also, make sure to start the actual text at the margin.
      =======================================================
 
+* **Added Alpine Linux with musl libc support**
+
+  The distribution Alpine Linux, using musl libc and busybox,
+  got initial support starting with building DPDK without modification.
+
+* **Added phase-fair lock.**
+
+  Phase-fair lock provides fairness guarantees.
+  It has two ticket pools, one for readers and one for writers.
+
 * **Added support for Marvell CN10K SoC drivers.**
 
   Added Marvell CN10K SoC support. Marvell CN10K SoC are based on Octeon 10
@@ -65,6 +75,8 @@ New Features
     net, crypto and event PMD's.
   * Added mempool/cnxk driver which provides the support for the integrated
     mempool device.
+  * Added event/cnxk driver which provides the support for integrated event
+    device.
 
 * **Enhanced ethdev representor syntax.**
 
@@ -75,6 +87,29 @@ New Features
       representor=[[c#]pf#]vf# c1pf2vf3     /* VF 3 on PF 2 of controller 1. */
       representor=[[c#]pf#]sf# sf[0,2-1023] /* 1023 SFs.                     */
       representor=[c#]pf#      c2pf[0,1]    /* 2 PFs on controller 2.        */
+
+* **Added queue state in queried Rx/Tx queue info.**
+
+  * Added new field ``queue_state`` to ``rte_eth_rxq_info`` structure to
+    provide indicated Rx queue state.
+  * Added new field ``queue_state`` to ``rte_eth_txq_info`` structure to
+    provide indicated Tx queue state.
+
+* **Updated meter API.**
+
+  * Added packet mode in the meter profile parameters data structures
+    to support metering traffic by packet per second (PPS),
+    in addition to the initial bytes per second (BPS) mode (value 0).
+  * Added support of pre-defined meter policy via flow action list per color.
+
+* **Added packet integrity match to flow rules.**
+
+  * Added ``RTE_FLOW_ITEM_TYPE_INTEGRITY`` flow item.
+  * Added ``rte_flow_item_integrity`` data structure.
+
+* **Added TCP connection tracking offload in flow API.**
+
+  * Added conntrack item and action for stateful connection offload.
 
 * **Updated Arkville PMD driver.**
 
@@ -108,10 +143,16 @@ New Features
   Updated the Intel iavf driver with new features and improvements, including:
 
   * Added flow filter to support GTPU inner L3/L4 fields matching.
+  * In AVX512 code, added the new RX and TX paths to use the HW offload
+    features. When the HW offload features are configured to be used, the
+    offload paths are chosen automatically. In parallel the support of HW
+    offload features was removed from the legacy AVX512 paths.
 
 * **Updated Intel ice driver.**
 
   * Added Intel ice support on Windows.
+  * Added GTPU TEID support for DCF switch filter.
+  * Added flow priority support for DCF switch filter.
 
 * **Updated Marvell OCTEON TX2 ethdev driver.**
 
@@ -122,6 +163,13 @@ New Features
   Updated the Mellanox mlx5 driver with new features and improvements, including:
 
   * Added support for VXLAN and NVGRE encap as sample actions.
+  * Added support for flow COUNT action handle.
+  * Support push VLAN on ingress traffic and pop VLAN on egress traffic in E-Switch mode.
+  * Added support for pre-defined meter policy API.
+  * Added support for ASO (Advanced Steering Operation) meter.
+  * Added support for ASO metering by PPS (packet per second).
+  * Added support for the monitor policy of Power Management API.
+  * Added support for connection tracking.
 
 * **Updated NXP DPAA driver.**
 
@@ -138,23 +186,106 @@ New Features
 
   * Added support for txgbevf PMD.
   * Support device arguments to handle AN training for backplane NICs.
+  * Added support for VXLAN-GPE.
 
 * **Enabled vmxnet3 PMD on Windows.**
+
+* **Enabled libpcap-based PMD on Windows.**
+
+   A libpcap distribution, such as Npcap or WinPcap, is required to run the PMD.
 
 * **Updated the AF_XDP driver.**
 
   * Added support for preferred busy polling.
 
+* **Added support for vhost async packed ring data path.**
+
+  Added packed ring support for async vhost.
+
+* **Added support of multiple data-units in cryptodev API.**
+
+  The cryptodev library has been enhanced to allow operations on multiple
+  data-units for AES-XTS algorithm, the data-unit length should be set in the
+  transformation. A capability for it was added too.
+
+* **Added a cryptodev feature flag to support cipher wrapped keys.**
+
+  A new feature flag has been added to allow application to provide
+  cipher wrapped keys in session xforms.
+
+* **Updated the OCTEON TX crypto PMD.**
+
+  * Added support for DIGEST_ENCRYPTED mode in OCTEON TX crypto PMD.
+
+* **Updated the OCTEON TX2 crypto PMD.**
+
+  * Added support for DIGEST_ENCRYPTED mode in OCTEON TX2 crypto PMD.
+  * Added support in lookaside protocol offload mode for IPsec with
+    UDP encapsulation support for NAT Traversal.
+  * Added support in lookaside protocol offload mode for IPsec with
+    IPv4 transport mode.
+
 * **Updated Mellanox RegEx PMD.**
 
   * Added support for multi-segments mbuf.
+
+* **Introduced period timer mode in eventdev timer adapter.**
+
+  * Added support for periodic timer mode in eventdev timer adapter.
+  * Added support for periodic timer mode in octeontx2 event device driver.
+
+* **Added event device vector capability.**
+
+  * Added ``rte_event_vector`` data structure which is capable of holding
+    multiple ``uintptr_t`` of the same flow thereby allowing applications
+    to vectorize their pipelines and also reduce the complexity of pipelining
+    the events across multiple stages.
+  * This also reduced the scheduling overhead on a event device.
+
+* **Updated Intel DLB2 driver.**
+
+  * Added support for v2.5 device.
+
+* **Added Predictable RSS functionality to the Toeplitz hash library.**
+
+  Added feature for finding collisions of the Toeplitz hash function -
+  the hash function used in NICs to spread the traffic among the queues.
+  It can be used to get predictable mapping of the flows.
 
 * **Updated testpmd.**
 
   * Added a command line option to configure forced speed for Ethernet port.
     ``dpdk-testpmd -- --eth-link-speed N``
+  * Added command to show link flow control info.
+    ``show port (port_id) flow_ctrl``
   * Added command to display Rx queue used descriptor count.
     ``show port (port_id) rxq (queue_id) desc used count``
+  * Added command to cleanup a Tx queue's mbuf on a port.
+    ``port cleanup (port_id) txq (queue_id) (free_cnt)``
+  * Added command to dump internal representation information of single flow.
+    ``flow dump (port_id) rule (rule_id)``
+  * Added commands to create and delete meter policy.
+    ``add port meter policy (port_id) (policy_id) ...``
+  * Added commands to construct conntrack context and relevant indirect
+    action handle creation, update for conntrack action as well as conntrack
+    item matching.
+
+* **Added support for the FIB lookup method in the l3fwd example app.**
+
+  Previously the l3fwd sample app only supported LPM and EM lookup methods,
+  the app now supports the Forwarding Information Base (FIB) lookup method.
+
+* **Updated ipsec-secgw sample application.**
+
+  * Updated the ``ipsec-secgw`` sample application with UDP encapsulation
+    support for NAT Traversal.
+
+* **Enhanced crypto adapter forward mode.**
+
+  * Added ``rte_event_crypto_adapter_enqueue()`` API to enqueue events to crypto
+    adapter if forward mode is supported by driver.
+  * Added support for crypto adapter forward mode in octeontx2 event and crypto
+    device driver.
 
 
 Removed Items
@@ -168,6 +299,9 @@ Removed Items
    This section is a comment. Do not overwrite or remove it.
    Also, make sure to start the actual text at the margin.
    =======================================================
+
+* Removed support for Intel DLB V1 hardware. This is not a broad market device,
+  and existing customers already obtain the source code directly from Intel.
 
 
 API Changes
@@ -191,6 +325,40 @@ API Changes
 
 * pci: The value ``PCI_ANY_ID`` is marked as deprecated
   and can be replaced with ``RTE_PCI_ANY_ID``.
+
+* ethdev: Added a ``rte_flow`` pointer parameter to the function
+  ``rte_flow_dev_dump()`` allowing dump for single flow.
+
+* cryptodev: The experimental raw data path API for dequeue
+  ``rte_cryptodev_raw_dequeue_burst`` got a new parameter
+  ``max_nb_to_dequeue`` to provide flexible control on dequeue.
+
+* ethdev: The experimental flow API for shared action has been generalized
+  as a flow action handle used in rules through an indirect action.
+  The functions ``rte_flow_shared_action_*`` manipulating the action object
+  are replaced with ``rte_flow_action_handle_*``.
+  The action ``RTE_FLOW_ACTION_TYPE_SHARED`` is deprecated and can be
+  replaced with ``RTE_FLOW_ACTION_TYPE_INDIRECT``.
+
+* ethdev: The experimental function ``rte_mtr_policer_actions_update()``,
+  the enum ``rte_mtr_policer_action``, and the struct members
+  ``policer_action_recolor_supported`` and ``policer_action_drop_supported``
+  have been removed.
+
+* vhost: The vhost library currently populates received mbufs from a virtio
+  driver with Tx offload flags while not filling Rx offload flags.
+  While this behavior is arguable, it is kept untouched.
+  A new flag ``RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS`` has been added to ask
+  for a behavior compliant with the mbuf offload API.
+
+* stack: Lock-free ``rte_stack`` no longer silently ignores push and pop when
+  it's not supported on the current platform. Instead ``rte_stack_create()``
+  fails and ``rte_errno`` is set to ``ENOTSUP``.
+
+* raw/ioat: The experimental function ``rte_ioat_completed_ops()`` now
+  supports two additional parameters, ``status`` and ``num_unsuccessful``,
+  to allow the reporting of errors from hardware when performing copy
+  operations.
 
 
 ABI Changes

@@ -246,9 +246,6 @@ uint16_t mb_mempool_cache = DEF_MBUF_CACHE; /**< Size of mbuf mempool cache. */
 /* current configuration is in DCB or not,0 means it is not in DCB mode */
 uint8_t dcb_config = 0;
 
-/* Whether the dcb is in testing status */
-uint8_t dcb_test = 0;
-
 /*
  * Configurable number of RX/TX queues.
  */
@@ -1579,10 +1576,6 @@ init_config(void)
 		fwd_lcores[lc_id]->gso_ctx.flag = 0;
 	}
 
-	/* Configuration of packet forwarding streams. */
-	if (init_fwd_streams() < 0)
-		rte_exit(EXIT_FAILURE, "FAIL from init_fwd_streams()\n");
-
 	fwd_config_setup();
 
 	/* create a gro context for each lcore */
@@ -2141,9 +2134,7 @@ start_packet_forwarding(int with_tx_first)
 {
 	port_fwd_begin_t port_fwd_begin;
 	port_fwd_end_t  port_fwd_end;
-	struct rte_port *port;
 	unsigned int i;
-	portid_t   pt_id;
 
 	if (strcmp(cur_fwd_eng->fwd_mode_name, "rxonly") == 0 && !nb_rxq)
 		rte_exit(EXIT_FAILURE, "rxq are 0, cannot use rxonly fwd mode\n");
@@ -2165,24 +2156,6 @@ start_packet_forwarding(int with_tx_first)
 	if (test_done == 0) {
 		printf("Packet forwarding already started\n");
 		return;
-	}
-
-
-	if(dcb_test) {
-		for (i = 0; i < nb_fwd_ports; i++) {
-			pt_id = fwd_ports_ids[i];
-			port = &ports[pt_id];
-			if (!port->dcb_flag) {
-				printf("In DCB mode, all forwarding ports must "
-                                       "be configured in this mode.\n");
-				return;
-			}
-		}
-		if (nb_fwd_lcores == 1) {
-			printf("In DCB mode,the nb forwarding cores "
-                               "should be larger than 1.\n");
-			return;
-		}
 	}
 	test_done = 0;
 
@@ -2476,8 +2449,6 @@ start_port(portid_t pid)
 	if (port_id_is_invalid(pid, ENABLED_WARN))
 		return 0;
 
-	if(dcb_config)
-		dcb_test = 1;
 	RTE_ETH_FOREACH_DEV(pi) {
 		if (pid != pi && pid != (portid_t)RTE_PORT_ALL)
 			continue;
@@ -2716,11 +2687,6 @@ stop_port(portid_t pid)
 	int need_check_link_status = 0;
 	portid_t peer_pl[RTE_MAX_ETHPORTS];
 	int peer_pi;
-
-	if (dcb_test) {
-		dcb_test = 0;
-		dcb_config = 0;
-	}
 
 	if (port_id_is_invalid(pid, ENABLED_WARN))
 		return;
@@ -3015,8 +2981,6 @@ detach_devargs(char *identifier)
 	memset(&da, 0, sizeof(da));
 	if (rte_devargs_parsef(&da, "%s", identifier)) {
 		printf("cannot parse identifier\n");
-		if (da.args)
-			free(da.args);
 		return;
 	}
 
@@ -3025,6 +2989,7 @@ detach_devargs(char *identifier)
 			if (ports[port_id].port_status != RTE_PORT_STOPPED) {
 				printf("Port %u not stopped\n", port_id);
 				rte_eth_iterator_cleanup(&iterator);
+				rte_devargs_reset(&da);
 				return;
 			}
 			port_flow_flush(port_id);
@@ -3034,6 +2999,7 @@ detach_devargs(char *identifier)
 	if (rte_eal_hotplug_remove(da.bus->name, da.name) != 0) {
 		TESTPMD_LOG(ERR, "Failed to detach device %s(%s)\n",
 			    da.name, da.bus->name);
+		rte_devargs_reset(&da);
 		return;
 	}
 
@@ -3042,6 +3008,7 @@ detach_devargs(char *identifier)
 	printf("Device %s is detached\n", identifier);
 	printf("Now total ports is %d\n", nb_ports);
 	printf("Done\n");
+	rte_devargs_reset(&da);
 }
 
 void
@@ -3624,8 +3591,6 @@ init_port_dcb_config(portid_t pid,
 	rte_port = &ports[pid];
 
 	memset(&port_conf, 0, sizeof(struct rte_eth_conf));
-	/* Enter DCB configuration status */
-	dcb_config = 1;
 
 	port_conf.rxmode = rte_port->dev_conf.rxmode;
 	port_conf.txmode = rte_port->dev_conf.txmode;
@@ -3692,6 +3657,9 @@ init_port_dcb_config(portid_t pid,
 		return retval;
 
 	rte_port->dcb_flag = 1;
+
+	/* Enter DCB configuration status */
+	dcb_config = 1;
 
 	return 0;
 }

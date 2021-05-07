@@ -258,6 +258,9 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"show port (port_id) fec_mode"
 			"	Show fec mode of a port.\n\n"
+
+			"show port (port_id) flow_ctrl"
+			"	Show flow control info of a port.\n\n"
 		);
 	}
 
@@ -693,21 +696,20 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"show port meter cap (port_id)\n"
 			"    Show port meter capability information\n\n"
 
-			"add port meter profile srtcm_rfc2697 (port_id) (profile_id) (cir) (cbs) (ebs)\n"
+			"add port meter profile srtcm_rfc2697 (port_id) (profile_id) (cir) (cbs) (ebs) (packet_mode)\n"
 			"    meter profile add - srtcm rfc 2697\n\n"
 
-			"add port meter profile trtcm_rfc2698 (port_id) (profile_id) (cir) (pir) (cbs) (pbs)\n"
+			"add port meter profile trtcm_rfc2698 (port_id) (profile_id) (cir) (pir) (cbs) (pbs) (packet_mode)\n"
 			"    meter profile add - trtcm rfc 2698\n\n"
 
-			"add port meter profile trtcm_rfc4115 (port_id) (profile_id) (cir) (eir) (cbs) (ebs)\n"
+			"add port meter profile trtcm_rfc4115 (port_id) (profile_id) (cir) (eir) (cbs) (ebs) (packet_mode)\n"
 			"    meter profile add - trtcm rfc 4115\n\n"
 
 			"del port meter profile (port_id) (profile_id)\n"
 			"    meter profile delete\n\n"
 
-			"create port meter (port_id) (mtr_id) (profile_id) (meter_enable)\n"
-			"(g_action) (y_action) (r_action) (stats_mask) (shared)\n"
-			"(use_pre_meter_color) [(dscp_tbl_entry0) (dscp_tbl_entry1)...\n"
+			"create port meter (port_id) (mtr_id) (profile_id) (policy_id) (meter_enable)\n"
+			"(stats_mask) (shared) (use_pre_meter_color) [(dscp_tbl_entry0) (dscp_tbl_entry1)...\n"
 			"(dscp_tbl_entry63)]\n"
 			"    meter create\n\n"
 
@@ -719,6 +721,13 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"del port meter (port_id) (mtr_id)\n"
 			"    meter delete\n\n"
+
+			"add port meter policy (port_id) (policy_id) g_actions (actions)\n"
+			"y_actions (actions) r_actions (actions)\n"
+			"    meter policy add\n\n"
+
+			"del port meter policy (port_id) (policy_id)\n"
+			"    meter policy delete\n\n"
 
 			"set port meter profile (port_id) (mtr_id) (profile_id)\n"
 			"    meter update meter profile\n\n"
@@ -902,6 +911,9 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Register a dynf and Set/clear this flag on Tx. "
 			"Testpmd will set this value to any Tx packet "
 			"sent from this port\n\n"
+
+			"port cleanup (port_id) txq (queue_id) (free_cnt)\n"
+			"    Cleanup txq mbufs for a specific Tx queue\n\n"
 		);
 	}
 
@@ -1002,23 +1014,23 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    List and destroy aged flows"
 			" flow rules\n\n"
 
-			"flow shared_action {port_id} create"
-			" [action_id {shared_action_id}]"
+			"flow indirect_action {port_id} create"
+			" [action_id {indirect_action_id}]"
 			" [ingress] [egress]"
 			" action {action} / end\n"
-			"    Create shared action.\n\n"
+			"    Create indirect action.\n\n"
 
-			"flow shared_action {port_id} update"
-			" {shared_action_id} action {action} / end\n"
-			"    Update shared action.\n\n"
+			"flow indirect_action {port_id} update"
+			" {indirect_action_id} action {action} / end\n"
+			"    Update indirect action.\n\n"
 
-			"flow shared_action {port_id} destroy"
-			" action_id {shared_action_id} [...]\n"
-			"    Destroy specific shared actions.\n\n"
+			"flow indirect_action {port_id} destroy"
+			" action_id {indirect_action_id} [...]\n"
+			"    Destroy specific indirect actions.\n\n"
 
-			"flow shared_action {port_id} query"
-			" {shared_action_id}\n"
-			"    Query an existing shared action.\n\n"
+			"flow indirect_action {port_id} query"
+			" {indirect_action_id}\n"
+			"    Query an existing indirect action.\n\n"
 
 			"set vxlan ip-version (ipv4|ipv6) vni (vni) udp-src"
 			" (udp-src) udp-dst (udp-dst) ip-src (ip-src) ip-dst"
@@ -1524,6 +1536,9 @@ parse_and_check_speed_duplex(char *speedstr, char *duplexstr, uint32_t *speed)
 			return -1;
 		}
 	}
+
+	if (*speed != ETH_LINK_SPEED_AUTONEG)
+		*speed |= ETH_LINK_SPEED_FIXED;
 
 	return 0;
 }
@@ -2423,7 +2438,7 @@ cmdline_parse_token_string_t cmd_config_rss_hash_key_rss_type =
 				 "ipv6-tcp-ex#ipv6-udp-ex#"
 				 "l3-src-only#l3-dst-only#l4-src-only#l4-dst-only#"
 				 "l2-src-only#l2-dst-only#s-vlan#c-vlan#"
-				 "l2tpv3#esp#ah#pfcp#pppoe#gtpu#ecpri");
+				 "l2tpv3#esp#ah#pfcp#pppoe#gtpu#ecpri#mpls");
 cmdline_parse_token_string_t cmd_config_rss_hash_key_value =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_rss_hash_key, key, NULL);
 
@@ -2436,7 +2451,7 @@ cmdline_parse_inst_t cmd_config_rss_hash_key = {
 		"l2-payload|ipv6-ex|ipv6-tcp-ex|ipv6-udp-ex|"
 		"l3-src-only|l3-dst-only|l4-src-only|l4-dst-only|"
 		"l2-src-only|l2-dst-only|s-vlan|c-vlan|"
-		"l2tpv3|esp|ah|pfcp|pppoe|gtpu|ecpri "
+		"l2tpv3|esp|ah|pfcp|pppoe|gtpu|ecpri|mpls "
 		"<string of hex digits (variable length, NIC dependent)>",
 	.tokens = {
 		(void *)&cmd_config_rss_hash_key_port,
@@ -2445,6 +2460,90 @@ cmdline_parse_inst_t cmd_config_rss_hash_key = {
 		(void *)&cmd_config_rss_hash_key_rss_hash_key,
 		(void *)&cmd_config_rss_hash_key_rss_type,
 		(void *)&cmd_config_rss_hash_key_value,
+		NULL,
+	},
+};
+
+/* *** cleanup txq mbufs *** */
+struct cmd_cleanup_txq_mbufs_result {
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t keyword;
+	cmdline_fixed_string_t name;
+	uint16_t port_id;
+	uint16_t queue_id;
+	uint32_t free_cnt;
+};
+
+static void
+cmd_cleanup_txq_mbufs_parsed(void *parsed_result,
+			     __rte_unused struct cmdline *cl,
+			     __rte_unused void *data)
+{
+	struct cmd_cleanup_txq_mbufs_result *res = parsed_result;
+	uint16_t port_id = res->port_id;
+	uint16_t queue_id = res->queue_id;
+	uint32_t free_cnt = res->free_cnt;
+	struct rte_eth_txq_info qinfo;
+	int ret;
+
+	if (test_done == 0) {
+		printf("Please stop forwarding first\n");
+		return;
+	}
+
+	if (rte_eth_tx_queue_info_get(port_id, queue_id, &qinfo)) {
+		printf("Failed to get port %u Tx queue %u info\n",
+		       port_id, queue_id);
+		return;
+	}
+
+	if (qinfo.queue_state != RTE_ETH_QUEUE_STATE_STARTED) {
+		printf("Tx queue %u not started\n", queue_id);
+		return;
+	}
+
+	ret = rte_eth_tx_done_cleanup(port_id, queue_id, free_cnt);
+	if (ret < 0) {
+		printf("Failed to cleanup mbuf for port %u Tx queue %u "
+		       "error desc: %s(%d)\n",
+		       port_id, queue_id, strerror(-ret), ret);
+		return;
+	}
+
+	printf("Cleanup port %u Tx queue %u mbuf nums: %u\n",
+	       port_id, queue_id, ret);
+}
+
+cmdline_parse_token_string_t cmd_cleanup_txq_mbufs_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_cleanup_txq_mbufs_result, port,
+				 "port");
+cmdline_parse_token_string_t cmd_cleanup_txq_mbufs_cleanup =
+	TOKEN_STRING_INITIALIZER(struct cmd_cleanup_txq_mbufs_result, keyword,
+				 "cleanup");
+cmdline_parse_token_num_t cmd_cleanup_txq_mbufs_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_cleanup_txq_mbufs_result, port_id,
+			      RTE_UINT16);
+cmdline_parse_token_string_t cmd_cleanup_txq_mbufs_txq =
+	TOKEN_STRING_INITIALIZER(struct cmd_cleanup_txq_mbufs_result, name,
+				 "txq");
+cmdline_parse_token_num_t cmd_cleanup_txq_mbufs_queue_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_cleanup_txq_mbufs_result, queue_id,
+			      RTE_UINT16);
+cmdline_parse_token_num_t cmd_cleanup_txq_mbufs_free_cnt =
+	TOKEN_NUM_INITIALIZER(struct cmd_cleanup_txq_mbufs_result, free_cnt,
+			      RTE_UINT32);
+
+cmdline_parse_inst_t cmd_cleanup_txq_mbufs = {
+	.f = cmd_cleanup_txq_mbufs_parsed,
+	.data = NULL,
+	.help_str = "port cleanup <port_id> txq <queue_id> <free_cnt>",
+	.tokens = {
+		(void *)&cmd_cleanup_txq_mbufs_port,
+		(void *)&cmd_cleanup_txq_mbufs_cleanup,
+		(void *)&cmd_cleanup_txq_mbufs_port_id,
+		(void *)&cmd_cleanup_txq_mbufs_txq,
+		(void *)&cmd_cleanup_txq_mbufs_queue_id,
+		(void *)&cmd_cleanup_txq_mbufs_free_cnt,
 		NULL,
 	},
 };
@@ -2811,6 +2910,10 @@ cmd_setup_rxtx_queue_parsed(
 		if (!numa_support || socket_id == NUMA_NO_CONFIG)
 			socket_id = port->socket_id;
 
+		if (port->nb_tx_desc[res->qid] < tx_pkt_nb_segs) {
+			printf("Failed to setup TX queue: not enough descriptors\n");
+			return;
+		}
 		ret = rte_eth_tx_queue_setup(res->portid,
 					     res->qid,
 					     port->nb_tx_desc[res->qid],
@@ -3167,6 +3270,7 @@ cmd_config_dcb_parsed(void *parsed_result,
                         __rte_unused void *data)
 {
 	struct cmd_config_dcb *res = parsed_result;
+	struct rte_eth_dcb_info dcb_info;
 	portid_t port_id = res->port_id;
 	struct rte_port *port;
 	uint8_t pfc_en;
@@ -3189,6 +3293,14 @@ cmd_config_dcb_parsed(void *parsed_result,
 		printf("nb_cores shouldn't be less than number of TCs.\n");
 		return;
 	}
+
+	/* Check whether the port supports the report of DCB info. */
+	ret = rte_eth_dev_get_dcb_info(port_id, &dcb_info);
+	if (ret == -ENOTSUP) {
+		printf("rte_eth_dev_get_dcb_info not supported.\n");
+		return;
+	}
+
 	if (!strncmp(res->pfc_en, "on", 2))
 		pfc_en = 1;
 	else
@@ -3203,12 +3315,12 @@ cmd_config_dcb_parsed(void *parsed_result,
 		ret = init_port_dcb_config(port_id, DCB_ENABLED,
 				(enum rte_eth_nb_tcs)res->num_tcs,
 				pfc_en);
-
-
 	if (ret != 0) {
 		printf("Cannot initialize network ports.\n");
 		return;
 	}
+
+	fwd_config_setup();
 
 	cmd_reconfig_device_queue(port_id, 1, 1);
 }
@@ -4567,7 +4679,7 @@ cmd_config_queue_tx_offloads(struct rte_port *port)
 	int k;
 
 	/* Apply queue tx offloads configuration */
-	for (k = 0; k < port->dev_info.max_rx_queues; k++)
+	for (k = 0; k < port->dev_info.max_tx_queues; k++)
 		port->tx_conf[k].offloads =
 			port->dev_conf.txmode.offloads;
 }
@@ -6856,6 +6968,80 @@ cmdline_parse_inst_t cmd_set_allmulti_mode_one = {
 		(void *)&cmd_setallmulti_allmulti,
 		(void *)&cmd_setallmulti_portnum,
 		(void *)&cmd_setallmulti_mode,
+		NULL,
+	},
+};
+
+/* *** GET CURRENT ETHERNET LINK FLOW CONTROL *** */
+struct cmd_link_flow_ctrl_show {
+	cmdline_fixed_string_t show;
+	cmdline_fixed_string_t port;
+	portid_t port_id;
+	cmdline_fixed_string_t flow_ctrl;
+};
+
+cmdline_parse_token_string_t cmd_lfc_show_show =
+	TOKEN_STRING_INITIALIZER(struct cmd_link_flow_ctrl_show,
+				show, "show");
+cmdline_parse_token_string_t cmd_lfc_show_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_link_flow_ctrl_show,
+				port, "port");
+cmdline_parse_token_num_t cmd_lfc_show_portid =
+	TOKEN_NUM_INITIALIZER(struct cmd_link_flow_ctrl_show,
+				port_id, RTE_UINT16);
+cmdline_parse_token_string_t cmd_lfc_show_flow_ctrl =
+	TOKEN_STRING_INITIALIZER(struct cmd_link_flow_ctrl_show,
+				flow_ctrl, "flow_ctrl");
+
+static void
+cmd_link_flow_ctrl_show_parsed(void *parsed_result,
+			      __rte_unused struct cmdline *cl,
+			      __rte_unused void *data)
+{
+	struct cmd_link_flow_ctrl_show *res = parsed_result;
+	static const char *info_border = "*********************";
+	struct rte_eth_fc_conf fc_conf;
+	bool rx_fc_en = false;
+	bool tx_fc_en = false;
+	int ret;
+
+	ret = rte_eth_dev_flow_ctrl_get(res->port_id, &fc_conf);
+	if (ret != 0) {
+		printf("Failed to get current flow ctrl information: err = %d\n",
+		       ret);
+		return;
+	}
+
+	if (fc_conf.mode == RTE_FC_RX_PAUSE || fc_conf.mode == RTE_FC_FULL)
+		rx_fc_en = true;
+	if (fc_conf.mode == RTE_FC_TX_PAUSE || fc_conf.mode == RTE_FC_FULL)
+		tx_fc_en = true;
+
+	printf("\n%s Flow control infos for port %-2d %s\n",
+		info_border, res->port_id, info_border);
+	printf("FC mode:\n");
+	printf("   Rx pause: %s\n", rx_fc_en ? "on" : "off");
+	printf("   Tx pause: %s\n", tx_fc_en ? "on" : "off");
+	printf("Autoneg: %s\n", fc_conf.autoneg ? "on" : "off");
+	printf("Pause time: 0x%x\n", fc_conf.pause_time);
+	printf("High waterline: 0x%x\n", fc_conf.high_water);
+	printf("Low waterline: 0x%x\n", fc_conf.low_water);
+	printf("Send XON: %s\n", fc_conf.send_xon ? "on" : "off");
+	printf("Forward MAC control frames: %s\n",
+		fc_conf.mac_ctrl_frame_fwd ? "on" : "off");
+	printf("\n%s**************   End  ***********%s\n",
+		info_border, info_border);
+}
+
+cmdline_parse_inst_t cmd_link_flow_control_show = {
+	.f = cmd_link_flow_ctrl_show_parsed,
+	.data = NULL,
+	.help_str = "show port <port_id> flow_ctrl",
+	.tokens = {
+		(void *)&cmd_lfc_show_show,
+		(void *)&cmd_lfc_show_port,
+		(void *)&cmd_lfc_show_portid,
+		(void *)&cmd_lfc_show_flow_ctrl,
 		NULL,
 	},
 };
@@ -9554,7 +9740,7 @@ dump_socket_mem(FILE *f)
 	fprintf(f,
 		"Total   : size(M) total: %.6lf alloc: %.6lf(%.3lf%%) free: %.6lf \tcount alloc: %-4u free: %u\n",
 		(double)total / (1024 * 1024), (double)alloc / (1024 * 1024),
-		(double)alloc * 100 / (double)total,
+		total ? ((double)alloc * 100 / (double)total) : 0,
 		(double)free / (1024 * 1024),
 		n_alloc, n_free);
 	if (last_allocs)
@@ -13618,6 +13804,359 @@ cmdline_parse_inst_t cmd_set_mplsoudp_decap_with_vlan = {
 	},
 };
 
+/** Set connection tracking object common details */
+struct cmd_set_conntrack_common_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t conntrack;
+	cmdline_fixed_string_t common;
+	cmdline_fixed_string_t peer;
+	cmdline_fixed_string_t is_orig;
+	cmdline_fixed_string_t enable;
+	cmdline_fixed_string_t live;
+	cmdline_fixed_string_t sack;
+	cmdline_fixed_string_t cack;
+	cmdline_fixed_string_t last_dir;
+	cmdline_fixed_string_t liberal;
+	cmdline_fixed_string_t state;
+	cmdline_fixed_string_t max_ack_win;
+	cmdline_fixed_string_t retrans;
+	cmdline_fixed_string_t last_win;
+	cmdline_fixed_string_t last_seq;
+	cmdline_fixed_string_t last_ack;
+	cmdline_fixed_string_t last_end;
+	cmdline_fixed_string_t last_index;
+	uint8_t stat;
+	uint8_t factor;
+	uint16_t peer_port;
+	uint32_t is_original;
+	uint32_t en;
+	uint32_t is_live;
+	uint32_t s_ack;
+	uint32_t c_ack;
+	uint32_t ld;
+	uint32_t lb;
+	uint8_t re_num;
+	uint8_t li;
+	uint16_t lw;
+	uint32_t ls;
+	uint32_t la;
+	uint32_t le;
+};
+
+cmdline_parse_token_string_t cmd_set_conntrack_set =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 set, "set");
+cmdline_parse_token_string_t cmd_set_conntrack_conntrack =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 conntrack, "conntrack");
+cmdline_parse_token_string_t cmd_set_conntrack_common_com =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 common, "com");
+cmdline_parse_token_string_t cmd_set_conntrack_common_peer =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 peer, "peer");
+cmdline_parse_token_num_t cmd_set_conntrack_common_peer_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      peer_port, RTE_UINT16);
+cmdline_parse_token_string_t cmd_set_conntrack_common_is_orig =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 is_orig, "is_orig");
+cmdline_parse_token_num_t cmd_set_conntrack_common_is_orig_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      is_original, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_enable =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 enable, "enable");
+cmdline_parse_token_num_t cmd_set_conntrack_common_enable_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      en, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_live =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 live, "live");
+cmdline_parse_token_num_t cmd_set_conntrack_common_live_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      is_live, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_sack =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 sack, "sack");
+cmdline_parse_token_num_t cmd_set_conntrack_common_sack_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      s_ack, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_cack =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 cack, "cack");
+cmdline_parse_token_num_t cmd_set_conntrack_common_cack_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      c_ack, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_last_dir =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 last_dir, "last_dir");
+cmdline_parse_token_num_t cmd_set_conntrack_common_last_dir_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      ld, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_liberal =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 liberal, "liberal");
+cmdline_parse_token_num_t cmd_set_conntrack_common_liberal_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      lb, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_state =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 state, "state");
+cmdline_parse_token_num_t cmd_set_conntrack_common_state_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      stat, RTE_UINT8);
+cmdline_parse_token_string_t cmd_set_conntrack_common_max_ackwin =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 max_ack_win, "max_ack_win");
+cmdline_parse_token_num_t cmd_set_conntrack_common_max_ackwin_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      factor, RTE_UINT8);
+cmdline_parse_token_string_t cmd_set_conntrack_common_retrans =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 retrans, "r_lim");
+cmdline_parse_token_num_t cmd_set_conntrack_common_retrans_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      re_num, RTE_UINT8);
+cmdline_parse_token_string_t cmd_set_conntrack_common_last_win =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 last_win, "last_win");
+cmdline_parse_token_num_t cmd_set_conntrack_common_last_win_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      lw, RTE_UINT16);
+cmdline_parse_token_string_t cmd_set_conntrack_common_last_seq =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 last_seq, "last_seq");
+cmdline_parse_token_num_t cmd_set_conntrack_common_last_seq_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      ls, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_last_ack =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 last_ack, "last_ack");
+cmdline_parse_token_num_t cmd_set_conntrack_common_last_ack_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      la, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_last_end =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 last_end, "last_end");
+cmdline_parse_token_num_t cmd_set_conntrack_common_last_end_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      le, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_common_last_index =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_common_result,
+				 last_index, "last_index");
+cmdline_parse_token_num_t cmd_set_conntrack_common_last_index_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_common_result,
+			      li, RTE_UINT8);
+
+static void cmd_set_conntrack_common_parsed(void *parsed_result,
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
+{
+	struct cmd_set_conntrack_common_result *res = parsed_result;
+
+	/* No need to swap to big endian. */
+	conntrack_context.peer_port = res->peer_port;
+	conntrack_context.is_original_dir = res->is_original;
+	conntrack_context.enable = res->en;
+	conntrack_context.live_connection = res->is_live;
+	conntrack_context.selective_ack = res->s_ack;
+	conntrack_context.challenge_ack_passed = res->c_ack;
+	conntrack_context.last_direction = res->ld;
+	conntrack_context.liberal_mode = res->lb;
+	conntrack_context.state = (enum rte_flow_conntrack_state)res->stat;
+	conntrack_context.max_ack_window = res->factor;
+	conntrack_context.retransmission_limit = res->re_num;
+	conntrack_context.last_window = res->lw;
+	conntrack_context.last_index =
+		(enum rte_flow_conntrack_tcp_last_index)res->li;
+	conntrack_context.last_seq = res->ls;
+	conntrack_context.last_ack = res->la;
+	conntrack_context.last_end = res->le;
+}
+
+cmdline_parse_inst_t cmd_set_conntrack_common = {
+	.f = cmd_set_conntrack_common_parsed,
+	.data = NULL,
+	.help_str = "set conntrack com peer <port_id> is_orig <dir> enable <en>"
+		" live <ack_seen> sack <en> cack <passed> last_dir <dir>"
+		" liberal <en> state <s> max_ack_win <factor> r_lim <num>"
+		" last_win <win> last_seq <seq> last_ack <ack> last_end <end>"
+		" last_index <flag>",
+	.tokens = {
+		(void *)&cmd_set_conntrack_set,
+		(void *)&cmd_set_conntrack_conntrack,
+		(void *)&cmd_set_conntrack_common_com,
+		(void *)&cmd_set_conntrack_common_peer,
+		(void *)&cmd_set_conntrack_common_peer_value,
+		(void *)&cmd_set_conntrack_common_is_orig,
+		(void *)&cmd_set_conntrack_common_is_orig_value,
+		(void *)&cmd_set_conntrack_common_enable,
+		(void *)&cmd_set_conntrack_common_enable_value,
+		(void *)&cmd_set_conntrack_common_live,
+		(void *)&cmd_set_conntrack_common_live_value,
+		(void *)&cmd_set_conntrack_common_sack,
+		(void *)&cmd_set_conntrack_common_sack_value,
+		(void *)&cmd_set_conntrack_common_cack,
+		(void *)&cmd_set_conntrack_common_cack_value,
+		(void *)&cmd_set_conntrack_common_last_dir,
+		(void *)&cmd_set_conntrack_common_last_dir_value,
+		(void *)&cmd_set_conntrack_common_liberal,
+		(void *)&cmd_set_conntrack_common_liberal_value,
+		(void *)&cmd_set_conntrack_common_state,
+		(void *)&cmd_set_conntrack_common_state_value,
+		(void *)&cmd_set_conntrack_common_max_ackwin,
+		(void *)&cmd_set_conntrack_common_max_ackwin_value,
+		(void *)&cmd_set_conntrack_common_retrans,
+		(void *)&cmd_set_conntrack_common_retrans_value,
+		(void *)&cmd_set_conntrack_common_last_win,
+		(void *)&cmd_set_conntrack_common_last_win_value,
+		(void *)&cmd_set_conntrack_common_last_seq,
+		(void *)&cmd_set_conntrack_common_last_seq_value,
+		(void *)&cmd_set_conntrack_common_last_ack,
+		(void *)&cmd_set_conntrack_common_last_ack_value,
+		(void *)&cmd_set_conntrack_common_last_end,
+		(void *)&cmd_set_conntrack_common_last_end_value,
+		(void *)&cmd_set_conntrack_common_last_index,
+		(void *)&cmd_set_conntrack_common_last_index_value,
+		NULL,
+	},
+};
+
+/** Set connection tracking object both directions' details */
+struct cmd_set_conntrack_dir_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t conntrack;
+	cmdline_fixed_string_t dir;
+	cmdline_fixed_string_t scale;
+	cmdline_fixed_string_t fin;
+	cmdline_fixed_string_t ack_seen;
+	cmdline_fixed_string_t unack;
+	cmdline_fixed_string_t sent_end;
+	cmdline_fixed_string_t reply_end;
+	cmdline_fixed_string_t max_win;
+	cmdline_fixed_string_t max_ack;
+	uint32_t factor;
+	uint32_t f;
+	uint32_t as;
+	uint32_t un;
+	uint32_t se;
+	uint32_t re;
+	uint32_t mw;
+	uint32_t ma;
+};
+
+cmdline_parse_token_string_t cmd_set_conntrack_dir_set =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 set, "set");
+cmdline_parse_token_string_t cmd_set_conntrack_dir_conntrack =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 conntrack, "conntrack");
+cmdline_parse_token_string_t cmd_set_conntrack_dir_dir =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 dir, "orig#rply");
+cmdline_parse_token_string_t cmd_set_conntrack_dir_scale =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 scale, "scale");
+cmdline_parse_token_num_t cmd_set_conntrack_dir_scale_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_dir_result,
+			      factor, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_dir_fin =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 fin, "fin");
+cmdline_parse_token_num_t cmd_set_conntrack_dir_fin_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_dir_result,
+			      f, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_dir_ack =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 ack_seen, "acked");
+cmdline_parse_token_num_t cmd_set_conntrack_dir_ack_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_dir_result,
+			      as, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_dir_unack_data =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 unack, "unack_data");
+cmdline_parse_token_num_t cmd_set_conntrack_dir_unack_data_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_dir_result,
+			      un, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_dir_sent_end =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 sent_end, "sent_end");
+cmdline_parse_token_num_t cmd_set_conntrack_dir_sent_end_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_dir_result,
+			      se, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_dir_reply_end =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 reply_end, "reply_end");
+cmdline_parse_token_num_t cmd_set_conntrack_dir_reply_end_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_dir_result,
+			      re, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_dir_max_win =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 max_win, "max_win");
+cmdline_parse_token_num_t cmd_set_conntrack_dir_max_win_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_dir_result,
+			      mw, RTE_UINT32);
+cmdline_parse_token_string_t cmd_set_conntrack_dir_max_ack =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_conntrack_dir_result,
+				 max_ack, "max_ack");
+cmdline_parse_token_num_t cmd_set_conntrack_dir_max_ack_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_conntrack_dir_result,
+			      ma, RTE_UINT32);
+
+static void cmd_set_conntrack_dir_parsed(void *parsed_result,
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
+{
+	struct cmd_set_conntrack_dir_result *res = parsed_result;
+	struct rte_flow_tcp_dir_param *dir = NULL;
+
+	if (strcmp(res->dir, "orig") == 0)
+		dir = &conntrack_context.original_dir;
+	else if (strcmp(res->dir, "rply") == 0)
+		dir = &conntrack_context.reply_dir;
+	else
+		return;
+	dir->scale = res->factor;
+	dir->close_initiated = res->f;
+	dir->last_ack_seen = res->as;
+	dir->data_unacked = res->un;
+	dir->sent_end = res->se;
+	dir->reply_end = res->re;
+	dir->max_ack = res->ma;
+	dir->max_win = res->mw;
+}
+
+cmdline_parse_inst_t cmd_set_conntrack_dir = {
+	.f = cmd_set_conntrack_dir_parsed,
+	.data = NULL,
+	.help_str = "set conntrack orig|rply scale <factor> fin <sent>"
+		    " acked <seen> unack_data <unack> sent_end <sent>"
+		    " reply_end <reply> max_win <win> max_ack <ack>",
+	.tokens = {
+		(void *)&cmd_set_conntrack_set,
+		(void *)&cmd_set_conntrack_conntrack,
+		(void *)&cmd_set_conntrack_dir_dir,
+		(void *)&cmd_set_conntrack_dir_scale,
+		(void *)&cmd_set_conntrack_dir_scale_value,
+		(void *)&cmd_set_conntrack_dir_fin,
+		(void *)&cmd_set_conntrack_dir_fin_value,
+		(void *)&cmd_set_conntrack_dir_ack,
+		(void *)&cmd_set_conntrack_dir_ack_value,
+		(void *)&cmd_set_conntrack_dir_unack_data,
+		(void *)&cmd_set_conntrack_dir_unack_data_value,
+		(void *)&cmd_set_conntrack_dir_sent_end,
+		(void *)&cmd_set_conntrack_dir_sent_end_value,
+		(void *)&cmd_set_conntrack_dir_reply_end,
+		(void *)&cmd_set_conntrack_dir_reply_end_value,
+		(void *)&cmd_set_conntrack_dir_max_win,
+		(void *)&cmd_set_conntrack_dir_max_win_value,
+		(void *)&cmd_set_conntrack_dir_max_ack,
+		(void *)&cmd_set_conntrack_dir_max_ack_value,
+		NULL,
+	},
+};
+
 /* Strict link priority scheduling mode setting */
 static void
 cmd_strict_link_prio_parsed(
@@ -16998,6 +17537,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_xon,
 	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_macfwd,
 	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_autoneg,
+	(cmdline_parse_inst_t *)&cmd_link_flow_control_show,
 	(cmdline_parse_inst_t *)&cmd_priority_flow_control_set,
 	(cmdline_parse_inst_t *)&cmd_config_dcb,
 	(cmdline_parse_inst_t *)&cmd_read_reg,
@@ -17051,6 +17591,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_showport_rss_hash,
 	(cmdline_parse_inst_t *)&cmd_showport_rss_hash_key,
 	(cmdline_parse_inst_t *)&cmd_config_rss_hash_key,
+	(cmdline_parse_inst_t *)&cmd_cleanup_txq_mbufs,
 	(cmdline_parse_inst_t *)&cmd_dump,
 	(cmdline_parse_inst_t *)&cmd_dump_one,
 #ifdef RTE_NET_I40E
@@ -17069,9 +17610,9 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_enable_port_meter,
 	(cmdline_parse_inst_t *)&cmd_disable_port_meter,
 	(cmdline_parse_inst_t *)&cmd_del_port_meter,
+	(cmdline_parse_inst_t *)&cmd_del_port_meter_policy,
 	(cmdline_parse_inst_t *)&cmd_set_port_meter_profile,
 	(cmdline_parse_inst_t *)&cmd_set_port_meter_dscp_table,
-	(cmdline_parse_inst_t *)&cmd_set_port_meter_policer_action,
 	(cmdline_parse_inst_t *)&cmd_set_port_meter_stats_mask,
 	(cmdline_parse_inst_t *)&cmd_show_port_meter_stats,
 	(cmdline_parse_inst_t *)&cmd_mcast_addr,
@@ -17117,6 +17658,8 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_set_mplsoudp_encap_with_vlan,
 	(cmdline_parse_inst_t *)&cmd_set_mplsoudp_decap,
 	(cmdline_parse_inst_t *)&cmd_set_mplsoudp_decap_with_vlan,
+	(cmdline_parse_inst_t *)&cmd_set_conntrack_common,
+	(cmdline_parse_inst_t *)&cmd_set_conntrack_dir,
 	(cmdline_parse_inst_t *)&cmd_ddp_add,
 	(cmdline_parse_inst_t *)&cmd_ddp_del,
 	(cmdline_parse_inst_t *)&cmd_ddp_get_list,

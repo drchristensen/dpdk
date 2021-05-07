@@ -113,6 +113,10 @@ struct ice_aqc_list_caps_elem {
 #define ICE_AQC_CAPS_PCIE_RESET_AVOIDANCE		0x0076
 #define ICE_AQC_CAPS_POST_UPDATE_RESET_RESTRICT		0x0077
 #define ICE_AQC_CAPS_NVM_MGMT				0x0080
+#define ICE_AQC_CAPS_EXT_TOPO_DEV_IMG0			0x0081
+#define ICE_AQC_CAPS_EXT_TOPO_DEV_IMG1			0x0082
+#define ICE_AQC_CAPS_EXT_TOPO_DEV_IMG2			0x0083
+#define ICE_AQC_CAPS_EXT_TOPO_DEV_IMG3			0x0084
 
 	u8 major_ver;
 	u8 minor_ver;
@@ -1614,7 +1618,7 @@ struct ice_aqc_set_mac_lb {
 	u8 reserved[15];
 };
 
-struct ice_aqc_link_topo_addr {
+struct ice_aqc_link_topo_params {
 	u8 lport_num;
 	u8 lport_num_valid;
 #define ICE_AQC_LINK_TOPO_PORT_NUM_VALID	BIT(0)
@@ -1640,6 +1644,10 @@ struct ice_aqc_link_topo_addr {
 #define ICE_AQC_LINK_TOPO_NODE_CTX_PROVIDED	4
 #define ICE_AQC_LINK_TOPO_NODE_CTX_OVERRIDE	5
 	u8 index;
+};
+
+struct ice_aqc_link_topo_addr {
+	struct ice_aqc_link_topo_params topo_params;
 	__le16 handle;
 #define ICE_AQC_LINK_TOPO_HANDLE_S	0
 #define ICE_AQC_LINK_TOPO_HANDLE_M	(0x3FF << ICE_AQC_LINK_TOPO_HANDLE_S)
@@ -1665,6 +1673,31 @@ struct ice_aqc_get_link_topo {
 	u8 rsvd[9];
 };
 
+/* Read/Write I2C (direct, 0x06E2/0x06E3) */
+struct ice_aqc_i2c {
+	struct ice_aqc_link_topo_addr topo_addr;
+	__le16 i2c_addr;
+	u8 i2c_params;
+#define ICE_AQC_I2C_DATA_SIZE_S		0
+#define ICE_AQC_I2C_DATA_SIZE_M		(0xF << ICE_AQC_I2C_DATA_SIZE_S)
+#define ICE_AQC_I2C_ADDR_TYPE_M		BIT(4)
+#define ICE_AQC_I2C_ADDR_TYPE_7BIT	0
+#define ICE_AQC_I2C_ADDR_TYPE_10BIT	ICE_AQC_I2C_ADDR_TYPE_M
+#define ICE_AQC_I2C_DATA_OFFSET_S	5
+#define ICE_AQC_I2C_DATA_OFFSET_M	(0x3 << ICE_AQC_I2C_DATA_OFFSET_S)
+#define ICE_AQC_I2C_USE_REPEATED_START	BIT(7)
+	u8 rsvd;
+	__le16 i2c_bus_addr;
+#define ICE_AQC_I2C_ADDR_7BIT_MASK	0x7F
+#define ICE_AQC_I2C_ADDR_10BIT_MASK	0x3FF
+	u8 i2c_data[4]; /* Used only by write command, reserved in read. */
+};
+
+/* Read I2C Response (direct, 0x06E2) */
+struct ice_aqc_read_i2c_resp {
+	u8 i2c_data[16];
+};
+
 /* Set Port Identification LED (direct, 0x06E9) */
 struct ice_aqc_set_port_id_led {
 	u8 lport_num;
@@ -1674,6 +1707,16 @@ struct ice_aqc_set_port_id_led {
 #define ICE_AQC_PORT_IDENT_LED_BLINK	BIT(0)
 #define ICE_AQC_PORT_IDENT_LED_ORIG	0
 	u8 rsvd[13];
+};
+
+/* Set/Get GPIO (direct, 0x06EC/0x06ED) */
+struct ice_aqc_gpio {
+	__le16 gpio_ctrl_handle;
+#define ICE_AQC_GPIO_HANDLE_S	0
+#define ICE_AQC_GPIO_HANDLE_M	(0x3FF << ICE_AQC_GPIO_HANDLE_S)
+	u8 gpio_num;
+	u8 gpio_val;
+	u8 rsvd[12];
 };
 
 /* Read/Write SFF EEPROM command (indirect 0x06EE) */
@@ -1719,23 +1762,18 @@ struct ice_aqc_sw_gpio {
 	u8 rsvd[12];
 };
 
-/* Program topology device NVM (direct, 0x06F2) */
-struct ice_aqc_program_topology_device_nvm {
-	u8 lport_num;
-	u8 lport_num_valid;
-	u8 node_type_ctx;
-	u8 index;
+/* Program Topology Device NVM (direct, 0x06F2) */
+struct ice_aqc_prog_topo_dev_nvm {
+	struct ice_aqc_link_topo_params topo_params;
 	u8 rsvd[12];
 };
 
-/* Read topology device NVM (indirect, 0x06F3) */
-struct ice_aqc_read_topology_device_nvm {
-	u8 lport_num;
-	u8 lport_num_valid;
-	u8 node_type_ctx;
-	u8 index;
+/* Read Topology Device NVM (direct, 0x06F3) */
+struct ice_aqc_read_topo_dev_nvm {
+	struct ice_aqc_link_topo_params topo_params;
 	__le32 start_address;
-	u8 data_read[8];
+#define ICE_AQC_READ_TOPO_DEV_NVM_DATA_READ_SIZE 8
+	u8 data_read[ICE_AQC_READ_TOPO_DEV_NVM_DATA_READ_SIZE];
 };
 
 /* NVM Read command (indirect 0x0701)
@@ -2709,6 +2747,8 @@ struct ice_aqc_set_health_status_config {
 #define ICE_AQC_HEALTH_STATUS_ERR_LINK_HW_ACCESS		0x115
 #define ICE_AQC_HEALTH_STATUS_ERR_LINK_RUNTIME			0x116
 #define ICE_AQC_HEALTH_STATUS_ERR_DNL_INIT			0x117
+#define ICE_AQC_HEALTH_STATUS_ERR_PHY_NVM_PROG			0x120
+#define ICE_AQC_HEALTH_STATUS_ERR_PHY_FW_LOAD			0x121
 #define ICE_AQC_HEALTH_STATUS_INFO_RECOVERY			0x500
 #define ICE_AQC_HEALTH_STATUS_ERR_FLASH_ACCESS			0x501
 #define ICE_AQC_HEALTH_STATUS_ERR_NVM_AUTH			0x502
@@ -2838,6 +2878,9 @@ struct ice_aq_desc {
 		struct ice_aqc_get_phy_caps get_phy;
 		struct ice_aqc_set_phy_cfg set_phy;
 		struct ice_aqc_restart_an restart_an;
+		struct ice_aqc_i2c read_write_i2c;
+		struct ice_aqc_read_i2c_resp read_i2c_resp;
+		struct ice_aqc_gpio read_write_gpio;
 		struct ice_aqc_sff_eeprom read_write_sff_param;
 		struct ice_aqc_set_port_id_led set_port_id_led;
 		struct ice_aqc_get_sw_cfg get_sw_conf;
@@ -2908,6 +2951,8 @@ struct ice_aq_desc {
 			get_supported_health_status_codes;
 		struct ice_aqc_get_health_status get_health_status;
 		struct ice_aqc_clear_health_status clear_health_status;
+		struct ice_aqc_prog_topo_dev_nvm prog_topo_dev_nvm;
+		struct ice_aqc_read_topo_dev_nvm read_topo_dev_nvm;
 	} params;
 };
 
@@ -3074,6 +3119,8 @@ enum ice_adminq_opc {
 	ice_aqc_opc_set_event_mask			= 0x0613,
 	ice_aqc_opc_set_mac_lb				= 0x0620,
 	ice_aqc_opc_get_link_topo			= 0x06E0,
+	ice_aqc_opc_read_i2c				= 0x06E2,
+	ice_aqc_opc_write_i2c				= 0x06E3,
 	ice_aqc_opc_set_port_id_led			= 0x06E9,
 	ice_aqc_opc_get_port_options			= 0x06EA,
 	ice_aqc_opc_set_port_option			= 0x06EB,
@@ -3082,8 +3129,8 @@ enum ice_adminq_opc {
 	ice_aqc_opc_sff_eeprom				= 0x06EE,
 	ice_aqc_opc_sw_set_gpio				= 0x06EF,
 	ice_aqc_opc_sw_get_gpio				= 0x06F0,
-	ice_aqc_opc_program_topology_device_nvm		= 0x06F2,
-	ice_aqc_opc_read_topology_device_nvm		= 0x06F3,
+	ice_aqc_opc_prog_topo_dev_nvm			= 0x06F2,
+	ice_aqc_opc_read_topo_dev_nvm			= 0x06F3,
 
 	/* NVM commands */
 	ice_aqc_opc_nvm_read				= 0x0701,

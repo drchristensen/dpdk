@@ -56,13 +56,6 @@ enum hns3_cmd_return_status {
 	HNS3_CMD_ROH_CHECK_FAIL = 12
 };
 
-enum hns3_cmd_status {
-	HNS3_STATUS_SUCCESS     = 0,
-	HNS3_ERR_CSQ_FULL       = -1,
-	HNS3_ERR_CSQ_TIMEOUT    = -2,
-	HNS3_ERR_CSQ_ERROR      = -3,
-};
-
 struct hns3_misc_vector {
 	uint8_t *addr;
 	int vector_irq;
@@ -72,7 +65,7 @@ struct hns3_cmq {
 	struct hns3_cmq_ring csq;
 	struct hns3_cmq_ring crq;
 	uint16_t tx_timeout;
-	enum hns3_cmd_status last_status;
+	enum hns3_cmd_return_status last_status;
 };
 
 enum hns3_opcode_type {
@@ -115,6 +108,7 @@ enum hns3_opcode_type {
 
 	/* MAC command */
 	HNS3_OPC_CONFIG_MAC_MODE        = 0x0301,
+	HNS3_OPC_CONFIG_AN_MODE         = 0x0304,
 	HNS3_OPC_QUERY_LINK_STATUS      = 0x0307,
 	HNS3_OPC_CONFIG_MAX_FRM_SIZE    = 0x0308,
 	HNS3_OPC_CONFIG_SPEED_DUP       = 0x0309,
@@ -237,7 +231,7 @@ enum hns3_opcode_type {
 	/* SFP command */
 	HNS3_OPC_GET_SFP_EEPROM         = 0x7100,
 	HNS3_OPC_GET_SFP_EXIST          = 0x7101,
-	HNS3_OPC_SFP_GET_SPEED          = 0x7104,
+	HNS3_OPC_GET_SFP_INFO           = 0x7104,
 
 	/* Interrupts commands */
 	HNS3_OPC_ADD_RING_TO_VECTOR     = 0x1503,
@@ -258,6 +252,8 @@ enum hns3_opcode_type {
 	HNS3_OPC_QUERY_MSIX_INT_STS_BD_NUM      = 0x1513,
 	HNS3_OPC_QUERY_CLEAR_ALL_MPF_MSIX_INT   = 0x1514,
 	HNS3_OPC_QUERY_CLEAR_ALL_PF_MSIX_INT    = 0x1515,
+	HNS3_OPC_QUERY_ALL_ERR_BD_NUM           = 0x1516,
+	HNS3_OPC_QUERY_ALL_ERR_INFO             = 0x1517,
 	HNS3_OPC_IGU_EGU_TNL_INT_EN             = 0x1803,
 	HNS3_OPC_IGU_COMMON_INT_EN              = 0x1806,
 	HNS3_OPC_TM_QCN_MEM_INT_CFG             = 0x1A14,
@@ -310,22 +306,19 @@ struct hns3_rx_priv_buff_cmd {
 #define HNS3_FW_VERSION_BYTE0_M		GENMASK(7, 0)
 
 enum HNS3_CAPS_BITS {
-	HNS3_CAPS_UDP_GSO_B,
-	HNS3_CAPS_ATR_B,
-	HNS3_CAPS_FD_QUEUE_REGION_B,
+	/*
+	 * The following capability index definitions must be the same as those
+	 * of the firmware.
+	 */
+	HNS3_CAPS_FD_QUEUE_REGION_B = 2,
 	HNS3_CAPS_PTP_B,
-	HNS3_CAPS_INT_QL_B,
-	HNS3_CAPS_SIMPLE_BD_B,
-	HNS3_CAPS_TX_PUSH_B,
-	HNS3_CAPS_PHY_IMP_B,
+	HNS3_CAPS_PHY_IMP_B = 7,
 	HNS3_CAPS_TQP_TXRX_INDEP_B,
 	HNS3_CAPS_HW_PAD_B,
 	HNS3_CAPS_STASH_B,
 	HNS3_CAPS_UDP_TUNNEL_CSUM_B,
 	HNS3_CAPS_RAS_IMP_B,
-	HNS3_CAPS_FEC_B,
-	HNS3_CAPS_PAUSE_B,
-	HNS3_CAPS_RXD_ADV_LAYOUT_B,
+	HNS3_CAPS_RXD_ADV_LAYOUT_B = 15,
 };
 
 enum HNS3_API_CAP_BITS {
@@ -464,8 +457,6 @@ struct hns3_umv_spc_alc_cmd {
 #define HNS3_CFG_RD_LEN_BYTES		16
 #define HNS3_CFG_RD_LEN_UNIT		4
 
-#define HNS3_CFG_VMDQ_S			0
-#define HNS3_CFG_VMDQ_M			GENMASK(7, 0)
 #define HNS3_CFG_TC_NUM_S		8
 #define HNS3_CFG_TC_NUM_M		GENMASK(15, 8)
 #define HNS3_CFG_TQP_DESC_N_S		16
@@ -686,6 +677,7 @@ struct hns3_firmware_compat_cmd {
 #define HNS3_PHY_LINK_SPEED_10M_BIT		BIT(1)
 #define HNS3_PHY_LINK_SPEED_100M_HD_BIT		BIT(2)
 #define HNS3_PHY_LINK_SPEED_100M_BIT		BIT(3)
+#define HNS3_PHY_LINK_SPEED_1000M_BIT		BIT(5)
 #define HNS3_PHY_LINK_MODE_AUTONEG_BIT		BIT(6)
 #define HNS3_PHY_LINK_MODE_PAUSE_BIT		BIT(13)
 #define HNS3_PHY_LINK_MODE_ASYM_PAUSE_BIT	BIT(14)
@@ -773,13 +765,6 @@ struct hns3_config_auto_neg_cmd {
 	uint8_t   rsv[20];
 };
 
-#define HNS3_MAC_CFG_FEC_AUTO_EN_B	0
-#define HNS3_MAC_CFG_FEC_MODE_S		1
-#define HNS3_MAC_CFG_FEC_MODE_M	GENMASK(3, 1)
-#define HNS3_MAC_FEC_OFF		0
-#define HNS3_MAC_FEC_BASER		1
-#define HNS3_MAC_FEC_RS			2
-
 #define HNS3_SFP_INFO_BD0_LEN  20UL
 #define HNS3_SFP_INFO_BDX_LEN  24UL
 
@@ -794,13 +779,35 @@ struct hns3_sfp_type {
 	uint8_t ext_type;
 };
 
-struct hns3_sfp_speed_cmd {
-	uint32_t  sfp_speed;
-	uint8_t   query_type; /* 0: sfp speed, 1: active fec */
-	uint8_t   active_fec; /* current FEC mode */
-	uint16_t  rsv1;
-	uint32_t  rsv2[4];
+/* Bitmap flags in supported_speed */
+#define HNS3_FIBER_LINK_SPEED_1G_BIT		BIT(0)
+#define HNS3_FIBER_LINK_SPEED_10G_BIT		BIT(1)
+#define HNS3_FIBER_LINK_SPEED_25G_BIT		BIT(2)
+#define HNS3_FIBER_LINK_SPEED_50G_BIT		BIT(3)
+#define HNS3_FIBER_LINK_SPEED_100G_BIT		BIT(4)
+#define HNS3_FIBER_LINK_SPEED_40G_BIT		BIT(5)
+#define HNS3_FIBER_LINK_SPEED_100M_BIT		BIT(6)
+#define HNS3_FIBER_LINK_SPEED_10M_BIT		BIT(7)
+#define HNS3_FIBER_LINK_SPEED_200G_BIT		BIT(8)
+
+struct hns3_sfp_info_cmd {
+	uint32_t sfp_speed;
+	uint8_t query_type; /* 0: sfp speed, 1: active */
+	uint8_t active_fec; /* current FEC mode */
+	uint8_t autoneg; /* current autoneg state */
+	/* 0: not support autoneg, 1: support autoneg */
+	uint8_t autoneg_ability;
+	uint32_t supported_speed; /* speed supported by current media */
+	uint32_t module_type;
+	uint8_t rsv1[8];
 };
+
+#define HNS3_MAC_CFG_FEC_AUTO_EN_B	0
+#define HNS3_MAC_CFG_FEC_MODE_S		1
+#define HNS3_MAC_CFG_FEC_MODE_M	GENMASK(3, 1)
+#define HNS3_MAC_FEC_OFF		0
+#define HNS3_MAC_FEC_BASER		1
+#define HNS3_MAC_FEC_RS			2
 
 /* Configure FEC mode, opcode:0x031A */
 struct hns3_config_fec_cmd {

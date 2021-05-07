@@ -1054,37 +1054,37 @@ hns3_parse_normal(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 	case RTE_FLOW_ITEM_TYPE_ETH:
 		ret = hns3_parse_eth(item, rule, error);
 		step_mngr->items = L2_next_items;
-		step_mngr->count = ARRAY_SIZE(L2_next_items);
+		step_mngr->count = RTE_DIM(L2_next_items);
 		break;
 	case RTE_FLOW_ITEM_TYPE_VLAN:
 		ret = hns3_parse_vlan(item, rule, error);
 		step_mngr->items = L2_next_items;
-		step_mngr->count = ARRAY_SIZE(L2_next_items);
+		step_mngr->count = RTE_DIM(L2_next_items);
 		break;
 	case RTE_FLOW_ITEM_TYPE_IPV4:
 		ret = hns3_parse_ipv4(item, rule, error);
 		step_mngr->items = L3_next_items;
-		step_mngr->count = ARRAY_SIZE(L3_next_items);
+		step_mngr->count = RTE_DIM(L3_next_items);
 		break;
 	case RTE_FLOW_ITEM_TYPE_IPV6:
 		ret = hns3_parse_ipv6(item, rule, error);
 		step_mngr->items = L3_next_items;
-		step_mngr->count = ARRAY_SIZE(L3_next_items);
+		step_mngr->count = RTE_DIM(L3_next_items);
 		break;
 	case RTE_FLOW_ITEM_TYPE_TCP:
 		ret = hns3_parse_tcp(item, rule, error);
 		step_mngr->items = L4_next_items;
-		step_mngr->count = ARRAY_SIZE(L4_next_items);
+		step_mngr->count = RTE_DIM(L4_next_items);
 		break;
 	case RTE_FLOW_ITEM_TYPE_UDP:
 		ret = hns3_parse_udp(item, rule, error);
 		step_mngr->items = L4_next_items;
-		step_mngr->count = ARRAY_SIZE(L4_next_items);
+		step_mngr->count = RTE_DIM(L4_next_items);
 		break;
 	case RTE_FLOW_ITEM_TYPE_SCTP:
 		ret = hns3_parse_sctp(item, rule, error);
 		step_mngr->items = L4_next_items;
-		step_mngr->count = ARRAY_SIZE(L4_next_items);
+		step_mngr->count = RTE_DIM(L4_next_items);
 		break;
 	default:
 		return rte_flow_error_set(error, ENOTSUP,
@@ -1188,7 +1188,7 @@ hns3_parse_fdir_filter(struct rte_eth_dev *dev,
 					  "Fdir not supported in VF");
 
 	step_mngr.items = first_items;
-	step_mngr.count = ARRAY_SIZE(first_items);
+	step_mngr.count = RTE_DIM(first_items);
 	for (item = pattern; item->type != RTE_FLOW_ITEM_TYPE_END; item++) {
 		if (item->type == RTE_FLOW_ITEM_TYPE_VOID)
 			continue;
@@ -1202,7 +1202,7 @@ hns3_parse_fdir_filter(struct rte_eth_dev *dev,
 			if (ret)
 				return ret;
 			step_mngr.items = tunnel_next_items;
-			step_mngr.count = ARRAY_SIZE(tunnel_next_items);
+			step_mngr.count = RTE_DIM(tunnel_next_items);
 		} else {
 			ret = hns3_parse_normal(item, rule, &step_mngr, error);
 			if (ret)
@@ -1214,9 +1214,18 @@ hns3_parse_fdir_filter(struct rte_eth_dev *dev,
 }
 
 void
-hns3_filterlist_init(struct rte_eth_dev *dev)
+hns3_flow_init(struct rte_eth_dev *dev)
 {
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct hns3_process_private *process_list = dev->process_private;
+	pthread_mutexattr_t attr;
+
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+		pthread_mutexattr_init(&attr);
+		pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+		pthread_mutex_init(&hw->flows_lock, &attr);
+		dev->data->dev_flags |= RTE_ETH_DEV_FLOW_OPS_THREAD_SAFE;
+	}
 
 	TAILQ_INIT(&process_list->fdir_list);
 	TAILQ_INIT(&process_list->filter_rss_list);
@@ -1547,7 +1556,7 @@ hns3_config_rss_filter(struct rte_eth_dev *dev,
 		     hw->rss_info.conf.types;
 	if (flow_types != rss_flow_conf.types)
 		hns3_warn(hw, "modified RSS types based on hardware support, "
-			      "requested:%" PRIx64 " configured:%" PRIx64,
+			      "requested:0x%" PRIx64 " configured:0x%" PRIx64,
 			  rss_flow_conf.types, flow_types);
 	/* Update the useful flow types */
 	rss_flow_conf.types = flow_types;
@@ -2002,12 +2011,87 @@ hns3_flow_query(struct rte_eth_dev *dev, struct rte_flow *flow,
 	return 0;
 }
 
+static int
+hns3_flow_validate_wrap(struct rte_eth_dev *dev,
+			const struct rte_flow_attr *attr,
+			const struct rte_flow_item pattern[],
+			const struct rte_flow_action actions[],
+			struct rte_flow_error *error)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	int ret;
+
+	pthread_mutex_lock(&hw->flows_lock);
+	ret = hns3_flow_validate(dev, attr, pattern, actions, error);
+	pthread_mutex_unlock(&hw->flows_lock);
+
+	return ret;
+}
+
+static struct rte_flow *
+hns3_flow_create_wrap(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
+		      const struct rte_flow_item pattern[],
+		      const struct rte_flow_action actions[],
+		      struct rte_flow_error *error)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct rte_flow *flow;
+
+	pthread_mutex_lock(&hw->flows_lock);
+	flow = hns3_flow_create(dev, attr, pattern, actions, error);
+	pthread_mutex_unlock(&hw->flows_lock);
+
+	return flow;
+}
+
+static int
+hns3_flow_destroy_wrap(struct rte_eth_dev *dev, struct rte_flow *flow,
+		       struct rte_flow_error *error)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	int ret;
+
+	pthread_mutex_lock(&hw->flows_lock);
+	ret = hns3_flow_destroy(dev, flow, error);
+	pthread_mutex_unlock(&hw->flows_lock);
+
+	return ret;
+}
+
+static int
+hns3_flow_flush_wrap(struct rte_eth_dev *dev, struct rte_flow_error *error)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	int ret;
+
+	pthread_mutex_lock(&hw->flows_lock);
+	ret = hns3_flow_flush(dev, error);
+	pthread_mutex_unlock(&hw->flows_lock);
+
+	return ret;
+}
+
+static int
+hns3_flow_query_wrap(struct rte_eth_dev *dev, struct rte_flow *flow,
+		     const struct rte_flow_action *actions, void *data,
+		     struct rte_flow_error *error)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	int ret;
+
+	pthread_mutex_lock(&hw->flows_lock);
+	ret = hns3_flow_query(dev, flow, actions, data, error);
+	pthread_mutex_unlock(&hw->flows_lock);
+
+	return ret;
+}
+
 static const struct rte_flow_ops hns3_flow_ops = {
-	.validate = hns3_flow_validate,
-	.create = hns3_flow_create,
-	.destroy = hns3_flow_destroy,
-	.flush = hns3_flow_flush,
-	.query = hns3_flow_query,
+	.validate = hns3_flow_validate_wrap,
+	.create = hns3_flow_create_wrap,
+	.destroy = hns3_flow_destroy_wrap,
+	.flush = hns3_flow_flush_wrap,
+	.query = hns3_flow_query_wrap,
 	.isolate = NULL,
 };
 

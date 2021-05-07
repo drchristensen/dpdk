@@ -106,6 +106,9 @@ Features
 - E-Switch mirroring and modify.
 - 21844 flow priorities for ingress or egress flow groups greater than 0 and for any transfer
   flow group.
+- Flow metering, including meter policy API.
+- Flow integrity offload API.
+- Connection tracking.
 
 Limitations
 -----------
@@ -171,9 +174,9 @@ Limitations
 
   - Flow rules having a VLAN pop offload command as one of their actions and
     are lacking a match on VLAN as one of their items are not supported.
-  - The command is not supported on egress traffic.
+  - The command is not supported on egress traffic in NIC mode.
 
-- VLAN push offload is not supported on ingress traffic.
+- VLAN push offload is not supported on ingress traffic in NIC mode.
 
 - VLAN set PCP offload is not supported on existing headers.
 
@@ -398,6 +401,45 @@ Limitations
 
   - Hairpin between two ports could only manual binding and explicit Tx flow mode. For single port hairpin, all the combinations of auto/manual binding and explicit/implicit Tx flow mode could be supported.
   - Hairpin in switchdev SR-IOV mode is not supported till now.
+
+- Meter:
+
+  - All the meter colors with drop action will be counted only by the global drop statistics.
+  - Green color is not supported with drop action.
+  - Yellow detection is not supported.
+  - Red color must be with drop action.
+  - Meter statistics are supported only for drop case.
+  - Meter yellow color detection is not supported.
+  - A meter action created with pre-defined policy must be the last action in the flow except single case where the policy actions are:
+     - green: NULL or END.
+     - yellow: NULL or END.
+     - RED: DROP / END.
+  - The only supported meter policy actions:
+     - green: QUEUE, RSS, PORT_ID, JUMP, MARK and SET_TAG.
+     - yellow: must be empty.
+     - RED: must be DROP.
+  - meter profile packet mode is supported.
+
+- Integrity:
+
+  - Integrity offload is enabled for **ConnectX-6** family.
+  - Verification bits provided by the hardware are ``l3_ok``, ``ipv4_csum_ok``, ``l4_ok``, ``l4_csum_ok``.
+  - ``level`` value 0 references outer headers.
+  - Multiple integrity items not supported in a single flow rule.
+  - Flow rule items supplied by application must explicitly specify network headers referred by integrity item.
+    For example, if integrity item mask sets ``l4_ok`` or ``l4_csum_ok`` bits, reference to L4 network header,
+    TCP or UDP, must be in the rule pattern as well::
+
+      flow create 0 ingress pattern integrity level is 0 value mask l3_ok value spec l3_ok / eth / ipv6 / end …
+      or
+      flow create 0 ingress pattern integrity level is 0 value mask l4_ok value spec 0 / eth / ipv4 proto is udp / end …
+
+- Connection tracking:
+
+  - Cannot co-exist with ASO meter, ASO age action in a single flow rule.
+  - Flow rules insertion rate and memory consumption need more optimization.
+  - 256 ports maximum.
+  - 4M connections maximum.
 
 Statistics
 ----------
@@ -1566,6 +1608,14 @@ Supported hardware offloads
    | | of_set_vlan_pcp /   | |               | |               |
    | | of_set_vlan_vid)    | |               | |               |
    +-----------------------+-----------------+-----------------+
+   | | VLAN                | | DPDK 21.05    | |               |
+   | | ingress and /       | | OFED 5.3      | |    N/A        |
+   | | of_push_vlan /      | | ConnectX-6 Dx | |               |
+   +-----------------------+-----------------+-----------------+
+   | | VLAN                | | DPDK 21.05    | |               |
+   | | egress and /        | | OFED 5.3      | |    N/A        |
+   | | of_pop_vlan /       | | ConnectX-6 Dx | |               |
+   +-----------------------+-----------------+-----------------+
    | Encapsulation         | | DPDK 19.05    | | DPDK 19.02    |
    | (VXLAN / NVGRE / RAW) | | OFED 4.7-1    | | OFED 4.6      |
    |                       | | rdma-core 24  | | rdma-core 23  |
@@ -1653,6 +1703,11 @@ Supported hardware offloads
    |                       | | rdma-core 35  | | rdma-core 35  |
    |                       | | ConnectX-5    | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
+   | Connection tracking   | |               | | DPDK 21.05    |
+   |                       | |     N/A       | | OFED 5.3      |
+   |                       | |               | | rdma-core 35  |
+   |                       | |               | | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
 
 .. table:: Minimal SW/HW versions for shared action offload
    :name: sact
@@ -1665,10 +1720,15 @@ Supported hardware offloads
    |                       | |               | | rdma-core 33  |
    |                       | |               | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
-   | Age                   | |  DPDK 20.11   | | DPDK 20.11    |
-   |                       | |  OFED 5.2     | | OFED 5.2      |
-   |                       | |  rdma-core 32 | | rdma-core 32  |
-   |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
+   | Age                   | | DPDK 20.11    | | DPDK 20.11    |
+   |                       | | OFED 5.2      | | OFED 5.2      |
+   |                       | | rdma-core 32  | | rdma-core 32  |
+   |                       | | ConnectX-6 Dx | | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
+   | Count                 | | DPDK 21.05    | | DPDK 21.05    |
+   |                       | | OFED 4.6      | | OFED 4.6      |
+   |                       | | rdma-core 24  | | rdma-core 23  |
+   |                       | | ConnectX-5    | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
 
 Notes for metadata
@@ -1829,13 +1889,16 @@ all flows with assistance of external tools.
 
    .. code-block:: console
 
-       testpmd> flow dump <port> <output_file>
+       To dump all flows:
+       testpmd> flow dump <port> all <output_file>
+       and dump one flow:
+       testpmd> flow dump <port> rule <rule_id> <output_file>
 
    - call rte_flow_dev_dump api:
 
    .. code-block:: console
 
-       rte_flow_dev_dump(port, file, NULL);
+       rte_flow_dev_dump(port, flow, file, NULL);
 
 #. Dump human-readable flows from raw file:
 
@@ -1843,4 +1906,4 @@ all flows with assistance of external tools.
 
    .. code-block:: console
 
-       mlx_steering_dump.py -f <output_file>
+       mlx_steering_dump.py -f <output_file> -flowptr <flow_ptr>

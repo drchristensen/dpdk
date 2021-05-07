@@ -212,6 +212,27 @@ enum rte_flow_item_type pattern_eth_qinq_ipv6[] = {
 	RTE_FLOW_ITEM_TYPE_IPV6,
 	RTE_FLOW_ITEM_TYPE_END,
 };
+enum rte_flow_item_type pattern_eth_ipv6_frag_ext[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+enum rte_flow_item_type pattern_eth_vlan_ipv6_frag_ext[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_VLAN,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+enum rte_flow_item_type pattern_eth_qinq_ipv6_frag_ext[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_VLAN,
+	RTE_FLOW_ITEM_TYPE_VLAN,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT,
+	RTE_FLOW_ITEM_TYPE_END,
+};
 enum rte_flow_item_type pattern_eth_ipv6_udp[] = {
 	RTE_FLOW_ITEM_TYPE_ETH,
 	RTE_FLOW_ITEM_TYPE_IPV6,
@@ -1774,6 +1795,7 @@ enum rte_flow_item_type pattern_eth_ipv6_pfcp[] = {
 typedef struct ice_flow_engine * (*parse_engine_t)(struct ice_adapter *ad,
 		struct rte_flow *flow,
 		struct ice_parser_list *parser_list,
+		uint32_t priority,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
 		struct rte_flow_error *error);
@@ -1965,11 +1987,10 @@ ice_flow_valid_attr(struct ice_adapter *ad,
 	} else {
 		*ice_pipeline_stage =
 			ICE_FLOW_CLASSIFY_STAGE_DISTRIBUTOR_ONLY;
-		/* Not supported */
-		if (attr->priority) {
+		if (attr->priority > 1) {
 			rte_flow_error_set(error, EINVAL,
 					RTE_FLOW_ERROR_TYPE_ATTR_PRIORITY,
-					attr, "Not support priority.");
+					attr, "Only support priority 0 and 1.");
 			return -rte_errno;
 		}
 	}
@@ -2087,6 +2108,7 @@ static struct ice_ptype_match ice_ptype_map[] = {
 	{pattern_eth_ipv6_udp,				ICE_PTYPE_IPV6_UDP_PAY},
 	{pattern_eth_ipv6_tcp,				ICE_PTYPE_IPV6_TCP_PAY},
 	{pattern_eth_ipv6_sctp,				ICE_PTYPE_IPV6_SCTP_PAY},
+	{pattern_eth_ipv6_frag_ext,			ICE_PTYPE_IPV6FRAG_PAY},
 	{pattern_eth_ipv6_gtpu,				ICE_MAC_IPV6_GTPU},
 	{pattern_eth_ipv6_gtpu_eh,			ICE_MAC_IPV6_GTPU},
 	{pattern_eth_ipv6_gtpu_ipv4,			ICE_MAC_IPV6_GTPU_IPV4_PAY},
@@ -2240,6 +2262,7 @@ static struct ice_flow_engine *
 ice_parse_engine_create(struct ice_adapter *ad,
 		struct rte_flow *flow,
 		struct ice_parser_list *parser_list,
+		uint32_t priority,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
 		struct rte_flow_error *error)
@@ -2255,7 +2278,7 @@ ice_parse_engine_create(struct ice_adapter *ad,
 		if (parser_node->parser->parse_pattern_action(ad,
 				parser_node->parser->array,
 				parser_node->parser->array_len,
-				pattern, actions, &meta, error) < 0)
+				pattern, actions, priority, &meta, error) < 0)
 			continue;
 
 		engine = parser_node->parser->engine;
@@ -2273,6 +2296,7 @@ static struct ice_flow_engine *
 ice_parse_engine_validate(struct ice_adapter *ad,
 		struct rte_flow *flow __rte_unused,
 		struct ice_parser_list *parser_list,
+		uint32_t priority,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
 		struct rte_flow_error *error)
@@ -2285,7 +2309,7 @@ ice_parse_engine_validate(struct ice_adapter *ad,
 		if (parser_node->parser->parse_pattern_action(ad,
 				parser_node->parser->array,
 				parser_node->parser->array_len,
-				pattern, actions, NULL, error) < 0)
+				pattern, actions, priority, NULL, error) < 0)
 			continue;
 
 		engine = parser_node->parser->engine;
@@ -2335,7 +2359,7 @@ ice_flow_process_filter(struct rte_eth_dev *dev,
 		return ret;
 
 	*engine = ice_parse_engine(ad, flow, &pf->rss_parser_list,
-			pattern, actions, error);
+			attr->priority, pattern, actions, error);
 	if (*engine != NULL)
 		return 0;
 
@@ -2343,11 +2367,11 @@ ice_flow_process_filter(struct rte_eth_dev *dev,
 	case ICE_FLOW_CLASSIFY_STAGE_DISTRIBUTOR_ONLY:
 	case ICE_FLOW_CLASSIFY_STAGE_DISTRIBUTOR:
 		*engine = ice_parse_engine(ad, flow, &pf->dist_parser_list,
-				pattern, actions, error);
+				attr->priority, pattern, actions, error);
 		break;
 	case ICE_FLOW_CLASSIFY_STAGE_PERMISSION:
 		*engine = ice_parse_engine(ad, flow, &pf->perm_parser_list,
-				pattern, actions, error);
+				attr->priority, pattern, actions, error);
 		break;
 	default:
 		return -EINVAL;

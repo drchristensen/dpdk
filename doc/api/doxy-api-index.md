@@ -54,7 +54,6 @@ The public API headers are grouped by topics:
   [dpaa2_cmdif]        (@ref rte_pmd_dpaa2_cmdif.h),
   [dpaa2_qdma]         (@ref rte_pmd_dpaa2_qdma.h),
   [crypto_scheduler]   (@ref rte_cryptodev_scheduler.h),
-  [dlb]                (@ref rte_pmd_dlb.h),
   [dlb2]               (@ref rte_pmd_dlb2.h),
   [ifpga]              (@ref rte_pmd_ifpga.h)
 
@@ -73,6 +72,7 @@ The public API headers are grouped by topics:
 - **locks**:
   [atomic]             (@ref rte_atomic.h),
   [mcslock]            (@ref rte_mcslock.h),
+  [pflock]             (@ref rte_pflock.h),
   [rwlock]             (@ref rte_rwlock.h),
   [spinlock]           (@ref rte_spinlock.h),
   [ticketlock]         (@ref rte_ticketlock.h),

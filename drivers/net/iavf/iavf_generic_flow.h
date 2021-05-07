@@ -61,6 +61,7 @@
 #define IAVF_PFCP_S_FIELD	    (1ULL << 44)
 #define IAVF_PFCP_SEID		    (1ULL << 43)
 #define IAVF_ECPRI_PC_RTC_ID	    (1ULL << 42)
+#define IAVF_IP_PKID		    (1ULL << 41)
 
 /* input set */
 
@@ -84,6 +85,8 @@
 	(IAVF_PROT_IPV4_OUTER | IAVF_IP_PROTO)
 #define IAVF_INSET_IPV4_TTL \
 	(IAVF_PROT_IPV4_OUTER | IAVF_IP_TTL)
+#define IAVF_INSET_IPV4_ID \
+	(IAVF_PROT_IPV4_OUTER | IAVF_IP_PKID)
 #define IAVF_INSET_IPV6_SRC \
 	(IAVF_PROT_IPV6_OUTER | IAVF_IP_SRC)
 #define IAVF_INSET_IPV6_DST \
@@ -94,6 +97,8 @@
 	(IAVF_PROT_IPV6_OUTER | IAVF_IP_TTL)
 #define IAVF_INSET_IPV6_TC \
 	(IAVF_PROT_IPV6_OUTER | IAVF_IP_TOS)
+#define IAVF_INSET_IPV6_ID \
+	(IAVF_PROT_IPV6_OUTER | IAVF_IP_PKID)
 
 #define IAVF_INSET_TUN_IPV4_SRC \
 	(IAVF_PROT_IPV4_INNER | IAVF_IP_SRC)
@@ -203,6 +208,9 @@ extern enum rte_flow_item_type iavf_pattern_eth_qinq_ipv4_icmp[];
 extern enum rte_flow_item_type iavf_pattern_eth_ipv6[];
 extern enum rte_flow_item_type iavf_pattern_eth_vlan_ipv6[];
 extern enum rte_flow_item_type iavf_pattern_eth_qinq_ipv6[];
+extern enum rte_flow_item_type iavf_pattern_eth_ipv6_frag_ext[];
+extern enum rte_flow_item_type iavf_pattern_eth_vlan_ipv6_frag_ext[];
+extern enum rte_flow_item_type iavf_pattern_eth_qinq_ipv6_frag_ext[];
 extern enum rte_flow_item_type iavf_pattern_eth_ipv6_udp[];
 extern enum rte_flow_item_type iavf_pattern_eth_vlan_ipv6_udp[];
 extern enum rte_flow_item_type iavf_pattern_eth_qinq_ipv6_udp[];

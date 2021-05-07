@@ -357,7 +357,6 @@ ice_marker_ptype_tcam_handler(u32 sect_type, void *section, u32 index,
 	if (sect_type != ICE_SID_RXPARSER_MARKER_PTYPE)
 		return NULL;
 
-	/* cppcheck-suppress nullPointer */
 	if (index > ICE_MAX_MARKER_PTYPE_TCAMS_IN_BUF)
 		return NULL;
 
@@ -1243,7 +1242,7 @@ ice_download_pkg(struct ice_hw *hw, struct ice_seg *ice_seg)
 	status = ice_dwnld_cfg_bufs(hw, ice_buf_tbl->buf_array,
 				    LE32_TO_CPU(ice_buf_tbl->buf_count));
 
-	ice_cache_vlan_mode(hw);
+	ice_post_pkg_dwnld_vlan_mode_cfg(hw);
 
 	return status;
 }

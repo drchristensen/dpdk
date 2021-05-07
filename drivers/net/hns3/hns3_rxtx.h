@@ -20,7 +20,7 @@
 #define HNS3_DEFAULT_TX_RS_THRESH	32
 #define HNS3_TX_FAST_FREE_AHEAD		64
 
-#define HNS3_DEFAULT_RX_BURST		32
+#define HNS3_DEFAULT_RX_BURST		64
 #if (HNS3_DEFAULT_RX_BURST > 64)
 #error "PMD HNS3: HNS3_DEFAULT_RX_BURST must <= 64\n"
 #endif
@@ -104,11 +104,8 @@
 #define HNS3_RXD_LUM_B				9
 #define HNS3_RXD_CRCP_B				10
 #define HNS3_RXD_L3L4P_B			11
-#define HNS3_RXD_TSIND_S			12
-#define HNS3_RXD_TSIND_M			(0x7 << HNS3_RXD_TSIND_S)
 
 #define HNS3_RXD_TS_VLD_B			14
-#define HNS3_RXD_LKBK_B				15
 #define HNS3_RXD_GRO_SIZE_S			16
 #define HNS3_RXD_GRO_SIZE_M			(0x3fff << HNS3_RXD_GRO_SIZE_S)
 
@@ -292,22 +289,14 @@ struct hns3_rx_bd_errors_stats {
 };
 
 struct hns3_rx_queue {
-	void *io_base;
 	volatile void *io_head_reg;
-	struct hns3_adapter *hns;
 	struct hns3_ptype_table *ptype_tbl;
 	struct rte_mempool *mb_pool;
 	struct hns3_desc *rx_ring;
-	uint64_t rx_ring_phys_addr; /* RX ring DMA address */
-	const struct rte_memzone *mz;
 	struct hns3_entry *sw_ring;
-	struct rte_mbuf *pkt_first_seg;
-	struct rte_mbuf *pkt_last_seg;
 
-	uint16_t queue_id;
 	uint16_t port_id;
 	uint16_t nb_rx_desc;
-	uint16_t rx_buf_len;
 	/*
 	 * threshold for the number of BDs waited to passed to hardware. If the
 	 * number exceeds the threshold, driver will pass these BDs to hardware.
@@ -321,8 +310,6 @@ struct hns3_rx_queue {
 	/* 4 if DEV_RX_OFFLOAD_KEEP_CRC offload set, 0 otherwise */
 	uint8_t crc_len;
 
-	bool rx_deferred_start; /* don't start this queue in dev start */
-	bool configured;        /* indicate if rx queue has been configured */
 	/*
 	 * Indicate whether ignore the outer VLAN field in the Rx BD reported
 	 * by the Hardware. Because the outer VLAN is the PVID if the PVID is
@@ -334,23 +321,45 @@ struct hns3_rx_queue {
 	 * driver does not need to perform PVID-related operation in Rx. At this
 	 * point, the pvid_sw_discard_en will be false.
 	 */
-	bool pvid_sw_discard_en;
-	bool ptype_en;          /* indicate if the ptype field enabled */
-	bool enabled;           /* indicate if Rx queue has been enabled */
+	uint8_t pvid_sw_discard_en:1;
+	uint8_t ptype_en:1;          /* indicate if the ptype field enabled */
+
+	uint64_t mbuf_initializer; /* value to init mbufs used with vector rx */
+	/* offset_table: used for vector, to solve execute re-order problem */
+	uint8_t offset_table[HNS3_VECTOR_RX_OFFSET_TABLE_LEN + 1];
+
+	uint16_t bulk_mbuf_num; /* indicate bulk_mbuf valid nums */
 
 	struct hns3_rx_basic_stats basic_stats;
+
+	struct rte_mbuf *pkt_first_seg;
+	struct rte_mbuf *pkt_last_seg;
+
+	struct rte_mbuf *bulk_mbuf[HNS3_BULK_ALLOC_MBUF_NUM];
+
 	/* DFX statistics that driver does not need to discard packets */
 	struct hns3_rx_dfx_stats dfx_stats;
 	/* Error statistics that driver needs to discard packets */
 	struct hns3_rx_bd_errors_stats err_stats;
 
-	struct rte_mbuf *bulk_mbuf[HNS3_BULK_ALLOC_MBUF_NUM];
-	uint16_t bulk_mbuf_num;
-
-	/* offset_table: used for vector, to solve execute re-order problem */
-	uint8_t offset_table[HNS3_VECTOR_RX_OFFSET_TABLE_LEN + 1];
-	uint64_t mbuf_initializer; /* value to init mbufs used with vector rx */
 	struct rte_mbuf fake_mbuf; /* fake mbuf used with vector rx */
+
+
+	/*
+	 * The following fields are not accessed in the I/O path, so they are
+	 * placed at the end.
+	 */
+	void *io_base;
+	struct hns3_adapter *hns;
+	uint64_t rx_ring_phys_addr; /* RX ring DMA address */
+	const struct rte_memzone *mz;
+
+	uint16_t queue_id;
+	uint16_t rx_buf_len;
+
+	bool configured;        /* indicate if rx queue has been configured */
+	bool rx_deferred_start; /* don't start this queue in dev start */
+	bool enabled;           /* indicate if Rx queue has been enabled */
 };
 
 struct hns3_tx_basic_stats {
@@ -410,16 +419,10 @@ struct hns3_tx_dfx_stats {
 };
 
 struct hns3_tx_queue {
-	void *io_base;
 	volatile void *io_tail_reg;
-	struct hns3_adapter *hns;
 	struct hns3_desc *tx_ring;
-	uint64_t tx_ring_phys_addr; /* TX ring DMA address */
-	const struct rte_memzone *mz;
 	struct hns3_entry *sw_ring;
 
-	uint16_t queue_id;
-	uint16_t port_id;
 	uint16_t nb_tx_desc;
 	/*
 	 * index of next BD whose corresponding rte_mbuf can be released by
@@ -433,6 +436,64 @@ struct hns3_tx_queue {
 
 	/* threshold for free tx buffer if available BDs less than this value */
 	uint16_t tx_free_thresh;
+
+	/*
+	 * The minimum length of the packet supported by hardware in the Tx
+	 * direction.
+	 */
+	uint8_t min_tx_pkt_len;
+
+	uint8_t max_non_tso_bd_num; /* max BD number of one non-TSO packet */
+
+	/*
+	 * tso mode.
+	 * value range:
+	 *      HNS3_TSO_SW_CAL_PSEUDO_H_CSUM/HNS3_TSO_HW_CAL_PSEUDO_H_CSUM
+	 *
+	 *  - HNS3_TSO_SW_CAL_PSEUDO_H_CSUM
+	 *     In this mode, because of the hardware constraint, network driver
+	 *     software need erase the L4 len value of the TCP pseudo header
+	 *     and recalculate the TCP pseudo header checksum of packets that
+	 *     need TSO.
+	 *
+	 *  - HNS3_TSO_HW_CAL_PSEUDO_H_CSUM
+	 *     In this mode, hardware support recalculate the TCP pseudo header
+	 *     checksum of packets that need TSO, so network driver software
+	 *     not need to recalculate it.
+	 */
+	uint16_t tso_mode:1;
+	/*
+	 * udp checksum mode.
+	 * value range:
+	 *      HNS3_SPECIAL_PORT_HW_CKSUM_MODE/HNS3_SPECIAL_PORT_SW_CKSUM_MODE
+	 *
+	 *  - HNS3_SPECIAL_PORT_SW_CKSUM_MODE
+	 *     In this mode, HW can not do checksum for special UDP port like
+	 *     4789, 4790, 6081 for non-tunnel UDP packets and UDP tunnel
+	 *     packets without the PKT_TX_TUNEL_MASK in the mbuf. So, PMD need
+	 *     do the checksum for these packets to avoid a checksum error.
+	 *
+	 *  - HNS3_SPECIAL_PORT_HW_CKSUM_MODE
+	 *     In this mode, HW does not have the preceding problems and can
+	 *     directly calculate the checksum of these UDP packets.
+	 */
+	uint16_t udp_cksum_mode:1;
+
+	uint16_t simple_bd_enable:1;
+	uint16_t tx_push_enable:1;    /* check whether the tx push is enabled */
+	/*
+	 * Indicate whether add the vlan_tci of the mbuf to the inner VLAN field
+	 * of Tx BD. Because the outer VLAN will always be the PVID when the
+	 * PVID is set and for some version of hardware network engine whose
+	 * vlan mode is HNS3_SW_SHIFT_AND_DISCARD_MODE, such as kunpeng 920, the
+	 * PVID will overwrite the outer VLAN field of Tx BD. For the hardware
+	 * network engine whose vlan mode is HNS3_HW_SHIFT_AND_DISCARD_MODE,
+	 * such as kunpeng 930, if the PVID is set, the hardware will shift the
+	 * VLAN field automatically. So, PMD driver does not need to do
+	 * PVID-related operations in Tx. And pvid_sw_shift_en will be false at
+	 * this point.
+	 */
+	uint16_t pvid_sw_shift_en:1;
 
 	/*
 	 * For better performance in tx datapath, releasing mbuf in batches is
@@ -451,65 +512,25 @@ struct hns3_tx_queue {
 	uint16_t tx_rs_thresh;
 	struct rte_mbuf **free;
 
-	/*
-	 * tso mode.
-	 * value range:
-	 *      HNS3_TSO_SW_CAL_PSEUDO_H_CSUM/HNS3_TSO_HW_CAL_PSEUDO_H_CSUM
-	 *
-	 *  - HNS3_TSO_SW_CAL_PSEUDO_H_CSUM
-	 *     In this mode, because of the hardware constraint, network driver
-	 *     software need erase the L4 len value of the TCP pseudo header
-	 *     and recalculate the TCP pseudo header checksum of packets that
-	 *     need TSO.
-	 *
-	 *  - HNS3_TSO_HW_CAL_PSEUDO_H_CSUM
-	 *     In this mode, hardware support recalculate the TCP pseudo header
-	 *     checksum of packets that need TSO, so network driver software
-	 *     not need to recalculate it.
-	 */
-	uint8_t tso_mode;
-	/*
-	 * udp checksum mode.
-	 * value range:
-	 *      HNS3_SPECIAL_PORT_HW_CKSUM_MODE/HNS3_SPECIAL_PORT_SW_CKSUM_MODE
-	 *
-	 *  - HNS3_SPECIAL_PORT_SW_CKSUM_MODE
-	 *     In this mode, HW can not do checksum for special UDP port like
-	 *     4789, 4790, 6081 for non-tunnel UDP packets and UDP tunnel
-	 *     packets without the PKT_TX_TUNEL_MASK in the mbuf. So, PMD need
-	 *     do the checksum for these packets to avoid a checksum error.
-	 *
-	 *  - HNS3_SPECIAL_PORT_HW_CKSUM_MODE
-	 *     In this mode, HW does not have the preceding problems and can
-	 *     directly calculate the checksum of these UDP packets.
-	 */
-	uint8_t udp_cksum_mode;
-	/*
-	 * The minimum length of the packet supported by hardware in the Tx
-	 * direction.
-	 */
-	uint32_t min_tx_pkt_len;
-
-	uint8_t max_non_tso_bd_num; /* max BD number of one non-TSO packet */
-	bool tx_deferred_start; /* don't start this queue in dev start */
-	bool configured;        /* indicate if tx queue has been configured */
-	/*
-	 * Indicate whether add the vlan_tci of the mbuf to the inner VLAN field
-	 * of Tx BD. Because the outer VLAN will always be the PVID when the
-	 * PVID is set and for some version of hardware network engine whose
-	 * vlan mode is HNS3_SW_SHIFT_AND_DISCARD_MODE, such as kunpeng 920, the
-	 * PVID will overwrite the outer VLAN field of Tx BD. For the hardware
-	 * network engine whose vlan mode is HNS3_HW_SHIFT_AND_DISCARD_MODE,
-	 * such as kunpeng 930, if the PVID is set, the hardware will shift the
-	 * VLAN field automatically. So, PMD driver does not need to do
-	 * PVID-related operations in Tx. And pvid_sw_shift_en will be false at
-	 * this point.
-	 */
-	bool pvid_sw_shift_en;
-	bool enabled;           /* indicate if Tx queue has been enabled */
-
 	struct hns3_tx_basic_stats basic_stats;
 	struct hns3_tx_dfx_stats dfx_stats;
+
+
+	/*
+	 * The following fields are not accessed in the I/O path, so they are
+	 * placed at the end.
+	 */
+	void *io_base;
+	struct hns3_adapter *hns;
+	uint64_t tx_ring_phys_addr; /* TX ring DMA address */
+	const struct rte_memzone *mz;
+
+	uint16_t port_id;
+	uint16_t queue_id;
+
+	bool configured;        /* indicate if tx queue has been configured */
+	bool tx_deferred_start; /* don't start this queue in dev start */
+	bool enabled;           /* indicate if Tx queue has been enabled */
 };
 
 #define HNS3_GET_TX_QUEUE_PEND_BD_NUM(txq) \
@@ -541,19 +562,50 @@ enum hns3_cksum_status {
 extern uint64_t hns3_timestamp_rx_dynflag;
 extern int hns3_timestamp_dynfield_offset;
 
-static inline int
-hns3_handle_bdinfo(struct hns3_rx_queue *rxq, struct rte_mbuf *rxm,
-		   uint32_t bd_base_info, uint32_t l234_info,
-		   uint32_t *cksum_err)
+static inline void
+hns3_rx_set_cksum_flag(struct hns3_rx_queue *rxq,
+		       struct rte_mbuf *rxm,
+		       uint32_t l234_info)
 {
-#define L2E_TRUNC_ERR_FLAG	(BIT(HNS3_RXD_L2E_B) | \
-				 BIT(HNS3_RXD_TRUNCATE_B))
-#define CHECKSUM_ERR_FLAG	(BIT(HNS3_RXD_L3E_B) | \
+#define HNS3_RXD_CKSUM_ERR_MASK	(BIT(HNS3_RXD_L3E_B) | \
 				 BIT(HNS3_RXD_L4E_B) | \
 				 BIT(HNS3_RXD_OL3E_B) | \
 				 BIT(HNS3_RXD_OL4E_B))
 
-	uint32_t tmp = 0;
+	if (likely((l234_info & HNS3_RXD_CKSUM_ERR_MASK) == 0)) {
+		rxm->ol_flags |= (PKT_RX_IP_CKSUM_GOOD | PKT_RX_L4_CKSUM_GOOD);
+		return;
+	}
+
+	if (unlikely(l234_info & BIT(HNS3_RXD_L3E_B))) {
+		rxm->ol_flags |= PKT_RX_IP_CKSUM_BAD;
+		rxq->dfx_stats.l3_csum_errors++;
+	} else {
+		rxm->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
+	}
+
+	if (unlikely(l234_info & BIT(HNS3_RXD_L4E_B))) {
+		rxm->ol_flags |= PKT_RX_L4_CKSUM_BAD;
+		rxq->dfx_stats.l4_csum_errors++;
+	} else {
+		rxm->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+	}
+
+	if (unlikely(l234_info & BIT(HNS3_RXD_OL3E_B)))
+		rxq->dfx_stats.ol3_csum_errors++;
+
+	if (unlikely(l234_info & BIT(HNS3_RXD_OL4E_B))) {
+		rxm->ol_flags |= PKT_RX_OUTER_L4_CKSUM_BAD;
+		rxq->dfx_stats.ol4_csum_errors++;
+	}
+}
+
+static inline int
+hns3_handle_bdinfo(struct hns3_rx_queue *rxq, struct rte_mbuf *rxm,
+		   uint32_t bd_base_info, uint32_t l234_info)
+{
+#define L2E_TRUNC_ERR_FLAG	(BIT(HNS3_RXD_L2E_B) | \
+				 BIT(HNS3_RXD_TRUNCATE_B))
 
 	/*
 	 * If packet len bigger than mtu when recv with no-scattered algorithm,
@@ -572,62 +624,10 @@ hns3_handle_bdinfo(struct hns3_rx_queue *rxq, struct rte_mbuf *rxm,
 		return -EINVAL;
 	}
 
-	if (bd_base_info & BIT(HNS3_RXD_L3L4P_B)) {
-		if (likely((l234_info & CHECKSUM_ERR_FLAG) == 0)) {
-			*cksum_err = 0;
-			return 0;
-		}
-
-		if (unlikely(l234_info & BIT(HNS3_RXD_L3E_B))) {
-			rxm->ol_flags |= PKT_RX_IP_CKSUM_BAD;
-			rxq->dfx_stats.l3_csum_errors++;
-			tmp |= HNS3_L3_CKSUM_ERR;
-		}
-
-		if (unlikely(l234_info & BIT(HNS3_RXD_L4E_B))) {
-			rxm->ol_flags |= PKT_RX_L4_CKSUM_BAD;
-			rxq->dfx_stats.l4_csum_errors++;
-			tmp |= HNS3_L4_CKSUM_ERR;
-		}
-
-		if (unlikely(l234_info & BIT(HNS3_RXD_OL3E_B))) {
-			rxq->dfx_stats.ol3_csum_errors++;
-			tmp |= HNS3_OUTER_L3_CKSUM_ERR;
-		}
-
-		if (unlikely(l234_info & BIT(HNS3_RXD_OL4E_B))) {
-			rxm->ol_flags |= PKT_RX_OUTER_L4_CKSUM_BAD;
-			rxq->dfx_stats.ol4_csum_errors++;
-			tmp |= HNS3_OUTER_L4_CKSUM_ERR;
-		}
-	}
-	*cksum_err = tmp;
+	if (bd_base_info & BIT(HNS3_RXD_L3L4P_B))
+		hns3_rx_set_cksum_flag(rxq, rxm, l234_info);
 
 	return 0;
-}
-
-static inline void
-hns3_rx_set_cksum_flag(struct rte_mbuf *rxm, const uint64_t packet_type,
-		       const uint32_t cksum_err)
-{
-	if (unlikely((packet_type & RTE_PTYPE_TUNNEL_MASK))) {
-		if (likely(packet_type & RTE_PTYPE_INNER_L3_MASK) &&
-		    (cksum_err & HNS3_L3_CKSUM_ERR) == 0)
-			rxm->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
-		if (likely(packet_type & RTE_PTYPE_INNER_L4_MASK) &&
-		    (cksum_err & HNS3_L4_CKSUM_ERR) == 0)
-			rxm->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
-		if (likely(packet_type & RTE_PTYPE_L4_MASK) &&
-		    (cksum_err & HNS3_OUTER_L4_CKSUM_ERR) == 0)
-			rxm->ol_flags |= PKT_RX_OUTER_L4_CKSUM_GOOD;
-	} else {
-		if (likely(packet_type & RTE_PTYPE_L3_MASK) &&
-		    (cksum_err & HNS3_L3_CKSUM_ERR) == 0)
-			rxm->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
-		if (likely(packet_type & RTE_PTYPE_L4_MASK) &&
-		    (cksum_err & HNS3_L4_CKSUM_ERR) == 0)
-			rxm->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
-	}
 }
 
 static inline uint32_t
@@ -635,8 +635,8 @@ hns3_rx_calc_ptype(struct hns3_rx_queue *rxq, const uint32_t l234_info,
 		   const uint32_t ol_info)
 {
 	const struct hns3_ptype_table * const ptype_tbl = rxq->ptype_tbl;
-	uint32_t l2id, l3id, l4id;
-	uint32_t ol3id, ol4id, ol2id;
+	uint32_t ol3id, ol4id;
+	uint32_t l3id, l4id;
 	uint32_t ptype;
 
 	if (rxq->ptype_en) {
@@ -647,20 +647,16 @@ hns3_rx_calc_ptype(struct hns3_rx_queue *rxq, const uint32_t l234_info,
 
 	ol4id = hns3_get_field(ol_info, HNS3_RXD_OL4ID_M, HNS3_RXD_OL4ID_S);
 	ol3id = hns3_get_field(ol_info, HNS3_RXD_OL3ID_M, HNS3_RXD_OL3ID_S);
-	ol2id = hns3_get_field(ol_info, HNS3_RXD_OVLAN_M, HNS3_RXD_OVLAN_S);
-	l2id = hns3_get_field(l234_info, HNS3_RXD_VLAN_M, HNS3_RXD_VLAN_S);
 	l3id = hns3_get_field(l234_info, HNS3_RXD_L3ID_M, HNS3_RXD_L3ID_S);
 	l4id = hns3_get_field(l234_info, HNS3_RXD_L4ID_M, HNS3_RXD_L4ID_S);
 
 	if (unlikely(ptype_tbl->ol4table[ol4id]))
-		return ptype_tbl->inner_l2table[l2id] |
-			ptype_tbl->inner_l3table[l3id] |
+		return ptype_tbl->inner_l3table[l3id] |
 			ptype_tbl->inner_l4table[l4id] |
 			ptype_tbl->ol3table[ol3id] |
-			ptype_tbl->ol4table[ol4id] | ptype_tbl->ol2table[ol2id];
+			ptype_tbl->ol4table[ol4id];
 	else
-		return ptype_tbl->l2l3table[l2id][l3id] |
-			ptype_tbl->l4table[l4id];
+		return ptype_tbl->l3table[l3id] | ptype_tbl->l4table[l4id];
 }
 
 void hns3_dev_rx_queue_release(void *queue);
@@ -687,8 +683,8 @@ int hns3_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 int hns3_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 int hns3_dev_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id);
 int hns3_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id);
-uint16_t hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
-			uint16_t nb_pkts);
+uint16_t hns3_recv_pkts_simple(void *rx_queue, struct rte_mbuf **rx_pkts,
+				uint16_t nb_pkts);
 uint16_t hns3_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 				  uint16_t nb_pkts);
 uint16_t hns3_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,

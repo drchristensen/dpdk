@@ -185,10 +185,13 @@ enum ice_flow_seg_hdr {
 	ICE_FLOW_SEG_HDR_VXLAN		= 0x02000000,
 	ICE_FLOW_SEG_HDR_ECPRI_TP0	= 0x04000000,
 	ICE_FLOW_SEG_HDR_UDP_ECPRI_TP0	= 0x08000000,
+	ICE_FLOW_SEG_HDR_L2TPV2		= 0x10000000,
+	ICE_FLOW_SEG_HDR_PPP		= 0x20000000,
 	/* The following is an additive bit for ICE_FLOW_SEG_HDR_IPV4 and
-	 * ICE_FLOW_SEG_HDR_IPV6 which include the IPV4 other PTYPEs
+	 * ICE_FLOW_SEG_HDR_IPV6.
 	 */
-	ICE_FLOW_SEG_HDR_IPV_OTHER	= 0x20000000,
+	ICE_FLOW_SEG_HDR_IPV_FRAG	= 0x40000000,
+	ICE_FLOW_SEG_HDR_IPV_OTHER	= 0x80000000,
 };
 
 /* These segements all have the same PTYPES, but are otherwise distinguished by
@@ -225,6 +228,8 @@ enum ice_flow_field {
 	ICE_FLOW_FIELD_IDX_IPV4_DA,
 	ICE_FLOW_FIELD_IDX_IPV6_SA,
 	ICE_FLOW_FIELD_IDX_IPV6_DA,
+	ICE_FLOW_FIELD_IDX_IPV4_ID,
+	ICE_FLOW_FIELD_IDX_IPV6_ID,
 	ICE_FLOW_FIELD_IDX_IPV6_PRE32_SA,
 	ICE_FLOW_FIELD_IDX_IPV6_PRE32_DA,
 	ICE_FLOW_FIELD_IDX_IPV6_PRE48_SA,
@@ -553,6 +558,8 @@ ice_flow_set_fld_prefix(struct ice_flow_seg_info *seg, enum ice_flow_field fld,
 void
 ice_flow_add_fld_raw(struct ice_flow_seg_info *seg, u16 off, u8 len,
 		     u16 val_loc, u16 mask_loc);
+enum ice_status ice_flow_rem_vsi_prof(struct ice_hw *hw, enum ice_block blk,
+				      u16 vsi_handle, u64 prof_id);
 void ice_rem_vsi_rss_list(struct ice_hw *hw, u16 vsi_handle);
 enum ice_status ice_replay_rss_cfg(struct ice_hw *hw, u16 vsi_handle);
 enum ice_status

@@ -179,8 +179,16 @@ Features supported
 * IPv6
 * ESP
 * Tunnel mode
+* Transport mode(IPv4)
 * ESN
 * Anti-replay
+* UDP Encapsulation
 * AES-128/192/256-GCM
 * AES-128/192/256-CBC-SHA1-HMAC
 * AES-128/192/256-CBC-SHA256-128-HMAC
+
+Limitations
+-----------
+
+Multiple lcores may not operate on the same crypto queue pair. The lcore that
+enqueues to a queue pair is the one that must dequeue from it.

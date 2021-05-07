@@ -40,6 +40,8 @@
 #include "mlx5_common_os.h"
 #include "mlx5_utils.h"
 #include "mlx5_rxtx.h"
+#include "mlx5_rx.h"
+#include "mlx5_tx.h"
 #include "mlx5_autoconf.h"
 #include "mlx5_mr.h"
 #include "mlx5_flow.h"
@@ -1095,7 +1097,8 @@ err_secondary:
 	}
 	if (devx_port.comp_mask & MLX5DV_DEVX_PORT_VPORT) {
 		priv->vport_id = devx_port.vport_num;
-	} else if (spawn->pf_bond >= 0) {
+	} else if (spawn->pf_bond >= 0 &&
+		   (switch_info->representor || switch_info->master)) {
 		DRV_LOG(ERR, "can't deduce vport index for port %d"
 			     " on bonding device %s",
 			     spawn->phys_port,
@@ -1253,7 +1256,9 @@ err_secondary:
 				"required for coalescing is %d bytes",
 				config->hca_attr.lro_min_mss_size);
 		}
-#if defined(HAVE_MLX5DV_DR) && defined(HAVE_MLX5_DR_CREATE_ACTION_FLOW_METER)
+#if defined(HAVE_MLX5DV_DR) && \
+	(defined(HAVE_MLX5_DR_CREATE_ACTION_FLOW_METER) || \
+	 defined(HAVE_MLX5_DR_CREATE_ACTION_ASO))
 		if (config->hca_attr.qos.sup &&
 		    config->hca_attr.qos.flow_meter_old &&
 		    config->dv_flow_en) {
@@ -1288,6 +1293,23 @@ err_secondary:
 					priv->mtr_color_reg);
 			}
 		}
+		if (config->hca_attr.qos.sup &&
+			config->hca_attr.qos.flow_meter_aso_sup) {
+			uint32_t log_obj_size =
+				rte_log2_u32(MLX5_ASO_MTRS_PER_POOL >> 1);
+			if (log_obj_size >=
+			config->hca_attr.qos.log_meter_aso_granularity &&
+			log_obj_size <=
+			config->hca_attr.qos.log_meter_aso_max_alloc)
+				sh->meter_aso_en = 1;
+		}
+		if (priv->mtr_en) {
+			err = mlx5_aso_flow_mtrs_mng_init(priv->sh);
+			if (err) {
+				err = -err;
+				goto error;
+			}
+		}
 #endif
 #ifdef HAVE_MLX5_DR_CREATE_ACTION_ASO
 		if (config->hca_attr.flow_hit_aso &&
@@ -1301,6 +1323,19 @@ err_secondary:
 			DRV_LOG(DEBUG, "Flow Hit ASO is supported.");
 		}
 #endif /* HAVE_MLX5_DR_CREATE_ACTION_ASO */
+#if defined(HAVE_MLX5_DR_CREATE_ACTION_ASO) && \
+	defined(HAVE_MLX5_DR_ACTION_ASO_CT)
+		if (config->hca_attr.ct_offload &&
+		    priv->mtr_color_reg == REG_C_3) {
+			err = mlx5_flow_aso_ct_mng_init(sh);
+			if (err) {
+				err = -err;
+				goto error;
+			}
+			DRV_LOG(DEBUG, "CT ASO is supported.");
+			sh->ct_aso_en = 1;
+		}
+#endif /* HAVE_MLX5_DR_CREATE_ACTION_ASO && HAVE_MLX5_DR_ACTION_ASO_CT */
 #if defined(HAVE_MLX5DV_DR) && defined(HAVE_MLX5_DR_CREATE_ACTION_FLOW_SAMPLE)
 		if (config->hca_attr.log_max_ft_sampler_num > 0  &&
 		    config->dv_flow_en) {

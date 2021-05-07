@@ -5,11 +5,10 @@
 #ifndef RTE_PMD_MLX5_FLOW_H_
 #define RTE_PMD_MLX5_FLOW_H_
 
-#include <netinet/in.h>
-#include <sys/queue.h>
 #include <stdalign.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/queue.h>
 
 #include <rte_alarm.h>
 #include <rte_mtr.h>
@@ -37,14 +36,37 @@ enum mlx5_rte_flow_action_type {
 	MLX5_RTE_FLOW_ACTION_TYPE_DEFAULT_MISS,
 	MLX5_RTE_FLOW_ACTION_TYPE_TUNNEL_SET,
 	MLX5_RTE_FLOW_ACTION_TYPE_AGE,
+	MLX5_RTE_FLOW_ACTION_TYPE_COUNT,
+	MLX5_RTE_FLOW_ACTION_TYPE_JUMP,
 };
 
-#define MLX5_SHARED_ACTION_TYPE_OFFSET 30
+#define MLX5_INDIRECT_ACTION_TYPE_OFFSET 30
 
 enum {
-	MLX5_SHARED_ACTION_TYPE_RSS,
-	MLX5_SHARED_ACTION_TYPE_AGE,
+	MLX5_INDIRECT_ACTION_TYPE_RSS,
+	MLX5_INDIRECT_ACTION_TYPE_AGE,
+	MLX5_INDIRECT_ACTION_TYPE_COUNT,
+	MLX5_INDIRECT_ACTION_TYPE_CT,
 };
+
+/* Now, the maximal ports will be supported is 256, action number is 4M. */
+#define MLX5_INDIRECT_ACT_CT_MAX_PORT 0x100
+
+#define MLX5_INDIRECT_ACT_CT_OWNER_SHIFT 22
+#define MLX5_INDIRECT_ACT_CT_OWNER_MASK (MLX5_INDIRECT_ACT_CT_MAX_PORT - 1)
+
+/* 30-31: type, 22-29: owner port, 0-21: index. */
+#define MLX5_INDIRECT_ACT_CT_GEN_IDX(owner, index) \
+	((MLX5_INDIRECT_ACTION_TYPE_CT << MLX5_INDIRECT_ACTION_TYPE_OFFSET) | \
+	 (((owner) & MLX5_INDIRECT_ACT_CT_OWNER_MASK) << \
+	  MLX5_INDIRECT_ACT_CT_OWNER_SHIFT) | (index))
+
+#define MLX5_INDIRECT_ACT_CT_GET_OWNER(index) \
+	(((index) >> MLX5_INDIRECT_ACT_CT_OWNER_SHIFT) & \
+	 MLX5_INDIRECT_ACT_CT_OWNER_MASK)
+
+#define MLX5_INDIRECT_ACT_CT_GET_IDX(index) \
+	((index) & ((1 << MLX5_INDIRECT_ACT_CT_OWNER_SHIFT) - 1))
 
 /* Matches on selected register. */
 struct mlx5_rte_flow_item_tag {
@@ -55,6 +77,8 @@ struct mlx5_rte_flow_item_tag {
 /* Modify selected register. */
 struct mlx5_rte_flow_action_set_tag {
 	enum modify_reg id;
+	uint8_t offset;
+	uint8_t length;
 	uint32_t data;
 };
 
@@ -79,8 +103,9 @@ enum mlx5_feature_name {
 	MLX5_APP_TAG,
 	MLX5_COPY_MARK,
 	MLX5_MTR_COLOR,
-	MLX5_MTR_SFX,
+	MLX5_MTR_ID,
 	MLX5_ASO_FLOW_HIT,
+	MLX5_ASO_CONNTRACK,
 };
 
 /* Default queue number. */
@@ -141,6 +166,12 @@ enum mlx5_feature_name {
 /* Pattern tunnel Layer bits (continued). */
 #define MLX5_FLOW_LAYER_GENEVE_OPT (UINT64_C(1) << 32)
 #define MLX5_FLOW_LAYER_GTP_PSC (UINT64_C(1) << 33)
+
+/* INTEGRITY item bit */
+#define MLX5_FLOW_ITEM_INTEGRITY (UINT64_C(1) << 34)
+
+/* Conntrack item. */
+#define MLX5_FLOW_LAYER_ASO_CT (UINT64_C(1) << 35)
 
 /* Outer Masks. */
 #define MLX5_FLOW_LAYER_OUTER_L3 \
@@ -220,16 +251,18 @@ enum mlx5_feature_name {
 #define MLX5_FLOW_ACTION_TUNNEL_SET (1ull << 37)
 #define MLX5_FLOW_ACTION_TUNNEL_MATCH (1ull << 38)
 #define MLX5_FLOW_ACTION_MODIFY_FIELD (1ull << 39)
+#define MLX5_FLOW_ACTION_METER_WITH_TERMINATED_POLICY (1ull << 40)
+#define MLX5_FLOW_ACTION_CT (1ull << 41)
 
 #define MLX5_FLOW_FATE_ACTIONS \
 	(MLX5_FLOW_ACTION_DROP | MLX5_FLOW_ACTION_QUEUE | \
 	 MLX5_FLOW_ACTION_RSS | MLX5_FLOW_ACTION_JUMP | \
-	 MLX5_FLOW_ACTION_DEFAULT_MISS)
+	 MLX5_FLOW_ACTION_DEFAULT_MISS | \
+	 MLX5_FLOW_ACTION_METER_WITH_TERMINATED_POLICY)
 
 #define MLX5_FLOW_FATE_ESWITCH_ACTIONS \
 	(MLX5_FLOW_ACTION_DROP | MLX5_FLOW_ACTION_PORT_ID | \
-	 MLX5_FLOW_ACTION_JUMP)
-
+	 MLX5_FLOW_ACTION_JUMP | MLX5_FLOW_ACTION_METER_WITH_TERMINATED_POLICY)
 
 #define MLX5_FLOW_MODIFY_HDR_ACTIONS (MLX5_FLOW_ACTION_SET_IPV4_SRC | \
 				      MLX5_FLOW_ACTION_SET_IPV4_DST | \
@@ -398,6 +431,13 @@ enum mlx5_feature_name {
 /* Maximum number of fields to modify in MODIFY_FIELD */
 #define MLX5_ACT_MAX_MOD_FIELDS 5
 
+/* Syndrome bits definition for connection tracking. */
+#define MLX5_CT_SYNDROME_VALID		(0x0 << 6)
+#define MLX5_CT_SYNDROME_INVALID	(0x1 << 6)
+#define MLX5_CT_SYNDROME_TRAP		(0x2 << 6)
+#define MLX5_CT_SYNDROME_STATE_CHANGE	(0x1 << 1)
+#define MLX5_CT_SYNDROME_BAD_PACKET	(0x1 << 0)
+
 enum mlx5_flow_drv_type {
 	MLX5_FLOW_TYPE_MIN,
 	MLX5_FLOW_TYPE_DV,
@@ -563,8 +603,9 @@ struct mlx5_flow_tbl_data_entry {
 	uint32_t is_egress:1; /**< Egress table. */
 	uint32_t is_transfer:1; /**< Transfer table. */
 	uint32_t dummy:1; /**<  DR table. */
-	uint32_t reserve:27; /**< Reserved to future using. */
-	uint32_t table_id; /**< Table ID. */
+	uint32_t id:22; /**< Table ID. */
+	uint32_t reserve:5; /**< Reserved to future using. */
+	uint32_t level; /**< Table level. */
 };
 
 /* Sub rdma-core actions list. */
@@ -655,7 +696,8 @@ struct mlx5_flow_handle {
 	uint64_t layers;
 	/**< Bit-fields of present layers, see MLX5_FLOW_LAYER_*. */
 	void *drv_flow; /**< pointer to driver flow object. */
-	uint32_t split_flow_id:28; /**< Sub flow unique match flow id. */
+	uint32_t split_flow_id:27; /**< Sub flow unique match flow id. */
+	uint32_t is_meter_flow_id:1; /**< Indate if flow_id is for meter. */
 	uint32_t mark:1; /**< Metadate rxq mark flag. */
 	uint32_t fate_action:3; /**< Fate action type. */
 	union {
@@ -687,16 +729,10 @@ struct mlx5_flow_handle {
 #define MLX5_FLOW_HANDLE_VERBS_SIZE (sizeof(struct mlx5_flow_handle))
 #endif
 
-/*
- * Max number of actions per DV flow.
- * See CREATE_FLOW_MAX_FLOW_ACTIONS_SUPPORTED
- * in rdma-core file providers/mlx5/verbs.c.
- */
-#define MLX5_DV_MAX_NUMBER_OF_ACTIONS 8
-
 /** Device flow structure only for DV flow creation. */
 struct mlx5_flow_dv_workspace {
 	uint32_t group; /**< The group index. */
+	uint32_t table_id; /**< Flow table identifier. */
 	uint8_t transfer; /**< 1 if the flow is E-Switch flow. */
 	int actions_n; /**< number of actions. */
 	void *actions[MLX5_DV_MAX_NUMBER_OF_ACTIONS]; /**< Action list. */
@@ -824,136 +860,20 @@ struct mlx5_flow {
 #define MLX5_FLOW_METER_DISABLE 0
 #define MLX5_FLOW_METER_ENABLE 1
 
+#define MLX5_ASO_WQE_CQE_RESPONSE_DELAY 10u
+#define MLX5_MTR_POLL_WQE_CQE_TIMES 100000u
+
+#define MLX5_CT_POLL_WQE_CQE_TIMES MLX5_MTR_POLL_WQE_CQE_TIMES
+
 #define MLX5_MAN_WIDTH 8
-/* Modify this value if enum rte_mtr_color changes. */
-#define RTE_MTR_DROPPED RTE_COLORS
-
-/* Meter policer statistics */
-struct mlx5_flow_policer_stats {
-	uint32_t cnt[RTE_COLORS + 1];
-	/**< Color counter, extra for drop. */
-	uint64_t stats_mask;
-	/**< Statistics mask for the colors. */
-};
-
-/* Meter table structure. */
-struct mlx5_meter_domain_info {
-	struct mlx5_flow_tbl_resource *tbl;
-	/**< Meter table. */
-	struct mlx5_flow_tbl_resource *sfx_tbl;
-	/**< Meter suffix table. */
-	void *any_matcher;
-	/**< Meter color not match default criteria. */
-	void *color_matcher;
-	/**< Meter color match criteria. */
-	void *jump_actn;
-	/**< Meter match action. */
-	void *policer_rules[RTE_MTR_DROPPED + 1];
-	/**< Meter policer for the match. */
-};
-
-/* Meter table set for TX RX FDB. */
-struct mlx5_meter_domains_infos {
-	uint32_t ref_cnt;
-	/**< Table user count. */
-	struct mlx5_meter_domain_info egress;
-	/**< TX meter table. */
-	struct mlx5_meter_domain_info ingress;
-	/**< RX meter table. */
-	struct mlx5_meter_domain_info transfer;
-	/**< FDB meter table. */
-	void *drop_actn;
-	/**< Drop action as not matched. */
-	void *count_actns[RTE_MTR_DROPPED + 1];
-	/**< Counters for match and unmatched statistics. */
-	uint32_t fmp[MLX5_ST_SZ_DW(flow_meter_parameters)];
-	/**< Flow meter parameter. */
-	size_t fmp_size;
-	/**< Flow meter parameter size. */
-	void *meter_action;
-	/**< Flow meter action. */
-};
-
-/* Meter parameter structure. */
-struct mlx5_flow_meter {
-	TAILQ_ENTRY(mlx5_flow_meter) next;
+/* Legacy Meter parameter structure. */
+struct mlx5_legacy_flow_meter {
+	struct mlx5_flow_meter_info fm;
+	/* Must be the first in struct. */
+	TAILQ_ENTRY(mlx5_legacy_flow_meter) next;
 	/**< Pointer to the next flow meter structure. */
-	uint32_t idx; /* Index to meter object. */
-	uint32_t meter_id;
-	/**< Meter id. */
-	struct mlx5_flow_meter_profile *profile;
-	/**< Meter profile parameters. */
-
-	rte_spinlock_t sl; /**< Meter action spinlock. */
-
-	/** Policer actions (per meter output color). */
-	enum rte_mtr_policer_action action[RTE_COLORS];
-
-	/** Set of stats counters to be enabled.
-	 * @see enum rte_mtr_stats_type
-	 */
-	uint64_t stats_mask;
-
-	/**< Rule applies to ingress traffic. */
-	uint32_t ingress:1;
-
-	/**< Rule applies to egress traffic. */
-	uint32_t egress:1;
-	/**
-	 * Instead of simply matching the properties of traffic as it would
-	 * appear on a given DPDK port ID, enabling this attribute transfers
-	 * a flow rule to the lowest possible level of any device endpoints
-	 * found in the pattern.
-	 *
-	 * When supported, this effectively enables an application to
-	 * re-route traffic not necessarily intended for it (e.g. coming
-	 * from or addressed to different physical ports, VFs or
-	 * applications) at the device level.
-	 *
-	 * It complements the behavior of some pattern items such as
-	 * RTE_FLOW_ITEM_TYPE_PHY_PORT and is meaningless without them.
-	 *
-	 * When transferring flow rules, ingress and egress attributes keep
-	 * their original meaning, as if processing traffic emitted or
-	 * received by the application.
-	 */
-	uint32_t transfer:1;
-	struct mlx5_meter_domains_infos *mfts;
-	/**< Flow table created for this meter. */
-	struct mlx5_flow_policer_stats policer_stats;
-	/**< Meter policer statistics. */
-	uint32_t ref_cnt;
-	/**< Use count. */
-	uint32_t active_state:1;
-	/**< Meter state. */
-	uint32_t shared:1;
-	/**< Meter shared or not. */
-};
-
-/* RFC2697 parameter structure. */
-struct mlx5_flow_meter_srtcm_rfc2697_prm {
-	/* green_saturation_value = cbs_mantissa * 2^cbs_exponent */
-	uint32_t cbs_exponent:5;
-	uint32_t cbs_mantissa:8;
-	/* cir = 8G * cir_mantissa * 1/(2^cir_exponent) Bytes/Sec */
-	uint32_t cir_exponent:5;
-	uint32_t cir_mantissa:8;
-	/* yellow _saturation_value = ebs_mantissa * 2^ebs_exponent */
-	uint32_t ebs_exponent:5;
-	uint32_t ebs_mantissa:8;
-};
-
-/* Flow meter profile structure. */
-struct mlx5_flow_meter_profile {
-	TAILQ_ENTRY(mlx5_flow_meter_profile) next;
-	/**< Pointer to the next flow meter structure. */
-	uint32_t meter_profile_id; /**< Profile id. */
-	struct rte_mtr_meter_profile profile; /**< Profile detail. */
-	union {
-		struct mlx5_flow_meter_srtcm_rfc2697_prm srtcm_prm;
-		/**< srtcm_rfc2697 struct. */
-	};
-	uint32_t ref_cnt; /**< Use count. */
+	uint32_t idx;
+	/* Index to meter object. */
 };
 
 #define MLX5_MAX_TUNNELS 256
@@ -1079,12 +999,16 @@ struct rte_flow {
 	/**< Device flow handles that are part of the flow. */
 	uint32_t drv_type:2; /**< Driver type. */
 	uint32_t tunnel:1;
-	uint32_t meter:16; /**< Holds flow meter id. */
+	uint32_t meter:24; /**< Holds flow meter id. */
+	uint32_t indirect_type:2; /**< Indirect action type. */
 	uint32_t rix_mreg_copy;
 	/**< Index to metadata register copy table resource. */
 	uint32_t counter; /**< Holds flow counter. */
 	uint32_t tunnel_id;  /**< Tunnel id */
-	uint32_t age; /**< Holds ASO age bit index. */
+	union {
+		uint32_t age; /**< Holds ASO age bit index. */
+		uint32_t ct; /**< Holds ASO CT index. */
+	};
 	uint32_t geneve_tlv_option; /**< Holds Geneve TLV option id. > */
 } __rte_packed;
 
@@ -1128,6 +1052,14 @@ struct rte_flow {
 	(MLX5_RSS_HASH_IPV6 | IBV_RX_HASH_DST_PORT_TCP)
 #define MLX5_RSS_HASH_NONE 0ULL
 
+
+/* extract next protocol type from Ethernet & VLAN headers */
+#define MLX5_ETHER_TYPE_FROM_HEADER(_s, _m, _itm, _prt) do { \
+	(_prt) = ((const struct _s *)(_itm)->mask)->_m;       \
+	(_prt) &= ((const struct _s *)(_itm)->spec)->_m;      \
+	(_prt) = rte_be_to_cpu_16((_prt));                    \
+} while (0)
+
 /* array of valid combinations of RX Hash fields for RSS */
 static const uint64_t mlx5_rss_hash_fields[] = {
 	MLX5_RSS_HASH_IPV4,
@@ -1152,7 +1084,7 @@ struct mlx5_shared_action_rss {
 	rte_spinlock_t action_rss_sl; /**< Shared RSS action spinlock. */
 };
 
-struct rte_flow_shared_action {
+struct rte_flow_action_handle {
 	uint32_t id;
 };
 
@@ -1166,6 +1098,9 @@ struct mlx5_flow_workspace {
 	struct mlx5_flow_rss_desc rss_desc;
 	uint32_t rssq_num; /* Allocated queue num in rss_desc. */
 	uint32_t flow_idx; /* Intermediate device flow index. */
+	struct mlx5_flow_meter_info *fm; /* Pointer to the meter in flow. */
+	uint32_t skip_matcher_reg:1;
+	/* Indicates if need to skip matcher register in translate. */
 };
 
 struct mlx5_flow_split_info {
@@ -1175,6 +1110,7 @@ struct mlx5_flow_split_info {
 	uint32_t flow_idx; /**< This memory pool index to the flow. */
 	uint32_t prefix_mark; /**< Prefix subflow mark flag. */
 	uint64_t prefix_layers; /**< Prefix subflow layers. */
+	uint32_t table_id; /**< Flow table identifier. */
 };
 
 typedef int (*mlx5_flow_validate_t)(struct rte_eth_dev *dev,
@@ -1205,19 +1141,22 @@ typedef int (*mlx5_flow_query_t)(struct rte_eth_dev *dev,
 				 const struct rte_flow_action *actions,
 				 void *data,
 				 struct rte_flow_error *error);
-typedef struct mlx5_meter_domains_infos *(*mlx5_flow_create_mtr_tbls_t)
-					    (struct rte_eth_dev *dev,
-					     const struct mlx5_flow_meter *fm);
-typedef int (*mlx5_flow_destroy_mtr_tbls_t)(struct rte_eth_dev *dev,
-					struct mlx5_meter_domains_infos *tbls);
-typedef int (*mlx5_flow_create_policer_rules_t)
-					(struct rte_eth_dev *dev,
-					 struct mlx5_flow_meter *fm,
-					 const struct rte_flow_attr *attr);
-typedef int (*mlx5_flow_destroy_policer_rules_t)
-					(struct rte_eth_dev *dev,
-					 const struct mlx5_flow_meter *fm,
-					 const struct rte_flow_attr *attr);
+typedef int (*mlx5_flow_create_mtr_tbls_t)(struct rte_eth_dev *dev,
+					struct mlx5_flow_meter_info *fm,
+					uint32_t mtr_idx,
+					uint8_t domain_bitmap);
+typedef void (*mlx5_flow_destroy_mtr_tbls_t)(struct rte_eth_dev *dev,
+				struct mlx5_flow_meter_info *fm);
+typedef void (*mlx5_flow_destroy_mtr_drop_tbls_t)(struct rte_eth_dev *dev);
+typedef struct mlx5_flow_meter_sub_policy *
+	(*mlx5_flow_meter_sub_policy_rss_prepare_t)
+		(struct rte_eth_dev *dev,
+		struct mlx5_flow_meter_policy *mtr_policy,
+		struct mlx5_flow_rss_desc *rss_desc[MLX5_MTR_RTE_COLORS]);
+typedef uint32_t (*mlx5_flow_mtr_alloc_t)
+					    (struct rte_eth_dev *dev);
+typedef void (*mlx5_flow_mtr_free_t)(struct rte_eth_dev *dev,
+						uint32_t mtr_idx);
 typedef uint32_t (*mlx5_flow_counter_alloc_t)
 				   (struct rte_eth_dev *dev);
 typedef void (*mlx5_flow_counter_free_t)(struct rte_eth_dev *dev,
@@ -1233,32 +1172,58 @@ typedef int (*mlx5_flow_get_aged_flows_t)
 					 struct rte_flow_error *error);
 typedef int (*mlx5_flow_action_validate_t)
 				(struct rte_eth_dev *dev,
-				 const struct rte_flow_shared_action_conf *conf,
+				 const struct rte_flow_indir_action_conf *conf,
 				 const struct rte_flow_action *action,
 				 struct rte_flow_error *error);
-typedef struct rte_flow_shared_action *(*mlx5_flow_action_create_t)
+typedef struct rte_flow_action_handle *(*mlx5_flow_action_create_t)
 				(struct rte_eth_dev *dev,
-				 const struct rte_flow_shared_action_conf *conf,
+				 const struct rte_flow_indir_action_conf *conf,
 				 const struct rte_flow_action *action,
 				 struct rte_flow_error *error);
 typedef int (*mlx5_flow_action_destroy_t)
 				(struct rte_eth_dev *dev,
-				 struct rte_flow_shared_action *action,
+				 struct rte_flow_action_handle *action,
 				 struct rte_flow_error *error);
 typedef int (*mlx5_flow_action_update_t)
 			(struct rte_eth_dev *dev,
-			 struct rte_flow_shared_action *action,
-			 const void *action_conf,
+			 struct rte_flow_action_handle *action,
+			 const void *update,
 			 struct rte_flow_error *error);
 typedef int (*mlx5_flow_action_query_t)
 			(struct rte_eth_dev *dev,
-			 const struct rte_flow_shared_action *action,
+			 const struct rte_flow_action_handle *action,
 			 void *data,
 			 struct rte_flow_error *error);
 typedef int (*mlx5_flow_sync_domain_t)
 			(struct rte_eth_dev *dev,
 			 uint32_t domains,
 			 uint32_t flags);
+typedef int (*mlx5_flow_validate_mtr_acts_t)
+			(struct rte_eth_dev *dev,
+			 const struct rte_flow_action *actions[RTE_COLORS],
+			 struct rte_flow_attr *attr,
+			 bool *is_rss,
+			 uint8_t *domain_bitmap,
+			 bool *is_def_policy,
+			 struct rte_mtr_error *error);
+typedef int (*mlx5_flow_create_mtr_acts_t)
+			(struct rte_eth_dev *dev,
+		      struct mlx5_flow_meter_policy *mtr_policy,
+		      const struct rte_flow_action *actions[RTE_COLORS],
+		      struct rte_mtr_error *error);
+typedef void (*mlx5_flow_destroy_mtr_acts_t)
+			(struct rte_eth_dev *dev,
+		      struct mlx5_flow_meter_policy *mtr_policy);
+typedef int (*mlx5_flow_create_policy_rules_t)
+			(struct rte_eth_dev *dev,
+			  struct mlx5_flow_meter_policy *mtr_policy);
+typedef void (*mlx5_flow_destroy_policy_rules_t)
+			(struct rte_eth_dev *dev,
+			  struct mlx5_flow_meter_policy *mtr_policy);
+typedef int (*mlx5_flow_create_def_policy_t)
+			(struct rte_eth_dev *dev);
+typedef void (*mlx5_flow_destroy_def_policy_t)
+			(struct rte_eth_dev *dev);
 
 struct mlx5_flow_driver_ops {
 	mlx5_flow_validate_t validate;
@@ -1270,8 +1235,17 @@ struct mlx5_flow_driver_ops {
 	mlx5_flow_query_t query;
 	mlx5_flow_create_mtr_tbls_t create_mtr_tbls;
 	mlx5_flow_destroy_mtr_tbls_t destroy_mtr_tbls;
-	mlx5_flow_create_policer_rules_t create_policer_rules;
-	mlx5_flow_destroy_policer_rules_t destroy_policer_rules;
+	mlx5_flow_destroy_mtr_drop_tbls_t destroy_mtr_drop_tbls;
+	mlx5_flow_mtr_alloc_t create_meter;
+	mlx5_flow_mtr_free_t free_meter;
+	mlx5_flow_validate_mtr_acts_t validate_mtr_acts;
+	mlx5_flow_create_mtr_acts_t create_mtr_acts;
+	mlx5_flow_destroy_mtr_acts_t destroy_mtr_acts;
+	mlx5_flow_create_policy_rules_t create_policy_rules;
+	mlx5_flow_destroy_policy_rules_t destroy_policy_rules;
+	mlx5_flow_create_def_policy_t create_def_policy;
+	mlx5_flow_destroy_def_policy_t destroy_def_policy;
+	mlx5_flow_meter_sub_policy_rss_prepare_t meter_sub_policy_rss_prepare;
 	mlx5_flow_counter_alloc_t counter_alloc;
 	mlx5_flow_counter_free_t counter_free;
 	mlx5_flow_counter_query_t counter_query;
@@ -1329,6 +1303,112 @@ tunnel_use_standard_attr_group_translate
 	}
 
 	return verdict;
+}
+
+/**
+ * Get DV flow aso meter by index.
+ *
+ * @param[in] dev
+ *   Pointer to the Ethernet device structure.
+ * @param[in] idx
+ *   mlx5 flow aso meter index in the container.
+ * @param[out] ppool
+ *   mlx5 flow aso meter pool in the container,
+ *
+ * @return
+ *   Pointer to the aso meter, NULL otherwise.
+ */
+static inline struct mlx5_aso_mtr *
+mlx5_aso_meter_by_idx(struct mlx5_priv *priv, uint32_t idx)
+{
+	struct mlx5_aso_mtr_pool *pool;
+	struct mlx5_aso_mtr_pools_mng *pools_mng =
+				&priv->sh->mtrmng->pools_mng;
+
+	/* Decrease to original index. */
+	idx--;
+	MLX5_ASSERT(idx / MLX5_ASO_MTRS_PER_POOL < pools_mng->n);
+	pool = pools_mng->pools[idx / MLX5_ASO_MTRS_PER_POOL];
+	return &pool->mtrs[idx % MLX5_ASO_MTRS_PER_POOL];
+}
+
+static __rte_always_inline const struct rte_flow_item *
+mlx5_find_end_item(const struct rte_flow_item *item)
+{
+	for (; item->type != RTE_FLOW_ITEM_TYPE_END; item++);
+	return item;
+}
+
+static __rte_always_inline bool
+mlx5_validate_integrity_item(const struct rte_flow_item_integrity *item)
+{
+	struct rte_flow_item_integrity test = *item;
+	test.l3_ok = 0;
+	test.l4_ok = 0;
+	test.ipv4_csum_ok = 0;
+	test.l4_csum_ok = 0;
+	return (test.value == 0);
+}
+
+/*
+ * Get ASO CT action by device and index.
+ *
+ * @param[in] dev
+ *   Pointer to the Ethernet device structure.
+ * @param[in] idx
+ *   Index to the ASO CT action.
+ *
+ * @return
+ *   The specified ASO CT action pointer.
+ */
+static inline struct mlx5_aso_ct_action *
+flow_aso_ct_get_by_dev_idx(struct rte_eth_dev *dev, uint32_t idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_aso_ct_pools_mng *mng = priv->sh->ct_mng;
+	struct mlx5_aso_ct_pool *pool;
+
+	idx--;
+	MLX5_ASSERT((idx / MLX5_ASO_CT_ACTIONS_PER_POOL) < mng->n);
+	/* Bit operation AND could be used. */
+	rte_rwlock_read_lock(&mng->resize_rwl);
+	pool = mng->pools[idx / MLX5_ASO_CT_ACTIONS_PER_POOL];
+	rte_rwlock_read_unlock(&mng->resize_rwl);
+	return &pool->actions[idx % MLX5_ASO_CT_ACTIONS_PER_POOL];
+}
+
+/*
+ * Get ASO CT action by owner & index.
+ *
+ * @param[in] dev
+ *   Pointer to the Ethernet device structure.
+ * @param[in] idx
+ *   Index to the ASO CT action and owner port combination.
+ *
+ * @return
+ *   The specified ASO CT action pointer.
+ */
+static inline struct mlx5_aso_ct_action *
+flow_aso_ct_get_by_idx(struct rte_eth_dev *dev, uint32_t own_idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_aso_ct_action *ct;
+	uint16_t owner = (uint16_t)MLX5_INDIRECT_ACT_CT_GET_OWNER(own_idx);
+	uint32_t idx = MLX5_INDIRECT_ACT_CT_GET_IDX(own_idx);
+
+	if (owner == PORT_ID(priv)) {
+		ct = flow_aso_ct_get_by_dev_idx(dev, idx);
+	} else {
+		struct rte_eth_dev *owndev = &rte_eth_devices[owner];
+
+		MLX5_ASSERT(owner < RTE_MAX_ETHPORTS);
+		if (dev->data->dev_started != 1)
+			return NULL;
+		ct = flow_aso_ct_get_by_dev_idx(owndev, idx);
+		if (ct->peer != PORT_ID(priv))
+			return NULL;
+	}
+	return ct;
 }
 
 int mlx5_flow_group_to_table(struct rte_eth_dev *dev,
@@ -1469,21 +1549,19 @@ int mlx5_flow_validate_item_ecpri(const struct rte_flow_item *item,
 				  uint16_t ether_type,
 				  const struct rte_flow_item_ecpri *acc_mask,
 				  struct rte_flow_error *error);
-struct mlx5_meter_domains_infos *mlx5_flow_create_mtr_tbls
-					(struct rte_eth_dev *dev,
-					 const struct mlx5_flow_meter *fm);
-int mlx5_flow_destroy_mtr_tbls(struct rte_eth_dev *dev,
-			       struct mlx5_meter_domains_infos *tbl);
-int mlx5_flow_create_policer_rules(struct rte_eth_dev *dev,
-				   struct mlx5_flow_meter *fm,
-				   const struct rte_flow_attr *attr);
-int mlx5_flow_destroy_policer_rules(struct rte_eth_dev *dev,
-				    struct mlx5_flow_meter *fm,
-				    const struct rte_flow_attr *attr);
-int mlx5_flow_meter_flush(struct rte_eth_dev *dev,
-			  struct rte_mtr_error *error);
+int mlx5_flow_create_mtr_tbls(struct rte_eth_dev *dev,
+			      struct mlx5_flow_meter_info *fm,
+			      uint32_t mtr_idx,
+			      uint8_t domain_bitmap);
+void mlx5_flow_destroy_mtr_tbls(struct rte_eth_dev *dev,
+			       struct mlx5_flow_meter_info *fm);
+void mlx5_flow_destroy_mtr_drop_tbls(struct rte_eth_dev *dev);
+struct mlx5_flow_meter_sub_policy *mlx5_flow_meter_sub_policy_rss_prepare
+		(struct rte_eth_dev *dev,
+		struct mlx5_flow_meter_policy *mtr_policy,
+		struct mlx5_flow_rss_desc *rss_desc[MLX5_MTR_RTE_COLORS]);
 int mlx5_flow_dv_discover_counter_offset_support(struct rte_eth_dev *dev);
-int mlx5_shared_action_flush(struct rte_eth_dev *dev);
+int mlx5_action_handle_flush(struct rte_eth_dev *dev);
 void mlx5_release_tunnel_hub(struct mlx5_dev_ctx_shared *sh, uint16_t port_id);
 int mlx5_alloc_tunnel_hub(struct mlx5_dev_ctx_shared *sh);
 
@@ -1496,9 +1574,10 @@ int flow_dv_tbl_match_cb(struct mlx5_hlist *list,
 void flow_dv_tbl_remove_cb(struct mlx5_hlist *list,
 			   struct mlx5_hlist_entry *entry);
 struct mlx5_flow_tbl_resource *flow_dv_tbl_resource_get(struct rte_eth_dev *dev,
-		uint32_t table_id, uint8_t egress, uint8_t transfer,
+		uint32_t table_level, uint8_t egress, uint8_t transfer,
 		bool external, const struct mlx5_flow_tunnel *tunnel,
-		uint32_t group_id, uint8_t dummy, struct rte_flow_error *error);
+		uint32_t group_id, uint8_t dummy,
+		uint32_t table_id, struct rte_flow_error *error);
 
 struct mlx5_hlist_entry *flow_dv_tag_create_cb(struct mlx5_hlist *list,
 					       uint64_t key, void *cb_ctx);
@@ -1574,12 +1653,32 @@ struct mlx5_aso_age_action *flow_aso_age_get_by_idx(struct rte_eth_dev *dev,
 int flow_dev_geneve_tlv_option_resource_register(struct rte_eth_dev *dev,
 					     const struct rte_flow_item *item,
 					     struct rte_flow_error *error);
-
 void flow_release_workspace(void *data);
 int mlx5_flow_os_init_workspace_once(void);
 void *mlx5_flow_os_get_specific_workspace(void);
 int mlx5_flow_os_set_specific_workspace(struct mlx5_flow_workspace *data);
 void mlx5_flow_os_release_workspace(void);
-
-
+uint32_t mlx5_flow_mtr_alloc(struct rte_eth_dev *dev);
+void mlx5_flow_mtr_free(struct rte_eth_dev *dev, uint32_t mtr_idx);
+int mlx5_flow_validate_mtr_acts(struct rte_eth_dev *dev,
+			const struct rte_flow_action *actions[RTE_COLORS],
+			struct rte_flow_attr *attr,
+			bool *is_rss,
+			uint8_t *domain_bitmap,
+			bool *is_def_policy,
+			struct rte_mtr_error *error);
+void mlx5_flow_destroy_mtr_acts(struct rte_eth_dev *dev,
+		      struct mlx5_flow_meter_policy *mtr_policy);
+int mlx5_flow_create_mtr_acts(struct rte_eth_dev *dev,
+		      struct mlx5_flow_meter_policy *mtr_policy,
+		      const struct rte_flow_action *actions[RTE_COLORS],
+		      struct rte_mtr_error *error);
+int mlx5_flow_create_policy_rules(struct rte_eth_dev *dev,
+			     struct mlx5_flow_meter_policy *mtr_policy);
+void mlx5_flow_destroy_policy_rules(struct rte_eth_dev *dev,
+			     struct mlx5_flow_meter_policy *mtr_policy);
+int mlx5_flow_create_def_policy(struct rte_eth_dev *dev);
+void mlx5_flow_destroy_def_policy(struct rte_eth_dev *dev);
+void flow_drv_rxq_flags_set(struct rte_eth_dev *dev,
+		       struct mlx5_flow_handle *dev_handle);
 #endif /* RTE_PMD_MLX5_FLOW_H_ */

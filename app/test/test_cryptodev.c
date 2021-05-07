@@ -162,12 +162,6 @@ ceil_byte_length(uint32_t num_bits)
 		return (num_bits >> 3);
 }
 
-static uint32_t
-get_raw_dp_dequeue_count(void *user_data __rte_unused)
-{
-	return 1;
-}
-
 static void
 post_process_raw_dp_op(void *user_data,	uint32_t index __rte_unused,
 		uint8_t is_op_success)
@@ -345,7 +339,7 @@ process_sym_raw_dp_op(uint8_t dev_id, uint16_t qp_id,
 	n = n_success = 0;
 	while (count++ < MAX_RAW_DEQUEUE_COUNT && n == 0) {
 		n = rte_cryptodev_raw_dequeue_burst(ctx,
-			get_raw_dp_dequeue_count, post_process_raw_dp_op,
+			NULL, 1, post_process_raw_dp_op,
 				(void **)&ret_op, 0, &n_success,
 				&dequeue_status);
 		if (dequeue_status < 0) {
@@ -842,6 +836,7 @@ static void
 testsuite_teardown(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int res;
 
 	if (ts_params->mbuf_pool != NULL) {
 		RTE_LOG(DEBUG, USER1, "CRYPTO_MBUFPOOL count %u\n",
@@ -863,6 +858,10 @@ testsuite_teardown(void)
 		rte_mempool_free(ts_params->session_mpool);
 		ts_params->session_mpool = NULL;
 	}
+
+	res = rte_cryptodev_close(ts_params->valid_devs[0]);
+	if (res)
+		RTE_LOG(ERR, USER1, "Crypto device close error %d\n", res);
 }
 
 static int
@@ -2629,6 +2628,21 @@ create_wireless_algo_auth_cipher_operation(
 	rte_memcpy(iv_ptr, cipher_iv, cipher_iv_len);
 	iv_ptr += cipher_iv_len;
 	rte_memcpy(iv_ptr, auth_iv, auth_iv_len);
+
+	/* Only copy over the offset data needed from src to dst in OOP,
+	 * if the auth and cipher offsets are not aligned
+	 */
+	if (op_mode == OUT_OF_PLACE) {
+		if (cipher_offset > auth_offset)
+			rte_memcpy(
+				rte_pktmbuf_mtod_offset(
+					sym_op->m_dst,
+					uint8_t *, auth_offset >> 3),
+				rte_pktmbuf_mtod_offset(
+					sym_op->m_src,
+					uint8_t *, auth_offset >> 3),
+				((cipher_offset >> 3) - (auth_offset >> 3)));
+	}
 
 	if (cipher_algo == RTE_CRYPTO_CIPHER_SNOW3G_UEA2 ||
 		cipher_algo == RTE_CRYPTO_CIPHER_KASUMI_F8 ||
@@ -4672,16 +4686,20 @@ test_snow3g_auth_cipher(const struct snow3g_test_data *tdata,
 
 	/* Validate obuf */
 	if (verify) {
-		TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
+		TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT_OFFSET(
 			plaintext,
 			tdata->plaintext.data,
-			tdata->plaintext.len >> 3,
+			(tdata->plaintext.len - tdata->cipher.offset_bits -
+			 (tdata->digest.len << 3)),
+			tdata->cipher.offset_bits,
 			"SNOW 3G Plaintext data not as expected");
 	} else {
-		TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
+		TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT_OFFSET(
 			ciphertext,
 			tdata->ciphertext.data,
-			tdata->validDataLenInBits.len,
+			(tdata->validDataLenInBits.len -
+			 tdata->cipher.offset_bits),
+			tdata->cipher.offset_bits,
 			"SNOW 3G Ciphertext data not as expected");
 
 		TEST_ASSERT_BUFFERS_ARE_EQUAL(
@@ -4883,16 +4901,20 @@ test_snow3g_auth_cipher_sgl(const struct snow3g_test_data *tdata,
 
 	/* Validate obuf */
 	if (verify) {
-		TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
+		TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT_OFFSET(
 			plaintext,
 			tdata->plaintext.data,
-			tdata->plaintext.len >> 3,
+			(tdata->plaintext.len - tdata->cipher.offset_bits -
+			 (tdata->digest.len << 3)),
+			tdata->cipher.offset_bits,
 			"SNOW 3G Plaintext data not as expected");
 	} else {
-		TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
+		TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT_OFFSET(
 			ciphertext,
 			tdata->ciphertext.data,
-			tdata->validDataLenInBits.len,
+			(tdata->validDataLenInBits.len -
+			 tdata->cipher.offset_bits),
+			tdata->cipher.offset_bits,
 			"SNOW 3G Ciphertext data not as expected");
 
 		TEST_ASSERT_BUFFERS_ARE_EQUAL(
