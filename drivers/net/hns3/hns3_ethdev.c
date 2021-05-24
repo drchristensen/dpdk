@@ -2274,24 +2274,6 @@ hns3_check_mq_mode(struct rte_eth_dev *dev)
 }
 
 static int
-hns3_check_dcb_cfg(struct rte_eth_dev *dev)
-{
-	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-
-	if (!hns3_dev_dcb_supported(hw)) {
-		hns3_err(hw, "this port does not support dcb configurations.");
-		return -EOPNOTSUPP;
-	}
-
-	if (hw->current_fc_status == HNS3_FC_STATUS_MAC_PAUSE) {
-		hns3_err(hw, "MAC pause enabled, cannot config dcb info.");
-		return -EOPNOTSUPP;
-	}
-
-	return 0;
-}
-
-static int
 hns3_bind_ring_with_vector(struct hns3_hw *hw, uint16_t vector_id, bool en,
 			   enum hns3_ring_type queue_type, uint16_t queue_id)
 {
@@ -2427,6 +2409,30 @@ hns3_refresh_mtu(struct rte_eth_dev *dev, struct rte_eth_conf *conf)
 }
 
 static int
+hns3_setup_dcb(struct rte_eth_dev *dev)
+{
+	struct hns3_adapter *hns = dev->data->dev_private;
+	struct hns3_hw *hw = &hns->hw;
+	int ret;
+
+	if (!hns3_dev_dcb_supported(hw)) {
+		hns3_err(hw, "this port does not support dcb configurations.");
+		return -EOPNOTSUPP;
+	}
+
+	if (hw->current_fc_status == HNS3_FC_STATUS_MAC_PAUSE) {
+		hns3_err(hw, "MAC pause enabled, cannot config dcb info.");
+		return -EOPNOTSUPP;
+	}
+
+	ret = hns3_dcb_configure(hns);
+	if (ret)
+		hns3_err(hw, "failed to config dcb: %d", ret);
+
+	return ret;
+}
+
+static int
 hns3_check_link_speed(struct hns3_hw *hw, uint32_t link_speeds)
 {
 	int ret;
@@ -2506,7 +2512,7 @@ hns3_dev_configure(struct rte_eth_dev *dev)
 		goto cfg_err;
 
 	if ((uint32_t)mq_mode & ETH_MQ_RX_DCB_FLAG) {
-		ret = hns3_check_dcb_cfg(dev);
+		ret = hns3_setup_dcb(dev);
 		if (ret)
 			goto cfg_err;
 	}
@@ -5574,14 +5580,14 @@ hns3_do_start(struct hns3_adapter *hns, bool reset_queue)
 	struct hns3_hw *hw = &hns->hw;
 	int ret;
 
-	ret = hns3_dcb_cfg_update(hns);
-	if (ret)
+	ret = hns3_update_queue_map_configure(hns);
+	if (ret) {
+		hns3_err(hw, "failed to update queue mapping configuration, ret = %d",
+			 ret);
 		return ret;
+	}
 
-	/*
-	 * The hns3_dcb_cfg_update may configure TM module, so
-	 * hns3_tm_conf_update must called later.
-	 */
+	/* Note: hns3_tm_conf_update must be called after configuring DCB. */
 	ret = hns3_tm_conf_update(hw);
 	if (ret) {
 		PMD_INIT_LOG(ERR, "failed to update tm conf, ret = %d.", ret);
@@ -6059,30 +6065,6 @@ hns3_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	return 0;
 }
 
-static void
-hns3_get_fc_mode(struct hns3_hw *hw, enum rte_eth_fc_mode mode)
-{
-	switch (mode) {
-	case RTE_FC_NONE:
-		hw->requested_fc_mode = HNS3_FC_NONE;
-		break;
-	case RTE_FC_RX_PAUSE:
-		hw->requested_fc_mode = HNS3_FC_RX_PAUSE;
-		break;
-	case RTE_FC_TX_PAUSE:
-		hw->requested_fc_mode = HNS3_FC_TX_PAUSE;
-		break;
-	case RTE_FC_FULL:
-		hw->requested_fc_mode = HNS3_FC_FULL;
-		break;
-	default:
-		hw->requested_fc_mode = HNS3_FC_NONE;
-		hns3_warn(hw, "fc_mode(%u) exceeds member scope and is "
-			  "configured to RTE_FC_NONE", mode);
-		break;
-	}
-}
-
 static int
 hns3_check_fc_autoneg_valid(struct hns3_hw *hw, uint8_t autoneg)
 {
@@ -6156,8 +6138,6 @@ hns3_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		return -EOPNOTSUPP;
 	}
 
-	hns3_get_fc_mode(hw, fc_conf->mode);
-
 	rte_spinlock_lock(&hw->lock);
 	ret = hns3_fc_enable(dev, fc_conf);
 	rte_spinlock_unlock(&hw->lock);
@@ -6203,8 +6183,6 @@ hns3_priority_flow_ctrl_set(struct rte_eth_dev *dev,
 			     "current_fc_status = %d", hw->current_fc_status);
 		return -EOPNOTSUPP;
 	}
-
-	hns3_get_fc_mode(hw, pfc_conf->fc.mode);
 
 	rte_spinlock_lock(&hw->lock);
 	ret = hns3_dcb_pfc_enable(dev, pfc_conf);
@@ -6991,9 +6969,11 @@ hns3_fec_set(struct rte_eth_dev *dev, uint32_t mode)
 		return ret;
 
 	/* HNS3 PMD driver only support one bit set mode, e.g. 0x1, 0x4 */
-	if (!is_fec_mode_one_bit_set(mode))
-		hns3_err(hw, "FEC mode(0x%x) not supported in HNS3 PMD,"
+	if (!is_fec_mode_one_bit_set(mode)) {
+		hns3_err(hw, "FEC mode(0x%x) not supported in HNS3 PMD, "
 			     "FEC mode should be only one bit set", mode);
+		return -EINVAL;
+	}
 
 	/*
 	 * Check whether the configured mode is within the FEC capability.
@@ -7598,5 +7578,5 @@ RTE_PMD_REGISTER_PARAM_STRING(net_hns3,
 		HNS3_DEVARG_RX_FUNC_HINT "=vec|sve|simple|common "
 		HNS3_DEVARG_TX_FUNC_HINT "=vec|sve|simple|common "
 		HNS3_DEVARG_DEV_CAPS_MASK "=<1-65535> ");
-RTE_LOG_REGISTER(hns3_logtype_init, pmd.net.hns3.init, NOTICE);
-RTE_LOG_REGISTER(hns3_logtype_driver, pmd.net.hns3.driver, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(hns3_logtype_init, init, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(hns3_logtype_driver, driver, NOTICE);

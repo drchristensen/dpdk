@@ -819,6 +819,16 @@ struct mlx5_flow_verbs_workspace {
 /** Maximal number of device sub-flows supported. */
 #define MLX5_NUM_MAX_DEV_FLOWS 32
 
+/**
+ * tunnel offload rules type
+ */
+enum mlx5_tof_rule_type {
+	MLX5_TUNNEL_OFFLOAD_NONE = 0,
+	MLX5_TUNNEL_OFFLOAD_SET_RULE,
+	MLX5_TUNNEL_OFFLOAD_MATCH_RULE,
+	MLX5_TUNNEL_OFFLOAD_MISS_RULE,
+};
+
 /** Device flow structure. */
 __extension__
 struct mlx5_flow {
@@ -854,6 +864,7 @@ struct mlx5_flow {
 	struct mlx5_flow_handle *handle;
 	uint32_t handle_idx; /* Index of the mlx5 flow handle memory. */
 	const struct mlx5_flow_tunnel *tunnel;
+	enum mlx5_tof_rule_type tof_type;
 };
 
 /* Flow meter state. */
@@ -949,10 +960,10 @@ mlx5_tunnel_hub(struct rte_eth_dev *dev)
 }
 
 static inline bool
-is_tunnel_offload_active(struct rte_eth_dev *dev)
+is_tunnel_offload_active(const struct rte_eth_dev *dev)
 {
 #ifdef HAVE_IBV_FLOW_DV_SUPPORT
-	struct mlx5_priv *priv = dev->data->dev_private;
+	const struct mlx5_priv *priv = dev->data->dev_private;
 	return !!priv->config.dv_miss_info;
 #else
 	RTE_SET_USED(dev);
@@ -961,23 +972,15 @@ is_tunnel_offload_active(struct rte_eth_dev *dev)
 }
 
 static inline bool
-is_flow_tunnel_match_rule(__rte_unused struct rte_eth_dev *dev,
-			  __rte_unused const struct rte_flow_attr *attr,
-			  __rte_unused const struct rte_flow_item items[],
-			  __rte_unused const struct rte_flow_action actions[])
+is_flow_tunnel_match_rule(enum mlx5_tof_rule_type tof_rule_type)
 {
-	return (items[0].type == (typeof(items[0].type))
-				 MLX5_RTE_FLOW_ITEM_TYPE_TUNNEL);
+	return tof_rule_type == MLX5_TUNNEL_OFFLOAD_MATCH_RULE;
 }
 
 static inline bool
-is_flow_tunnel_steer_rule(__rte_unused struct rte_eth_dev *dev,
-			  __rte_unused const struct rte_flow_attr *attr,
-			  __rte_unused const struct rte_flow_item items[],
-			  __rte_unused const struct rte_flow_action actions[])
+is_flow_tunnel_steer_rule(enum mlx5_tof_rule_type tof_rule_type)
 {
-	return (actions[0].type == (typeof(actions[0].type))
-				   MLX5_RTE_FLOW_ACTION_TYPE_TUNNEL_SET);
+	return tof_rule_type == MLX5_TUNNEL_OFFLOAD_SET_RULE;
 }
 
 static inline const struct mlx5_flow_tunnel *
@@ -1153,6 +1156,9 @@ typedef struct mlx5_flow_meter_sub_policy *
 		(struct rte_eth_dev *dev,
 		struct mlx5_flow_meter_policy *mtr_policy,
 		struct mlx5_flow_rss_desc *rss_desc[MLX5_MTR_RTE_COLORS]);
+typedef void (*mlx5_flow_destroy_sub_policy_with_rxq_t)
+	(struct rte_eth_dev *dev,
+	struct mlx5_flow_meter_policy *mtr_policy);
 typedef uint32_t (*mlx5_flow_mtr_alloc_t)
 					    (struct rte_eth_dev *dev);
 typedef void (*mlx5_flow_mtr_free_t)(struct rte_eth_dev *dev,
@@ -1246,6 +1252,7 @@ struct mlx5_flow_driver_ops {
 	mlx5_flow_create_def_policy_t create_def_policy;
 	mlx5_flow_destroy_def_policy_t destroy_def_policy;
 	mlx5_flow_meter_sub_policy_rss_prepare_t meter_sub_policy_rss_prepare;
+	mlx5_flow_destroy_sub_policy_with_rxq_t destroy_sub_policy_with_rxq;
 	mlx5_flow_counter_alloc_t counter_alloc;
 	mlx5_flow_counter_free_t counter_free;
 	mlx5_flow_counter_query_t counter_query;
@@ -1273,11 +1280,10 @@ struct flow_grp_info {
 
 static inline bool
 tunnel_use_standard_attr_group_translate
-		    (struct rte_eth_dev *dev,
-		     const struct mlx5_flow_tunnel *tunnel,
+		    (const struct rte_eth_dev *dev,
 		     const struct rte_flow_attr *attr,
-		     const struct rte_flow_item items[],
-		     const struct rte_flow_action actions[])
+		     const struct mlx5_flow_tunnel *tunnel,
+		     enum mlx5_tof_rule_type tof_rule_type)
 {
 	bool verdict;
 
@@ -1293,7 +1299,7 @@ tunnel_use_standard_attr_group_translate
 		 * method
 		 */
 		verdict = !attr->group &&
-			  is_flow_tunnel_steer_rule(dev, attr, items, actions);
+			  is_flow_tunnel_steer_rule(tof_rule_type);
 	} else {
 		/*
 		 * non-tunnel group translation uses standard method for
@@ -1560,6 +1566,8 @@ struct mlx5_flow_meter_sub_policy *mlx5_flow_meter_sub_policy_rss_prepare
 		(struct rte_eth_dev *dev,
 		struct mlx5_flow_meter_policy *mtr_policy,
 		struct mlx5_flow_rss_desc *rss_desc[MLX5_MTR_RTE_COLORS]);
+void mlx5_flow_destroy_sub_policy_with_rxq(struct rte_eth_dev *dev,
+		struct mlx5_flow_meter_policy *mtr_policy);
 int mlx5_flow_dv_discover_counter_offset_support(struct rte_eth_dev *dev);
 int mlx5_action_handle_flush(struct rte_eth_dev *dev);
 void mlx5_release_tunnel_hub(struct mlx5_dev_ctx_shared *sh, uint16_t port_id);
@@ -1681,4 +1689,10 @@ int mlx5_flow_create_def_policy(struct rte_eth_dev *dev);
 void mlx5_flow_destroy_def_policy(struct rte_eth_dev *dev);
 void flow_drv_rxq_flags_set(struct rte_eth_dev *dev,
 		       struct mlx5_flow_handle *dev_handle);
+const struct mlx5_flow_tunnel *
+mlx5_get_tof(const struct rte_flow_item *items,
+	     const struct rte_flow_action *actions,
+	     enum mlx5_tof_rule_type *rule_type);
+
+
 #endif /* RTE_PMD_MLX5_FLOW_H_ */

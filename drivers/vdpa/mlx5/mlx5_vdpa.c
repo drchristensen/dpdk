@@ -787,6 +787,8 @@ mlx5_vdpa_pci_remove(struct rte_pci_device *pci_dev)
 			mlx5_glue->dv_free_var(priv->var);
 			priv->var = NULL;
 		}
+		if (priv->vdev)
+			rte_vdpa_unregister_device(priv->vdev);
 		mlx5_glue->close_device(priv->ctx);
 		pthread_mutex_destroy(&priv->vq_config_lock);
 		rte_free(priv);
@@ -841,7 +843,7 @@ static struct mlx5_pci_driver mlx5_vdpa_driver = {
 	},
 };
 
-RTE_LOG_REGISTER(mlx5_vdpa_logtype, pmd.vdpa.mlx5, NOTICE)
+RTE_LOG_REGISTER_DEFAULT(mlx5_vdpa_logtype, NOTICE)
 
 /**
  * Driver initialization routine.

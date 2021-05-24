@@ -376,11 +376,11 @@ set_default_depth_thresh(const char *key __rte_unused,
 }
 
 static int
-set_vector_opts_disab(const char *key __rte_unused,
+set_vector_opts_enab(const char *key __rte_unused,
 	const char *value,
 	void *opaque)
 {
-	bool *dlb2_vector_opts_disabled = opaque;
+	bool *dlb2_vector_opts_enabled = opaque;
 
 	if (value == NULL || opaque == NULL) {
 		DLB2_LOG_ERR("NULL pointer\n");
@@ -388,9 +388,9 @@ set_vector_opts_disab(const char *key __rte_unused,
 	}
 
 	if ((*value == 'y') || (*value == 'Y'))
-		*dlb2_vector_opts_disabled = true;
+		*dlb2_vector_opts_enabled = true;
 	else
-		*dlb2_vector_opts_disabled = false;
+		*dlb2_vector_opts_enabled = false;
 
 	return 0;
 }
@@ -1469,7 +1469,7 @@ dlb2_hw_create_ldb_port(struct dlb2_eventdev *dlb2,
 #else
 	if ((qm_port->cq_depth > 64) ||
 	    (!rte_is_power_of_2(qm_port->cq_depth)) ||
-	    (dlb2->vector_opts_disabled == true))
+	    (dlb2->vector_opts_enabled == false))
 		qm_port->use_scalar = true;
 #endif
 
@@ -1665,7 +1665,7 @@ dlb2_hw_create_dir_port(struct dlb2_eventdev *dlb2,
 #else
 	if ((qm_port->cq_depth > 64) ||
 	    (!rte_is_power_of_2(qm_port->cq_depth)) ||
-	    (dlb2->vector_opts_disabled == true))
+	    (dlb2->vector_opts_enabled == false))
 		qm_port->use_scalar = true;
 #endif
 
@@ -3561,6 +3561,11 @@ _process_deq_qes_vec_impl(struct dlb2_port *qm_port,
 	int ev_qid2 = qm_port->qid_mappings[hw_qid2];
 	int ev_qid3 = qm_port->qid_mappings[hw_qid3];
 
+	int hw_sched0 = _mm_extract_epi8(v_qe_meta, 3) & 3ul;
+	int hw_sched1 = _mm_extract_epi8(v_qe_meta, 7) & 3ul;
+	int hw_sched2 = _mm_extract_epi8(v_qe_meta, 11) & 3ul;
+	int hw_sched3 = _mm_extract_epi8(v_qe_meta, 15) & 3ul;
+
 	v_qid_done = _mm_insert_epi8(v_qid_done, ev_qid0, 2);
 	v_qid_done = _mm_insert_epi8(v_qid_done, ev_qid1, 6);
 	v_qid_done = _mm_insert_epi8(v_qid_done, ev_qid2, 10);
@@ -3682,19 +3687,27 @@ _process_deq_qes_vec_impl(struct dlb2_port *qm_port,
 		v_ev_3 = _mm_blend_epi16(v_unpk_ev_23, v_qe_3, 0x0F);
 		v_ev_3 = _mm_alignr_epi8(v_ev_3, v_ev_3, 8);
 		_mm_storeu_si128((__m128i *)&events[3], v_ev_3);
+		DLB2_INC_STAT(qm_port->ev_port->stats.rx_sched_cnt[hw_sched3],
+			      1);
 		/* fallthrough */
 	case 3:
 		v_ev_2 = _mm_unpacklo_epi64(v_unpk_ev_23, v_qe_2);
 		_mm_storeu_si128((__m128i *)&events[2], v_ev_2);
+		DLB2_INC_STAT(qm_port->ev_port->stats.rx_sched_cnt[hw_sched2],
+			      1);
 		/* fallthrough */
 	case 2:
 		v_ev_1 = _mm_blend_epi16(v_unpk_ev_01, v_qe_1, 0x0F);
 		v_ev_1 = _mm_alignr_epi8(v_ev_1, v_ev_1, 8);
 		_mm_storeu_si128((__m128i *)&events[1], v_ev_1);
+		DLB2_INC_STAT(qm_port->ev_port->stats.rx_sched_cnt[hw_sched1],
+			      1);
 		/* fallthrough */
 	case 1:
 		v_ev_0 = _mm_unpacklo_epi64(v_unpk_ev_01, v_qe_0);
 		_mm_storeu_si128((__m128i *)&events[0], v_ev_0);
+		DLB2_INC_STAT(qm_port->ev_port->stats.rx_sched_cnt[hw_sched0],
+			      1);
 	}
 }
 
@@ -4421,7 +4434,7 @@ dlb2_primary_eventdev_probe(struct rte_eventdev *dev,
 	dlb2->poll_interval = dlb2_args->poll_interval;
 	dlb2->sw_credit_quanta = dlb2_args->sw_credit_quanta;
 	dlb2->default_depth_thresh = dlb2_args->default_depth_thresh;
-	dlb2->vector_opts_disabled = dlb2_args->vector_opts_disabled;
+	dlb2->vector_opts_enabled = dlb2_args->vector_opts_enabled;
 
 	err = dlb2_iface_open(&dlb2->qm_instance, name);
 	if (err < 0) {
@@ -4525,7 +4538,7 @@ dlb2_parse_params(const char *params,
 					     DLB2_POLL_INTERVAL_ARG,
 					     DLB2_SW_CREDIT_QUANTA_ARG,
 					     DLB2_DEPTH_THRESH_ARG,
-					     DLB2_VECTOR_OPTS_DISAB_ARG,
+					     DLB2_VECTOR_OPTS_ENAB_ARG,
 					     NULL };
 
 	if (params != NULL && params[0] != '\0') {
@@ -4640,11 +4653,11 @@ dlb2_parse_params(const char *params,
 			}
 
 			ret = rte_kvargs_process(kvlist,
-					DLB2_VECTOR_OPTS_DISAB_ARG,
-					set_vector_opts_disab,
-					&dlb2_args->vector_opts_disabled);
+					DLB2_VECTOR_OPTS_ENAB_ARG,
+					set_vector_opts_enab,
+					&dlb2_args->vector_opts_enabled);
 			if (ret != 0) {
-				DLB2_LOG_ERR("%s: Error parsing vector opts disabled",
+				DLB2_LOG_ERR("%s: Error parsing vector opts enabled",
 					     name);
 				rte_kvargs_free(kvlist);
 				return ret;
@@ -4655,4 +4668,4 @@ dlb2_parse_params(const char *params,
 	}
 	return ret;
 }
-RTE_LOG_REGISTER(eventdev_dlb2_log_level, pmd.event.dlb2, NOTICE);
+RTE_LOG_REGISTER_DEFAULT(eventdev_dlb2_log_level, NOTICE);

@@ -218,13 +218,16 @@ vhost_flush_enqueue_batch_packed(struct virtio_net *dev,
 {
 	uint16_t i;
 	uint16_t flags;
-	uint16_t last_used_idx = vq->last_used_idx;
-	struct vring_packed_desc *desc_base = &vq->desc_packed[last_used_idx];
+	uint16_t last_used_idx;
+	struct vring_packed_desc *desc_base;
 
 	if (vq->shadow_used_idx) {
 		do_data_copy_enqueue(dev, vq);
 		vhost_flush_enqueue_shadow_packed(dev, vq);
 	}
+
+	last_used_idx = vq->last_used_idx;
+	desc_base = &vq->desc_packed[last_used_idx];
 
 	flags = PACKED_DESC_ENQUEUE_USED_FLAG(vq->used_wrap_counter);
 
@@ -1474,7 +1477,7 @@ static __rte_always_inline void
 store_dma_desc_info_split(struct vring_used_elem *s_ring, struct vring_used_elem *d_ring,
 		uint16_t ring_size, uint16_t s_idx, uint16_t d_idx, uint16_t count)
 {
-	uint16_t elem_size = sizeof(struct vring_used_elem);
+	size_t elem_size = sizeof(struct vring_used_elem);
 
 	if (d_idx + count <= ring_size) {
 		rte_memcpy(d_ring + d_idx, s_ring + s_idx, count * elem_size);
@@ -1491,7 +1494,7 @@ store_dma_desc_info_packed(struct vring_used_elem_packed *s_ring,
 		struct vring_used_elem_packed *d_ring,
 		uint16_t ring_size, uint16_t s_idx, uint16_t d_idx, uint16_t count)
 {
-	uint16_t elem_size = sizeof(struct vring_used_elem_packed);
+	size_t elem_size = sizeof(struct vring_used_elem_packed);
 
 	if (d_idx + count <= ring_size) {
 		rte_memcpy(d_ring + d_idx, s_ring + s_idx, count * elem_size);

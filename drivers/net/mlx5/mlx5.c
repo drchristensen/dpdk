@@ -1455,6 +1455,7 @@ mlx5_proc_priv_init(struct rte_eth_dev *dev)
 	struct mlx5_proc_priv *ppriv;
 	size_t ppriv_size;
 
+	mlx5_proc_priv_uninit(dev);
 	/*
 	 * UAR register table follows the process private structure. BlueFlame
 	 * registers for Tx queues are stored in the table.
@@ -2442,7 +2443,7 @@ static struct mlx5_pci_driver mlx5_driver = {
 };
 
 /* Initialize driver log type. */
-RTE_LOG_REGISTER(mlx5_logtype, pmd.net.mlx5, NOTICE)
+RTE_LOG_REGISTER_DEFAULT(mlx5_logtype, NOTICE)
 
 /**
  * Driver initialization routine.

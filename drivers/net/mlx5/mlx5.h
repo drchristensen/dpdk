@@ -287,6 +287,13 @@ struct mlx5_drop {
 	struct mlx5_rxq_obj *rxq; /* Rx queue object. */
 };
 
+/* Loopback dummy queue resources required due to Verbs API. */
+struct mlx5_lb_ctx {
+	struct ibv_qp *qp; /* QP object. */
+	void *ibv_cq; /* Completion queue. */
+	uint16_t refcnt; /* Reference count for representors. */
+};
+
 #define MLX5_COUNTERS_PER_POOL 512
 #define MLX5_MAX_PENDING_QUERIES 4
 #define MLX5_CNT_CONTAINER_RESIZE 64
@@ -668,6 +675,8 @@ struct mlx5_meter_policy_action_container {
 		/* Index to port ID action resource. */
 		void *dr_jump_action[MLX5_MTR_DOMAIN_MAX];
 		/* Jump/drop action per color. */
+		uint16_t queue;
+		/* Queue action configuration. */
 	};
 };
 
@@ -681,6 +690,8 @@ struct mlx5_flow_meter_policy {
 	/* Rule applies to egress domain. */
 	uint32_t transfer:1;
 	/* Rule applies to transfer domain. */
+	uint32_t is_queue:1;
+	/* Is queue action in policy table. */
 	rte_spinlock_t sl;
 	uint32_t ref_cnt;
 	/* Use count. */
@@ -1124,6 +1135,7 @@ struct mlx5_dev_ctx_shared {
 	/* Meter management structure. */
 	struct mlx5_aso_ct_pools_mng *ct_mng;
 	/* Management data for ASO connection tracking. */
+	struct mlx5_lb_ctx self_lb; /* QP to enable self loopback for Devx. */
 	struct mlx5_dev_shared_port port[]; /* per device port data array. */
 };
 
@@ -1283,6 +1295,8 @@ struct mlx5_obj_ops {
 	int (*txq_obj_modify)(struct mlx5_txq_obj *obj,
 			      enum mlx5_txq_modify_type type, uint8_t dev_port);
 	void (*txq_obj_release)(struct mlx5_txq_obj *txq_obj);
+	int (*lb_dummy_queue_create)(struct rte_eth_dev *dev);
+	void (*lb_dummy_queue_release)(struct rte_eth_dev *dev);
 };
 
 #define MLX5_RSS_HASH_FIELDS_LEN RTE_DIM(mlx5_rss_hash_fields)
@@ -1312,6 +1326,7 @@ struct mlx5_priv {
 	unsigned int sampler_en:1; /* Whether support sampler. */
 	unsigned int mtr_en:1; /* Whether support meter. */
 	unsigned int mtr_reg_share:1; /* Whether support meter REG_C share. */
+	unsigned int lb_used:1; /* Loopback queue is referred to. */
 	uint16_t domain_id; /* Switch domain identifier. */
 	uint16_t vport_id; /* Associated VF vport index (if any). */
 	uint32_t vport_meta_tag; /* Used for vport index match ove VF LAG. */
@@ -1655,6 +1670,7 @@ struct mlx5_flow_meter_policy *mlx5_flow_meter_policy_find
 		uint32_t *policy_idx);
 int mlx5_flow_meter_flush(struct rte_eth_dev *dev,
 			  struct rte_mtr_error *error);
+void mlx5_flow_meter_rxq_flush(struct rte_eth_dev *dev);
 
 /* mlx5_os.c */
 struct rte_pci_driver;

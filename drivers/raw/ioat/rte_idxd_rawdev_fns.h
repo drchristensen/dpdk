@@ -132,7 +132,7 @@ __idxd_burst_capacity(int dev_id)
 	struct rte_idxd_rawdev *idxd =
 			(struct rte_idxd_rawdev *)rte_rawdevs[dev_id].dev_private;
 	uint16_t write_idx = idxd->batch_start + idxd->batch_size;
-	uint16_t used_space;
+	uint16_t used_space, free_space;
 
 	/* Check for space in the batch ring */
 	if ((idxd->batch_idx_read == 0 && idxd->batch_idx_write == idxd->max_batches) ||
@@ -147,7 +147,10 @@ __idxd_burst_capacity(int dev_id)
 	/* Return amount of free space in the descriptor ring
 	 * subtract 1 for space for batch descriptor and 1 for possible null desc
 	 */
-	return idxd->desc_ring_mask - used_space - 2;
+	free_space = idxd->desc_ring_mask - used_space;
+	if (free_space < 2)
+		return 0;
+	return free_space - 2;
 }
 
 static __rte_always_inline rte_iova_t
@@ -174,7 +177,8 @@ __idxd_write_desc(int dev_id,
 			idxd->batch_idx_write + 1 == idxd->batch_idx_read)
 		goto failed;
 	/* for descriptor ring, we always need a slot for batch completion */
-	if (((write_idx + 2) & mask) == idxd->hdls_read)
+	if (((write_idx + 2) & mask) == idxd->hdls_read ||
+			((write_idx + 1) & mask) == idxd->hdls_read)
 		goto failed;
 
 	/* write desc and handle. Note, descriptors don't wrap */
@@ -301,11 +305,11 @@ __idxd_completed_ops(int dev_id, uint8_t max_ops, uint32_t *status, uint8_t *num
 		uint16_t idx_to_chk = idxd->batch_idx_ring[idxd->batch_idx_read];
 		volatile struct rte_idxd_completion *comp_to_chk =
 				(struct rte_idxd_completion *)&idxd->desc_ring[idx_to_chk];
-		uint8_t status = comp_to_chk->status;
-		if (status == 0)
+		uint8_t batch_status = comp_to_chk->status;
+		if (batch_status == 0)
 			break;
 		comp_to_chk->status = 0;
-		if (unlikely(status > 1)) {
+		if (unlikely(batch_status > 1)) {
 			/* error occurred somewhere in batch, start where last checked */
 			uint16_t desc_count = comp_to_chk->completed_size;
 			uint16_t batch_start = idxd->hdls_avail;
@@ -337,14 +341,6 @@ __idxd_completed_ops(int dev_id, uint8_t max_ops, uint32_t *status, uint8_t *num
 		idxd->batch_idx_read++;
 		if (idxd->batch_idx_read > idxd->max_batches)
 			idxd->batch_idx_read = 0;
-	}
-
-	if (idxd->cfg.hdls_disable && status == NULL) {
-		n = (idxd->hdls_avail < idxd->hdls_read) ?
-				(idxd->hdls_avail + idxd->desc_ring_mask + 1 - idxd->hdls_read) :
-				(idxd->hdls_avail - idxd->hdls_read);
-		idxd->hdls_read = idxd->hdls_avail;
-		goto out;
 	}
 
 	n = 0;
@@ -382,7 +378,6 @@ __idxd_completed_ops(int dev_id, uint8_t max_ops, uint32_t *status, uint8_t *num
 	}
 	idxd->hdls_read = h_idx;
 
-out:
 	idxd->xstats.completed += n;
 	return n;
 }
