@@ -549,7 +549,7 @@ bool
 pci_device_iommu_support_va(__rte_unused const struct rte_pci_device *dev)
 {
 	/*
-	 * IOMMU is always present on a PowerNV host (IOMMUv2).
+	 * IOMMU is always present on a PowerNV and pSeries host (IOMMUv2).
 	 * IOMMU is also present in a KVM/QEMU VM (IOMMUv1) but is not
 	 * currently supported by DPDK. Test for our current environment
 	 * and report VA support as appropriate.
@@ -567,13 +567,18 @@ pci_device_iommu_support_va(__rte_unused const struct rte_pci_device *dev)
 		return ret;
 	}
 
-	/* Check for a PowerNV platform */
+	/* Check for a supported POWER platform */
 	while (getline(&line, &len, fp) != -1) {
-		if (strstr(line, "platform") != NULL)
+		if (strstr(line, "platform") == NULL)
 			continue;
 
 		if (strstr(line, "PowerNV") != NULL) {
 			RTE_LOG(DEBUG, EAL, "Running on a PowerNV system\n");
+			ret = true;
+			break;
+		}
+		else if (strstr(line, "pSeries") != NULL) {
+			RTE_LOG(DEBUG, EAL, "Running on a pSeries LPAR\n");
 			ret = true;
 			break;
 		}
