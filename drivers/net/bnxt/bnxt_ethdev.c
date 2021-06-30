@@ -686,6 +686,38 @@ static int bnxt_update_phy_setting(struct bnxt *bp)
 	return rc;
 }
 
+static void bnxt_free_prev_ring_stats(struct bnxt *bp)
+{
+	rte_free(bp->prev_rx_ring_stats);
+	rte_free(bp->prev_tx_ring_stats);
+
+	bp->prev_rx_ring_stats = NULL;
+	bp->prev_tx_ring_stats = NULL;
+}
+
+static int bnxt_alloc_prev_ring_stats(struct bnxt *bp)
+{
+	bp->prev_rx_ring_stats =  rte_zmalloc("bnxt_prev_rx_ring_stats",
+					      sizeof(struct bnxt_ring_stats) *
+					      bp->rx_cp_nr_rings,
+					      0);
+	if (bp->prev_rx_ring_stats == NULL)
+		return -ENOMEM;
+
+	bp->prev_tx_ring_stats = rte_zmalloc("bnxt_prev_tx_ring_stats",
+					     sizeof(struct bnxt_ring_stats) *
+					     bp->tx_cp_nr_rings,
+					     0);
+	if (bp->prev_tx_ring_stats == NULL)
+		goto error;
+
+	return 0;
+
+error:
+	bnxt_free_prev_ring_stats(bp);
+	return -ENOMEM;
+}
+
 static int bnxt_start_nic(struct bnxt *bp)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(bp->eth_dev);
@@ -948,7 +980,6 @@ static int bnxt_dev_info_get_op(struct rte_eth_dev *eth_dev,
 
 	dev_info->speed_capa = bnxt_get_speed_capabilities(bp);
 
-	/* *INDENT-OFF* */
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_thresh = {
 			.pthresh = 8,
@@ -983,8 +1014,6 @@ static int bnxt_dev_info_get_op(struct rte_eth_dev *eth_dev,
 				BNXT_PF(bp) ? BNXT_SWITCH_PORT_ID_PF :
 				    BNXT_SWITCH_PORT_ID_TRUSTED_VF;
 	}
-
-	/* *INDENT-ON* */
 
 	/*
 	 * TODO: default_rxconf, default_txconf, rx_desc_lim, and tx_desc_lim
@@ -1174,32 +1203,57 @@ bnxt_receive_function(struct rte_eth_dev *eth_dev)
 		return bnxt_recv_pkts;
 	}
 
-#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
-#ifndef RTE_LIBRTE_IEEE1588
+#if (defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)) && \
+	!defined(RTE_LIBRTE_IEEE1588)
+
+	/* Vector mode receive cannot be enabled if scattered rx is in use. */
+	if (eth_dev->data->scattered_rx)
+		goto use_scalar_rx;
+
 	/*
-	 * Vector mode receive can be enabled only if scatter rx is not
-	 * in use and rx offloads are limited to VLAN stripping and
-	 * CRC stripping.
+	 * Vector mode receive cannot be enabled if Truflow is enabled or if
+	 * asynchronous completions and receive completions can be placed in
+	 * the same completion ring.
 	 */
-	if (!eth_dev->data->scattered_rx &&
-	    !(eth_dev->data->dev_conf.rxmode.offloads &
-	      ~(DEV_RX_OFFLOAD_VLAN_STRIP |
-		DEV_RX_OFFLOAD_KEEP_CRC |
-		DEV_RX_OFFLOAD_JUMBO_FRAME |
-		DEV_RX_OFFLOAD_IPV4_CKSUM |
-		DEV_RX_OFFLOAD_UDP_CKSUM |
-		DEV_RX_OFFLOAD_TCP_CKSUM |
-		DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
-		DEV_RX_OFFLOAD_OUTER_UDP_CKSUM |
-		DEV_RX_OFFLOAD_RSS_HASH |
-		DEV_RX_OFFLOAD_VLAN_FILTER)) &&
-	    !BNXT_TRUFLOW_EN(bp) && BNXT_NUM_ASYNC_CPR(bp) &&
-	    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
-		PMD_DRV_LOG(INFO, "Using vector mode receive for port %d\n",
+	if (BNXT_TRUFLOW_EN(bp) || !BNXT_NUM_ASYNC_CPR(bp))
+		goto use_scalar_rx;
+
+	/*
+	 * Vector mode receive cannot be enabled if any receive offloads outside
+	 * a limited subset have been enabled.
+	 */
+	if (eth_dev->data->dev_conf.rxmode.offloads &
+		~(DEV_RX_OFFLOAD_VLAN_STRIP |
+		  DEV_RX_OFFLOAD_KEEP_CRC |
+		  DEV_RX_OFFLOAD_JUMBO_FRAME |
+		  DEV_RX_OFFLOAD_IPV4_CKSUM |
+		  DEV_RX_OFFLOAD_UDP_CKSUM |
+		  DEV_RX_OFFLOAD_TCP_CKSUM |
+		  DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
+		  DEV_RX_OFFLOAD_OUTER_UDP_CKSUM |
+		  DEV_RX_OFFLOAD_RSS_HASH |
+		  DEV_RX_OFFLOAD_VLAN_FILTER))
+		goto use_scalar_rx;
+
+#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
+	if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256 &&
+	    rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1) {
+		PMD_DRV_LOG(INFO,
+			    "Using AVX2 vector mode receive for port %d\n",
+			    eth_dev->data->port_id);
+		bp->flags |= BNXT_FLAG_RX_VECTOR_PKT_MODE;
+		return bnxt_recv_pkts_vec_avx2;
+	}
+ #endif
+	if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
+		PMD_DRV_LOG(INFO,
+			    "Using SSE vector mode receive for port %d\n",
 			    eth_dev->data->port_id);
 		bp->flags |= BNXT_FLAG_RX_VECTOR_PKT_MODE;
 		return bnxt_recv_pkts_vec;
 	}
+
+use_scalar_rx:
 	PMD_DRV_LOG(INFO, "Vector mode receive disabled for port %d\n",
 		    eth_dev->data->port_id);
 	PMD_DRV_LOG(INFO,
@@ -1207,7 +1261,6 @@ bnxt_receive_function(struct rte_eth_dev *eth_dev)
 		    eth_dev->data->port_id,
 		    eth_dev->data->scattered_rx,
 		    eth_dev->data->dev_conf.rxmode.offloads);
-#endif
 #endif
 	bp->flags &= ~BNXT_FLAG_RX_VECTOR_PKT_MODE;
 	return bnxt_recv_pkts;
@@ -1222,22 +1275,36 @@ bnxt_transmit_function(struct rte_eth_dev *eth_dev)
 	if (BNXT_CHIP_SR2(bp))
 		return bnxt_xmit_pkts;
 
-#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
-#ifndef RTE_LIBRTE_IEEE1588
+#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64) && \
+	!defined(RTE_LIBRTE_IEEE1588)
 	uint64_t offloads = eth_dev->data->dev_conf.txmode.offloads;
 
 	/*
 	 * Vector mode transmit can be enabled only if not using scatter rx
 	 * or tx offloads.
 	 */
-	if (!eth_dev->data->scattered_rx &&
-	    !(offloads & ~DEV_TX_OFFLOAD_MBUF_FAST_FREE) &&
-	    !BNXT_TRUFLOW_EN(bp) &&
-	    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
-		PMD_DRV_LOG(INFO, "Using vector mode transmit for port %d\n",
+	if (eth_dev->data->scattered_rx ||
+	    (offloads & ~DEV_TX_OFFLOAD_MBUF_FAST_FREE) ||
+	    BNXT_TRUFLOW_EN(bp))
+		goto use_scalar_tx;
+
+#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
+	if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256 &&
+	    rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1) {
+		PMD_DRV_LOG(INFO,
+			    "Using AVX2 vector mode transmit for port %d\n",
+			    eth_dev->data->port_id);
+		return bnxt_xmit_pkts_vec_avx2;
+	}
+#endif
+	if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
+		PMD_DRV_LOG(INFO,
+			    "Using SSE vector mode transmit for port %d\n",
 			    eth_dev->data->port_id);
 		return bnxt_xmit_pkts_vec;
 	}
+
+use_scalar_tx:
 	PMD_DRV_LOG(INFO, "Vector mode transmit disabled for port %d\n",
 		    eth_dev->data->port_id);
 	PMD_DRV_LOG(INFO,
@@ -1245,7 +1312,6 @@ bnxt_transmit_function(struct rte_eth_dev *eth_dev)
 		    eth_dev->data->port_id,
 		    eth_dev->data->scattered_rx,
 		    offloads);
-#endif
 #endif
 	return bnxt_xmit_pkts;
 }
@@ -1439,6 +1505,7 @@ static int bnxt_dev_stop(struct rte_eth_dev *eth_dev)
 	bnxt_shutdown_nic(bp);
 	bnxt_hwrm_if_change(bp, false);
 
+	bnxt_free_prev_ring_stats(bp);
 	rte_free(bp->mark_table);
 	bp->mark_table = NULL;
 
@@ -1507,6 +1574,10 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	eth_dev->data->scattered_rx = bnxt_scattered_rx(eth_dev);
 
 	rc = bnxt_start_nic(bp);
+	if (rc)
+		goto error;
+
+	rc = bnxt_alloc_prev_ring_stats(bp);
 	if (rc)
 		goto error;
 
@@ -2855,11 +2926,15 @@ static const struct {
 	eth_rx_burst_t pkt_burst;
 	const char *info;
 } bnxt_rx_burst_info[] = {
-	{bnxt_recv_pkts,	"Scalar"},
+	{bnxt_recv_pkts,		"Scalar"},
 #if defined(RTE_ARCH_X86)
-	{bnxt_recv_pkts_vec,	"Vector SSE"},
-#elif defined(RTE_ARCH_ARM64)
-	{bnxt_recv_pkts_vec,	"Vector Neon"},
+	{bnxt_recv_pkts_vec,		"Vector SSE"},
+#endif
+#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
+	{bnxt_recv_pkts_vec_avx2,	"Vector AVX2"},
+#endif
+#if defined(RTE_ARCH_ARM64)
+	{bnxt_recv_pkts_vec,		"Vector Neon"},
 #endif
 };
 
@@ -2885,11 +2960,15 @@ static const struct {
 	eth_tx_burst_t pkt_burst;
 	const char *info;
 } bnxt_tx_burst_info[] = {
-	{bnxt_xmit_pkts,	"Scalar"},
+	{bnxt_xmit_pkts,		"Scalar"},
 #if defined(RTE_ARCH_X86)
-	{bnxt_xmit_pkts_vec,	"Vector SSE"},
-#elif defined(RTE_ARCH_ARM64)
-	{bnxt_xmit_pkts_vec,	"Vector Neon"},
+	{bnxt_xmit_pkts_vec,		"Vector SSE"},
+#endif
+#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
+	{bnxt_xmit_pkts_vec_avx2,	"Vector AVX2"},
+#endif
+#if defined(RTE_ARCH_ARM64)
+	{bnxt_xmit_pkts_vec,		"Vector Neon"},
 #endif
 };
 
@@ -5709,7 +5788,8 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev, void *params __rte_unused)
 		goto error_free;
 
 	PMD_DRV_LOG(INFO,
-		    DRV_MODULE_NAME "found at mem %" PRIX64 ", node addr %pM\n",
+		    "Found %s device at mem %" PRIX64 ", node addr %pM\n",
+		    DRV_MODULE_NAME,
 		    pci_dev->mem_resource[0].phys_addr,
 		    pci_dev->mem_resource[0].addr);
 

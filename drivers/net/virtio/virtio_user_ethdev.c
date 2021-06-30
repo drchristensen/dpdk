@@ -60,12 +60,15 @@ virtio_user_write_dev_config(struct virtio_hw *hw, size_t offset,
 	struct virtio_user_dev *dev = virtio_user_get_dev(hw);
 
 	if ((offset == offsetof(struct virtio_net_config, mac)) &&
-	    (length == RTE_ETHER_ADDR_LEN))
+	    (length == RTE_ETHER_ADDR_LEN)) {
 		for (i = 0; i < RTE_ETHER_ADDR_LEN; ++i)
 			dev->mac_addr[i] = ((const uint8_t *)src)[i];
-	else
+		virtio_user_dev_set_mac(dev);
+		virtio_user_dev_get_mac(dev);
+	} else {
 		PMD_DRV_LOG(ERR, "not supported offset=%zu, len=%d",
 			    offset, length);
+	}
 }
 
 static void
@@ -110,7 +113,8 @@ virtio_user_get_features(struct virtio_hw *hw)
 	struct virtio_user_dev *dev = virtio_user_get_dev(hw);
 
 	/* unmask feature bits defined in vhost user protocol */
-	return dev->device_features & VIRTIO_PMD_SUPPORTED_GUEST_FEATURES;
+	return (dev->device_features | dev->frontend_features) &
+		VIRTIO_PMD_SUPPORTED_GUEST_FEATURES;
 }
 
 static void
@@ -118,7 +122,7 @@ virtio_user_set_features(struct virtio_hw *hw, uint64_t features)
 {
 	struct virtio_user_dev *dev = virtio_user_get_dev(hw);
 
-	dev->features = features & dev->device_features;
+	dev->features = features & (dev->device_features | dev->frontend_features);
 }
 
 static int

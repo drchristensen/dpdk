@@ -426,6 +426,8 @@ flow_dv_convert_modify_action(struct rte_flow_item *item,
 		unsigned int off_b;
 		uint32_t mask;
 		uint32_t data;
+		bool next_field = true;
+		bool next_dcopy = true;
 
 		if (i >= MLX5_MAX_MODIFY_NUM)
 			return rte_flow_error_set(error, EINVAL,
@@ -443,15 +445,13 @@ flow_dv_convert_modify_action(struct rte_flow_item *item,
 		size_b = sizeof(uint32_t) * CHAR_BIT -
 			 off_b - __builtin_clz(mask);
 		MLX5_ASSERT(size_b);
-		size_b = size_b == sizeof(uint32_t) * CHAR_BIT ? 0 : size_b;
 		actions[i] = (struct mlx5_modification_cmd) {
 			.action_type = type,
 			.field = field->id,
 			.offset = off_b,
-			.length = size_b,
+			.length = (size_b == sizeof(uint32_t) * CHAR_BIT) ?
+				0 : size_b,
 		};
-		/* Convert entire record to expected big-endian format. */
-		actions[i].data0 = rte_cpu_to_be_32(actions[i].data0);
 		if (type == MLX5_MODIFICATION_TYPE_COPY) {
 			MLX5_ASSERT(dcopy);
 			actions[i].dst_field = dcopy->id;
@@ -459,7 +459,27 @@ flow_dv_convert_modify_action(struct rte_flow_item *item,
 				(int)dcopy->offset < 0 ? off_b : dcopy->offset;
 			/* Convert entire record to big-endian format. */
 			actions[i].data1 = rte_cpu_to_be_32(actions[i].data1);
-			++dcopy;
+			/*
+			 * Destination field overflow. Copy leftovers of
+			 * a source field to the next destination field.
+			 */
+			if ((size_b > dcopy->size * CHAR_BIT) && dcopy->size) {
+				actions[i].length = dcopy->size * CHAR_BIT;
+				field->offset += dcopy->size;
+				next_field = false;
+			}
+			/*
+			 * Not enough bits in a source filed to fill a
+			 * destination field. Switch to the next source.
+			 */
+			if (dcopy->size > field->size &&
+			    (size_b == field->size * CHAR_BIT)) {
+				actions[i].length = field->size * CHAR_BIT;
+				dcopy->offset += field->size * CHAR_BIT;
+				next_dcopy = false;
+			}
+			if (next_dcopy)
+				++dcopy;
 		} else {
 			MLX5_ASSERT(item->spec);
 			data = flow_dv_fetch_field((const uint8_t *)item->spec +
@@ -468,8 +488,11 @@ flow_dv_convert_modify_action(struct rte_flow_item *item,
 			data = (data & mask) >> off_b;
 			actions[i].data1 = rte_cpu_to_be_32(data);
 		}
+		/* Convert entire record to expected big-endian format. */
+		actions[i].data0 = rte_cpu_to_be_32(actions[i].data0);
+		if (next_field)
+			++field;
 		++i;
-		++field;
 	} while (field->size);
 	if (resource->actions_num == i)
 		return rte_flow_error_set(error, EINVAL,
@@ -1239,8 +1262,8 @@ flow_dv_convert_action_set_meta
 			 const struct rte_flow_action_set_meta *conf,
 			 struct rte_flow_error *error)
 {
-	uint32_t data = conf->data;
-	uint32_t mask = conf->mask;
+	uint32_t mask = rte_cpu_to_be_32(conf->mask);
+	uint32_t data = rte_cpu_to_be_32(conf->data) & mask;
 	struct rte_flow_item item = {
 		.spec = &data,
 		.mask = &mask,
@@ -1253,25 +1276,14 @@ flow_dv_convert_action_set_meta
 	if (reg < 0)
 		return reg;
 	MLX5_ASSERT(reg != REG_NON);
-	/*
-	 * In datapath code there is no endianness
-	 * coversions for perfromance reasons, all
-	 * pattern conversions are done in rte_flow.
-	 */
 	if (reg == REG_C_0) {
 		struct mlx5_priv *priv = dev->data->dev_private;
 		uint32_t msk_c0 = priv->sh->dv_regc0_mask;
-		uint32_t shl_c0;
+		uint32_t shl_c0 = rte_bsf32(msk_c0);
 
-		MLX5_ASSERT(msk_c0);
-#if RTE_BYTE_ORDER == RTE_BIG_ENDIAN
-		shl_c0 = rte_bsf32(msk_c0);
-#else
-		shl_c0 = sizeof(msk_c0) * CHAR_BIT - rte_fls_u32(msk_c0);
-#endif
-		mask <<= shl_c0;
-		data <<= shl_c0;
-		MLX5_ASSERT(!(~msk_c0 & rte_cpu_to_be_32(mask)));
+		data = rte_cpu_to_be_32(rte_cpu_to_be_32(data) << shl_c0);
+		mask = rte_cpu_to_be_32(mask) & msk_c0;
+		mask = rte_cpu_to_be_32(mask << shl_c0);
 	}
 	reg_c_x[0] = (struct field_modify_info){4, 0, reg_to_field[reg]};
 	/* The routine expects parameters in memory as big-endian ones. */
@@ -1433,6 +1445,7 @@ mlx5_flow_field_id_to_modify_info
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_dev_config *config = &priv->config;
 	uint32_t idx = 0;
+	uint32_t off = 0;
 	uint64_t val = 0;
 	switch (data->field) {
 	case RTE_FLOW_FIELD_START:
@@ -1440,61 +1453,63 @@ mlx5_flow_field_id_to_modify_info
 		MLX5_ASSERT(false);
 		break;
 	case RTE_FLOW_FIELD_MAC_DST:
+		off = data->offset > 16 ? data->offset - 16 : 0;
 		if (mask) {
-			if (data->offset < 32) {
-				info[idx] = (struct field_modify_info){4, 0,
-						MLX5_MODI_OUT_DMAC_47_16};
-				if (width < 32) {
-					mask[idx] =
-						rte_cpu_to_be_32(0xffffffff >>
-								 (32 - width));
+			if (data->offset < 16) {
+				info[idx] = (struct field_modify_info){2, 0,
+						MLX5_MODI_OUT_DMAC_15_0};
+				if (width < 16) {
+					mask[idx] = rte_cpu_to_be_16(0xffff >>
+								 (16 - width));
 					width = 0;
 				} else {
-					mask[idx] = RTE_BE32(0xffffffff);
-					width -= 32;
+					mask[idx] = RTE_BE16(0xffff);
+					width -= 16;
 				}
 				if (!width)
 					break;
 				++idx;
 			}
-			info[idx] = (struct field_modify_info){2, 4 * idx,
-						MLX5_MODI_OUT_DMAC_15_0};
-			mask[idx] = rte_cpu_to_be_16(0xffff >> (16 - width));
-		} else {
-			if (data->offset < 32)
-				info[idx++] = (struct field_modify_info){4, 0,
+			info[idx] = (struct field_modify_info){4, 4 * idx,
 						MLX5_MODI_OUT_DMAC_47_16};
-			info[idx] = (struct field_modify_info){2, 0,
+			mask[idx] = rte_cpu_to_be_32((0xffffffff >>
+						      (32 - width)) << off);
+		} else {
+			if (data->offset < 16)
+				info[idx++] = (struct field_modify_info){2, 0,
 						MLX5_MODI_OUT_DMAC_15_0};
+			info[idx] = (struct field_modify_info){4, off,
+						MLX5_MODI_OUT_DMAC_47_16};
 		}
 		break;
 	case RTE_FLOW_FIELD_MAC_SRC:
+		off = data->offset > 16 ? data->offset - 16 : 0;
 		if (mask) {
-			if (data->offset < 32) {
-				info[idx] = (struct field_modify_info){4, 0,
-						MLX5_MODI_OUT_SMAC_47_16};
-				if (width < 32) {
-					mask[idx] =
-						rte_cpu_to_be_32(0xffffffff >>
-								(32 - width));
+			if (data->offset < 16) {
+				info[idx] = (struct field_modify_info){2, 0,
+						MLX5_MODI_OUT_SMAC_15_0};
+				if (width < 16) {
+					mask[idx] = rte_cpu_to_be_16(0xffff >>
+								 (16 - width));
 					width = 0;
 				} else {
-					mask[idx] = RTE_BE32(0xffffffff);
-					width -= 32;
+					mask[idx] = RTE_BE16(0xffff);
+					width -= 16;
 				}
 				if (!width)
 					break;
 				++idx;
 			}
-			info[idx] = (struct field_modify_info){2, 4 * idx,
-						MLX5_MODI_OUT_SMAC_15_0};
-			mask[idx] = rte_cpu_to_be_16(0xffff >> (16 - width));
-		} else {
-			if (data->offset < 32)
-				info[idx++] = (struct field_modify_info){4, 0,
+			info[idx] = (struct field_modify_info){4, 4 * idx,
 						MLX5_MODI_OUT_SMAC_47_16};
-			info[idx] = (struct field_modify_info){2, 0,
+			mask[idx] = rte_cpu_to_be_32((0xffffffff >>
+						      (32 - width)) << off);
+		} else {
+			if (data->offset < 16)
+				info[idx++] = (struct field_modify_info){2, 0,
 						MLX5_MODI_OUT_SMAC_15_0};
+			info[idx] = (struct field_modify_info){4, off,
+						MLX5_MODI_OUT_SMAC_47_16};
 		}
 		break;
 	case RTE_FLOW_FIELD_VLAN_TYPE:
@@ -1818,7 +1833,12 @@ mlx5_flow_field_id_to_modify_info
 			val = data->value;
 		for (idx = 0; idx < MLX5_ACT_MAX_MOD_FIELDS; idx++) {
 			if (mask[idx]) {
-				if (dst_width > 16) {
+				if (dst_width == 48) {
+					/*special case for MAC addresses */
+					value[idx] = rte_cpu_to_be_16(val);
+					val >>= 16;
+					dst_width -= 16;
+				} else if (dst_width > 16) {
 					value[idx] = rte_cpu_to_be_32(val);
 					val >>= 32;
 				} else if (dst_width > 8) {
@@ -4788,8 +4808,10 @@ flow_dv_validate_action_modify_field(struct rte_eth_dev *dev,
 					"inner header fields modification"
 					" is not supported");
 	}
-	if (action_modify_field->dst.field ==
-	    action_modify_field->src.field)
+	if ((action_modify_field->dst.field ==
+	     action_modify_field->src.field) &&
+	    (action_modify_field->dst.level ==
+	     action_modify_field->src.level))
 		return rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ACTION, action,
 				"source and destination fields"
@@ -6108,28 +6130,33 @@ flow_dv_counter_free(struct rte_eth_dev *dev, uint32_t counter)
 		return;
 	cnt = flow_dv_counter_get_by_idx(dev, counter, &pool);
 	MLX5_ASSERT(pool);
-	/*
-	 * If the counter action is shared by ID, the l3t_clear_entry function
-	 * reduces its references counter. If after the reduction the action is
-	 * still referenced, the function returns here and does not release it.
-	 */
-	if (IS_LEGACY_SHARED_CNT(counter) &&
-	    mlx5_l3t_clear_entry(priv->sh->cnt_id_tbl, cnt->shared_info.id))
-		return;
-	/*
-	 * If the counter action is shared by indirect action API, the atomic
-	 * function reduces its references counter. If after the reduction the
-	 * action is still referenced, the function returns here and does not
-	 * release it.
-	 * When the counter action is not shared neither by ID nor by indirect
-	 * action API, shared info is 1 before the reduction, so this condition
-	 * is failed and function doesn't return here.
-	 */
-	if (!IS_LEGACY_SHARED_CNT(counter) &&
-	    __atomic_sub_fetch(&cnt->shared_info.refcnt, 1, __ATOMIC_RELAXED))
-		return;
-	if (pool->is_aged)
+	if (pool->is_aged) {
 		flow_dv_counter_remove_from_age(dev, counter, cnt);
+	} else {
+		/*
+		 * If the counter action is shared by ID, the l3t_clear_entry
+		 * function reduces its references counter. If after the
+		 * reduction the action is still referenced, the function
+		 * returns here and does not release it.
+		 */
+		if (IS_LEGACY_SHARED_CNT(counter) &&
+		    mlx5_l3t_clear_entry(priv->sh->cnt_id_tbl,
+					 cnt->shared_info.id))
+			return;
+		/*
+		 * If the counter action is shared by indirect action API,
+		 * the atomic function reduces its references counter.
+		 * If after the reduction the action is still referenced, the
+		 * function returns here and does not release it.
+		 * When the counter action is not shared neither by ID nor by
+		 * indirect action API, shared info is 1 before the reduction,
+		 * so this condition is failed and function doesn't return here.
+		 */
+		if (!IS_LEGACY_SHARED_CNT(counter) &&
+		    __atomic_sub_fetch(&cnt->shared_info.refcnt, 1,
+				       __ATOMIC_RELAXED))
+			return;
+	}
 	cnt->pool = pool;
 	/*
 	 * Put the counter back to list to be updated in none fallback mode.
@@ -9217,27 +9244,14 @@ flow_dv_translate_item_meta(struct rte_eth_dev *dev,
 		if (reg < 0)
 			return;
 		MLX5_ASSERT(reg != REG_NON);
-		/*
-		 * In datapath code there is no endianness
-		 * coversions for perfromance reasons, all
-		 * pattern conversions are done in rte_flow.
-		 */
-		value = rte_cpu_to_be_32(value);
-		mask = rte_cpu_to_be_32(mask);
 		if (reg == REG_C_0) {
 			struct mlx5_priv *priv = dev->data->dev_private;
 			uint32_t msk_c0 = priv->sh->dv_regc0_mask;
 			uint32_t shl_c0 = rte_bsf32(msk_c0);
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-			uint32_t shr_c0 = __builtin_clz(priv->sh->dv_meta_mask);
 
-			value >>= shr_c0;
-			mask >>= shr_c0;
-#endif
-			value <<= shl_c0;
+			mask &= msk_c0;
 			mask <<= shl_c0;
-			MLX5_ASSERT(msk_c0);
-			MLX5_ASSERT(!(~msk_c0 & mask));
+			value <<= shl_c0;
 		}
 		flow_dv_match_meta_reg(matcher, key, reg, value, mask);
 	}
