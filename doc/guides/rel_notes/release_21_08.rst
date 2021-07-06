@@ -55,6 +55,19 @@ New Features
      Also, make sure to start the actual text at the margin.
      =======================================================
 
+* **Added auxiliary bus support.**
+
+  Auxiliary bus provides a way to split function into child-devices
+  representing sub-domains of functionality. Each auxiliary device
+  represents a part of its parent functionality.
+
+* **Added Baseband PHY CNXK PMD.**
+
+  Added Baseband PHY PMD which allows to configure BPHY hardware block
+  comprising accelerators and DSPs specifically tailored for 5G/LTE inline
+  usecases. Configuration happens via standard rawdev enq/deq operations. See
+  the :doc:`../rawdevs/cnxk_bphy` rawdev guide for more details on this driver.
+
 
 Removed Items
 -------------
@@ -83,6 +96,9 @@ API Changes
    This section is a comment. Do not overwrite or remove it.
    Also, make sure to start the actual text at the margin.
    =======================================================
+
+* eal: ``rte_strscpy`` sets ``rte_errno`` to ``E2BIG`` in case of string
+  truncation.
 
 
 ABI Changes
