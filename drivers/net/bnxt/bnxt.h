@@ -292,6 +292,7 @@ struct bnxt_link_info {
 	uint16_t		auto_pam4_link_speeds;
 	uint16_t		support_pam4_auto_speeds;
 	uint8_t			req_signal_mode;
+	uint8_t			module_status;
 };
 
 #define BNXT_COS_QUEUE_COUNT	8
@@ -688,10 +689,9 @@ struct bnxt {
 #define BNXT_FLAG_RX_VECTOR_PKT_MODE		BIT(24)
 #define BNXT_FLAG_FLOW_XSTATS_EN		BIT(25)
 #define BNXT_FLAG_DFLT_MAC_SET			BIT(26)
-#define BNXT_FLAG_TRUFLOW_EN			BIT(27)
-#define BNXT_FLAG_GFID_ENABLE			BIT(28)
-#define BNXT_FLAG_RFS_NEEDS_VNIC		BIT(29)
-#define BNXT_FLAG_FLOW_CFA_RFS_RING_TBL_IDX_V2	BIT(30)
+#define BNXT_FLAG_GFID_ENABLE			BIT(27)
+#define BNXT_FLAG_RFS_NEEDS_VNIC		BIT(28)
+#define BNXT_FLAG_FLOW_CFA_RFS_RING_TBL_IDX_V2	BIT(29)
 #define BNXT_RFS_NEEDS_VNIC(bp)	((bp)->flags & BNXT_FLAG_RFS_NEEDS_VNIC)
 #define BNXT_PF(bp)		(!((bp)->flags & BNXT_FLAG_VF))
 #define BNXT_VF(bp)		((bp)->flags & BNXT_FLAG_VF)
@@ -707,14 +707,16 @@ struct bnxt {
 #define BNXT_HAS_RING_GRPS(bp)	(!BNXT_CHIP_P5(bp))
 #define BNXT_FLOW_XSTATS_EN(bp)	((bp)->flags & BNXT_FLAG_FLOW_XSTATS_EN)
 #define BNXT_HAS_DFLT_MAC_SET(bp)      ((bp)->flags & BNXT_FLAG_DFLT_MAC_SET)
-#define BNXT_TRUFLOW_EN(bp)	((bp)->flags & BNXT_FLAG_TRUFLOW_EN)
 #define BNXT_GFID_ENABLED(bp)	((bp)->flags & BNXT_FLAG_GFID_ENABLE)
 
 	uint32_t			flags2;
 #define BNXT_FLAGS2_PTP_TIMESYNC_ENABLED	BIT(0)
 #define BNXT_FLAGS2_PTP_ALARM_SCHEDULED		BIT(1)
+#define	BNXT_FLAGS2_ACCUM_STATS_EN		BIT(2)
 #define BNXT_P5_PTP_TIMESYNC_ENABLED(bp)	\
 	((bp)->flags2 & BNXT_FLAGS2_PTP_TIMESYNC_ENABLED)
+#define	BNXT_ACCUM_STATS_EN(bp)			\
+	((bp)->flags2 & BNXT_FLAGS2_ACCUM_STATS_EN)
 
 	uint16_t		chip_num;
 #define CHIP_NUM_58818		0xd818
@@ -729,6 +731,8 @@ struct bnxt {
 #define BNXT_FW_CAP_ADV_FLOW_MGMT	BIT(5)
 #define BNXT_FW_CAP_ADV_FLOW_COUNTERS	BIT(6)
 #define BNXT_FW_CAP_LINK_ADMIN		BIT(7)
+#define BNXT_FW_CAP_TRUFLOW_EN		BIT(8)
+#define BNXT_TRUFLOW_EN(bp)	((bp)->fw_cap & BNXT_FW_CAP_TRUFLOW_EN)
 
 	pthread_mutex_t         flow_lock;
 
@@ -871,9 +875,11 @@ struct bnxt {
 	uint16_t		port_svif;
 
 	struct tf		tfp;
+	struct tf		tfp_shared;
 	struct bnxt_ulp_context	*ulp_ctx;
 	struct bnxt_flow_stat_info *flow_stat;
 	uint16_t		max_num_kflows;
+	uint8_t			app_id;
 	uint16_t		tx_cfa_action;
 	struct bnxt_ring_stats	*prev_rx_ring_stats;
 	struct bnxt_ring_stats	*prev_tx_ring_stats;
@@ -965,6 +971,20 @@ struct bnxt_vf_rep_tx_queue {
 	struct bnxt_representor *bp;
 };
 
+#define I2C_DEV_ADDR_A0			0xa0
+#define I2C_DEV_ADDR_A2			0xa2
+#define SFF_DIAG_SUPPORT_OFFSET		0x5c
+#define SFF_MODULE_ID_SFP		0x3
+#define SFF_MODULE_ID_QSFP		0xc
+#define SFF_MODULE_ID_QSFP_PLUS		0xd
+#define SFF_MODULE_ID_QSFP28		0x11
+#define SFF8636_FLATMEM_OFFSET		0x2
+#define SFF8636_FLATMEM_MASK		0x4
+#define SFF8636_OPT_PAGES_OFFSET	0xc3
+#define SFF8636_PAGE1_MASK		0x40
+#define SFF8636_PAGE2_MASK		0x80
+#define BNXT_MAX_PHY_I2C_RESP_SIZE	64
+
 int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu);
 int bnxt_link_update(struct rte_eth_dev *eth_dev, int wait_to_complete,
 		     bool exp_link_status);
@@ -1026,7 +1046,11 @@ int32_t
 bnxt_ulp_create_vfr_default_rules(struct rte_eth_dev *vfr_ethdev);
 int32_t
 bnxt_ulp_delete_vfr_default_rules(struct bnxt_representor *vfr);
+void bnxt_get_iface_mac(uint16_t port, enum bnxt_ulp_intf_type type,
+			uint8_t *mac, uint8_t *parent_mac);
 uint16_t bnxt_get_vnic_id(uint16_t port, enum bnxt_ulp_intf_type type);
+uint16_t bnxt_get_parent_vnic_id(uint16_t port, enum bnxt_ulp_intf_type type);
+struct bnxt *bnxt_get_bp(uint16_t port);
 uint16_t bnxt_get_svif(uint16_t port_id, bool func_svif,
 		       enum bnxt_ulp_intf_type type);
 uint16_t bnxt_get_fw_func_id(uint16_t port, enum bnxt_ulp_intf_type type);

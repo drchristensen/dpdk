@@ -11,6 +11,7 @@
 #include <rte_bus_pci.h>
 #include <rte_gro.h>
 #include <rte_gso.h>
+#include <rte_os_shim.h>
 #include <cmdline.h>
 #include <sys/queue.h>
 
@@ -762,7 +763,7 @@ inc_tx_burst_stats(struct fwd_stream *fs, uint16_t nb_tx)
 }
 
 /* Prototypes */
-unsigned int parse_item_list(char* str, const char* item_name,
+unsigned int parse_item_list(const char *str, const char *item_name,
 			unsigned int max_items,
 			unsigned int *parsed_items, int check_unique_values);
 void launch_args_parse(int argc, char** argv);
@@ -885,7 +886,7 @@ void show_tx_pkt_segments(void);
 void set_tx_pkt_times(unsigned int *tx_times);
 void show_tx_pkt_times(void);
 void set_tx_pkt_split(const char *name);
-int parse_fec_mode(const char *name, enum rte_eth_fec_mode *mode);
+int parse_fec_mode(const char *name, uint32_t *fec_capa);
 void show_fec_capability(uint32_t num, struct rte_eth_fec_capa *speed_fec_capa);
 void set_nb_pkt_per_burst(uint16_t pkt_burst);
 char *list_pkt_forwarding_modes(void);

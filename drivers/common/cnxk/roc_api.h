@@ -24,6 +24,8 @@
 /* Platform definition */
 #include "roc_platform.h"
 
+#define ROC_LMT_LINE_SZ		    128
+#define ROC_NUM_LMT_LINES	    2048
 #define ROC_LMT_LINES_PER_CORE_LOG2 5
 #define ROC_LMT_LINE_SIZE_LOG2	    7
 #define ROC_LMT_BASE_PER_CORE_LOG2                                             \
@@ -55,6 +57,11 @@
 #define PCI_DEVID_CN9K_CGX  0xA059
 #define PCI_DEVID_CN10K_RPM 0xA060
 
+#define PCI_DEVID_CN9K_RVU_CPT_PF  0xA0FD
+#define PCI_DEVID_CN9K_RVU_CPT_VF  0xA0FE
+#define PCI_DEVID_CN10K_RVU_CPT_PF 0xA0F2
+#define PCI_DEVID_CN10K_RVU_CPT_VF 0xA0F3
+
 #define PCI_SUBSYSTEM_DEVID_CN10KA  0xB900
 #define PCI_SUBSYSTEM_DEVID_CN10KAS 0xB900
 
@@ -65,6 +72,7 @@
 #define PCI_SUBSYSTEM_DEVID_CN9KE 0xB100
 
 /* HW structure definition */
+#include "hw/cpt.h"
 #include "hw/nix.h"
 #include "hw/npa.h"
 #include "hw/npc.h"
@@ -106,5 +114,15 @@
 
 /* Baseband phy */
 #include "roc_bphy.h"
+
+/* CPT */
+#include "roc_cpt.h"
+
+/* CPT microcode */
+#include "roc_ae.h"
+#include "roc_ae_fpm_tables.h"
+#include "roc_ie_on.h"
+#include "roc_ie_ot.h"
+#include "roc_se.h"
 
 #endif /* _ROC_API_H_ */

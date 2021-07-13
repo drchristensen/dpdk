@@ -111,7 +111,7 @@ static const struct rte_cryptodev_capabilities
 					.increment = 1
 				},
 				.digest_size = {
-					.min = 28,
+					.min = 12,
 					.max = 28,
 					.increment = 0
 				},
@@ -232,7 +232,7 @@ static const struct rte_cryptodev_capabilities
 				},
 				.digest_size = {
 					.min = 12,
-					.max = 48,
+					.max = 64,
 					.increment = 4
 				},
 			}, }
@@ -252,7 +252,7 @@ static const struct rte_cryptodev_capabilities
 				},
 				.digest_size = {
 					.min = 12,
-					.max = 48,
+					.max = 64,
 					.increment = 0
 				},
 			}, }
@@ -336,9 +336,9 @@ static const struct rte_cryptodev_capabilities
 					.increment = 0
 				},
 				.aad_size = {
-					.min = 8,
-					.max = 12,
-					.increment = 4
+					.min = 0,
+					.max = 64,
+					.increment = 1
 				},
 				.iv_size = {
 					.min = 12,
@@ -662,6 +662,11 @@ mrvl_crypto_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 		}
 
 		/*
+		 * In case just one engine is enabled mapping will look as
+		 * follows:
+		 * qp:      0        1        2        3
+		 * cio-x:y: cio-0:0, cio-0:1, cio-0:2, cio-0:3
+		 *
 		 * In case two crypto engines are enabled qps will
 		 * be evenly spread among them. Even and odd qps will
 		 * be handled by cio-0 and cio-1 respectively. qp-cio mapping
@@ -673,10 +678,17 @@ mrvl_crypto_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 		 * qp:      4        5        6        7
 		 * cio-x:y: cio-0:2, cio-1:2, cio-0:3, cio-1:3
 		 *
-		 * In case just one engine is enabled mapping will look as
-		 * follows:
+		 * In case of three crypto engines are enabled qps will
+		 * be mapped as following:
+		 *
 		 * qp:      0        1        2        3
-		 * cio-x:y: cio-0:0, cio-0:1, cio-0:2, cio-0:3
+		 * cio-x:y: cio-0:0, cio-1:0, cio-2:0, cio-0:1
+		 *
+		 * qp:      4        5        6        7
+		 * cio-x:y: cio-1:1, cio-2:1, cio-0:2, cio-1:2
+		 *
+		 * qp:      8        9        10       11
+		 * cio-x:y: cio-2:2, cio-0:3, cio-1:3, cio-2:3
 		 */
 		n = snprintf(match, sizeof(match), "cio-%u:%u",
 				qp_id % num, qp_id / num);
@@ -793,7 +805,7 @@ mrvl_crypto_pmd_sym_session_clear(struct rte_cryptodev *dev,
 			MRVL_LOG(ERR, "Error while destroying session!");
 		}
 
-		memset(sess, 0, sizeof(struct mrvl_crypto_session));
+		memset(mrvl_sess, 0, sizeof(struct mrvl_crypto_session));
 		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
 		set_sym_session_private_data(sess, index, NULL);
 		rte_mempool_put(sess_mp, sess_priv);

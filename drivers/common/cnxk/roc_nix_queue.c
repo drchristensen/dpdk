@@ -119,6 +119,15 @@ rq_cn9k_cfg(struct nix *nix, struct roc_nix_rq *rq, bool cfg, bool ena)
 	aq->rq.qint_idx = rq->qid % nix->qints;
 	aq->rq.xqe_drop_ena = 1;
 
+	/* If RED enabled, then fill enable for all cases */
+	if (rq->red_pass && (rq->red_pass >= rq->red_drop)) {
+		aq->rq.spb_aura_pass = rq->spb_red_pass;
+		aq->rq.lpb_aura_pass = rq->red_pass;
+
+		aq->rq.spb_aura_drop = rq->spb_red_drop;
+		aq->rq.lpb_aura_drop = rq->red_drop;
+	}
+
 	if (cfg) {
 		if (rq->sso_ena) {
 			/* SSO mode */
@@ -155,6 +164,14 @@ rq_cn9k_cfg(struct nix *nix, struct roc_nix_rq *rq, bool cfg, bool ena)
 		aq->rq_mask.rq_int_ena = ~aq->rq_mask.rq_int_ena;
 		aq->rq_mask.qint_idx = ~aq->rq_mask.qint_idx;
 		aq->rq_mask.xqe_drop_ena = ~aq->rq_mask.xqe_drop_ena;
+
+		if (rq->red_pass && (rq->red_pass >= rq->red_drop)) {
+			aq->rq_mask.spb_aura_pass = ~aq->rq_mask.spb_aura_pass;
+			aq->rq_mask.lpb_aura_pass = ~aq->rq_mask.lpb_aura_pass;
+
+			aq->rq_mask.spb_aura_drop = ~aq->rq_mask.spb_aura_drop;
+			aq->rq_mask.lpb_aura_drop = ~aq->rq_mask.lpb_aura_drop;
+		}
 	}
 
 	return 0;
@@ -244,6 +261,23 @@ rq_cfg(struct nix *nix, struct roc_nix_rq *rq, bool cfg, bool ena)
 	aq->rq.qint_idx = rq->qid % nix->qints;
 	aq->rq.xqe_drop_ena = 1;
 
+	/* If RED enabled, then fill enable for all cases */
+	if (rq->red_pass && (rq->red_pass >= rq->red_drop)) {
+		aq->rq.spb_pool_pass = rq->red_pass;
+		aq->rq.spb_aura_pass = rq->red_pass;
+		aq->rq.lpb_pool_pass = rq->red_pass;
+		aq->rq.lpb_aura_pass = rq->red_pass;
+		aq->rq.wqe_pool_pass = rq->red_pass;
+		aq->rq.xqe_pass = rq->red_pass;
+
+		aq->rq.spb_pool_drop = rq->red_drop;
+		aq->rq.spb_aura_drop = rq->red_drop;
+		aq->rq.lpb_pool_drop = rq->red_drop;
+		aq->rq.lpb_aura_drop = rq->red_drop;
+		aq->rq.wqe_pool_drop = rq->red_drop;
+		aq->rq.xqe_drop = rq->red_drop;
+	}
+
 	if (cfg) {
 		if (rq->sso_ena) {
 			/* SSO mode */
@@ -296,6 +330,22 @@ rq_cfg(struct nix *nix, struct roc_nix_rq *rq, bool cfg, bool ena)
 		aq->rq_mask.rq_int_ena = ~aq->rq_mask.rq_int_ena;
 		aq->rq_mask.qint_idx = ~aq->rq_mask.qint_idx;
 		aq->rq_mask.xqe_drop_ena = ~aq->rq_mask.xqe_drop_ena;
+
+		if (rq->red_pass && (rq->red_pass >= rq->red_drop)) {
+			aq->rq_mask.spb_pool_pass = ~aq->rq_mask.spb_pool_pass;
+			aq->rq_mask.spb_aura_pass = ~aq->rq_mask.spb_aura_pass;
+			aq->rq_mask.lpb_pool_pass = ~aq->rq_mask.lpb_pool_pass;
+			aq->rq_mask.lpb_aura_pass = ~aq->rq_mask.lpb_aura_pass;
+			aq->rq_mask.wqe_pool_pass = ~aq->rq_mask.wqe_pool_pass;
+			aq->rq_mask.xqe_pass = ~aq->rq_mask.xqe_pass;
+
+			aq->rq_mask.spb_pool_drop = ~aq->rq_mask.spb_pool_drop;
+			aq->rq_mask.spb_aura_drop = ~aq->rq_mask.spb_aura_drop;
+			aq->rq_mask.lpb_pool_drop = ~aq->rq_mask.lpb_pool_drop;
+			aq->rq_mask.lpb_aura_drop = ~aq->rq_mask.lpb_aura_drop;
+			aq->rq_mask.wqe_pool_drop = ~aq->rq_mask.wqe_pool_drop;
+			aq->rq_mask.xqe_drop = ~aq->rq_mask.xqe_drop;
+		}
 	}
 
 	return 0;
@@ -582,6 +632,7 @@ sq_cn9k_init(struct nix *nix, struct roc_nix_sq *sq, uint32_t rr_quantum,
 	aq->sq.default_chan = nix->tx_chan_base;
 	aq->sq.sqe_stype = NIX_STYPE_STF;
 	aq->sq.ena = 1;
+	aq->sq.sso_ena = !!sq->sso_ena;
 	if (aq->sq.max_sqe_size == NIX_MAXSQESZ_W8)
 		aq->sq.sqe_stype = NIX_STYPE_STP;
 	aq->sq.sqb_aura = roc_npa_aura_handle_to_aura(sq->aura_handle);
@@ -679,6 +730,7 @@ sq_init(struct nix *nix, struct roc_nix_sq *sq, uint32_t rr_quantum,
 	aq->sq.default_chan = nix->tx_chan_base;
 	aq->sq.sqe_stype = NIX_STYPE_STF;
 	aq->sq.ena = 1;
+	aq->sq.sso_ena = !!sq->sso_ena;
 	if (aq->sq.max_sqe_size == NIX_MAXSQESZ_W8)
 		aq->sq.sqe_stype = NIX_STYPE_STP;
 	aq->sq.sqb_aura = roc_npa_aura_handle_to_aura(sq->aura_handle);

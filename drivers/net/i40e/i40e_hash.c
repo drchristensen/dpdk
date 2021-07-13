@@ -201,11 +201,11 @@ struct i40e_hash_match_pattern {
 #define I40E_HASH_MAP_CUS_PATTERN(pattern, rss_mask, cus_pctype) { \
 	pattern, rss_mask, true, cus_pctype }
 
-#define I40E_HASH_L2_RSS_MASK		(ETH_RSS_ETH | ETH_RSS_L2_SRC_ONLY | \
+#define I40E_HASH_L2_RSS_MASK		(ETH_RSS_VLAN | ETH_RSS_ETH | \
+					ETH_RSS_L2_SRC_ONLY | \
 					ETH_RSS_L2_DST_ONLY)
 
 #define I40E_HASH_L23_RSS_MASK		(I40E_HASH_L2_RSS_MASK | \
-					ETH_RSS_VLAN | \
 					ETH_RSS_L3_SRC_ONLY | \
 					ETH_RSS_L3_DST_ONLY)
 
@@ -732,7 +732,7 @@ i40e_hash_config_region(struct i40e_pf *pf,
 			const struct i40e_rte_flow_rss_conf *rss_conf)
 {
 	struct i40e_hw *hw = &pf->adapter->hw;
-	struct rte_eth_dev *dev = pf->adapter->eth_dev;
+	struct rte_eth_dev *dev = &rte_eth_devices[pf->dev_data->port_id];
 	struct i40e_queue_region_info *regions = pf->queue_region.region;
 	uint32_t num = pf->queue_region.queue_region_number;
 	uint32_t i, region_id_mask = 0;
@@ -1105,13 +1105,21 @@ i40e_hash_parse_pattern_act(const struct rte_eth_dev *dev,
 					  NULL,
 					  "RSS Queues not supported when pattern specified");
 
-	if (rss_act->func == RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ)
+	switch (rss_act->func) {
+	case RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ:
 		rss_conf->symmetric_enable = true;
-	else if (rss_act->func != RTE_ETH_HASH_FUNCTION_DEFAULT)
-		return rte_flow_error_set(error, -EINVAL,
-					  RTE_FLOW_ERROR_TYPE_ACTION_CONF,
-					  NULL,
-					  "Only symmetric TOEPLITZ supported when pattern specified");
+		break;
+	case RTE_ETH_HASH_FUNCTION_DEFAULT:
+	case RTE_ETH_HASH_FUNCTION_TOEPLITZ:
+	case RTE_ETH_HASH_FUNCTION_SIMPLE_XOR:
+		break;
+	default:
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION_CONF,
+				NULL,
+				"RSS hash function not supported "
+				"when pattern specified");
+	}
 
 	if (!i40e_hash_validate_rss_types(rss_act->types))
 		return rte_flow_error_set(error, EINVAL,
@@ -1262,6 +1270,7 @@ i40e_hash_reset_conf(struct i40e_pf *pf,
 		     struct i40e_rte_flow_rss_conf *rss_conf)
 {
 	struct i40e_hw *hw = &pf->adapter->hw;
+	struct rte_eth_dev *dev;
 	uint64_t inset;
 	uint32_t idx;
 	int ret;
@@ -1275,8 +1284,8 @@ i40e_hash_reset_conf(struct i40e_pf *pf,
 	}
 
 	if (rss_conf->misc_reset_flags & I40E_HASH_FLOW_RESET_FLAG_REGION) {
-		ret = i40e_flush_queue_region_all_conf(pf->adapter->eth_dev,
-						       hw, pf, 0);
+		dev = &rte_eth_devices[pf->dev_data->port_id];
+		ret = i40e_flush_queue_region_all_conf(dev, hw, pf, 0);
 		if (ret)
 			return ret;
 

@@ -175,6 +175,9 @@
 /* Decap will be used or not. */
 #define MLX5_DECAP_EN "decap_en"
 
+/* Device parameter to configure allow or prevent duplicate rules pattern. */
+#define MLX5_ALLOW_DUPLICATE_PATTERN "allow_duplicate_pattern"
+
 /* Shared memory between primary and secondary processes. */
 struct mlx5_shared_data *mlx5_shared_data;
 
@@ -600,8 +603,6 @@ mlx5_aso_flow_mtrs_mng_init(struct mlx5_dev_ctx_shared *sh)
 		if (sh->meter_aso_en) {
 			rte_spinlock_init(&sh->mtrmng->pools_mng.mtrsl);
 			LIST_INIT(&sh->mtrmng->pools_mng.meters);
-			sh->mtrmng->policy_idx_tbl =
-				mlx5_l3t_create(MLX5_L3T_TYPE_DWORD);
 		}
 		sh->mtrmng->def_policy_id = MLX5_INVALID_POLICY_ID;
 	}
@@ -1948,6 +1949,8 @@ mlx5_args_check(const char *key, const char *val, void *opaque)
 		config->sys_mem_en = !!tmp;
 	} else if (strcmp(MLX5_DECAP_EN, key) == 0) {
 		config->decap_en = !!tmp;
+	} else if (strcmp(MLX5_ALLOW_DUPLICATE_PATTERN, key) == 0) {
+		config->allow_duplicate_pattern = !!tmp;
 	} else {
 		DRV_LOG(WARNING, "%s: unknown parameter", key);
 		rte_errno = EINVAL;
@@ -2007,6 +2010,7 @@ mlx5_args(struct mlx5_dev_config *config, struct rte_devargs *devargs)
 		MLX5_RECLAIM_MEM,
 		MLX5_SYS_MEM_EN,
 		MLX5_DECAP_EN,
+		MLX5_ALLOW_DUPLICATE_PATTERN,
 		NULL,
 	};
 	struct rte_kvargs *kvlist;

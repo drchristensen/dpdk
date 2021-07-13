@@ -801,13 +801,11 @@ hns3vf_dev_configure(struct rte_eth_dev *dev)
 	 * work as usual. But these fake queues are imperceptible, and can not
 	 * be used by upper applications.
 	 */
-	if (!hns3_dev_indep_txrx_supported(hw)) {
-		ret = hns3_set_fake_rx_or_tx_queues(dev, nb_rx_q, nb_tx_q);
-		if (ret) {
-			hns3_err(hw, "fail to set Rx/Tx fake queues, ret = %d.",
-				 ret);
-			return ret;
-		}
+	ret = hns3_set_fake_rx_or_tx_queues(dev, nb_rx_q, nb_tx_q);
+	if (ret) {
+		hns3_err(hw, "fail to set Rx/Tx fake queues, ret = %d.", ret);
+		hw->cfg_max_queues = 0;
+		return ret;
 	}
 
 	hw->adapter_state = HNS3_NIC_CONFIGURING;
@@ -866,6 +864,7 @@ hns3vf_dev_configure(struct rte_eth_dev *dev)
 	return 0;
 
 cfg_err:
+	hw->cfg_max_queues = 0;
 	(void)hns3_set_fake_rx_or_tx_queues(dev, 0, 0);
 	hw->adapter_state = HNS3_NIC_INITIALIZED;
 
@@ -1609,7 +1608,8 @@ hns3vf_en_hw_strip_rxvtag(struct hns3_hw *hw, bool enable)
 	ret = hns3_send_mbx_msg(hw, HNS3_MBX_SET_VLAN, HNS3_MBX_VLAN_RX_OFF_CFG,
 				&msg_data, sizeof(msg_data), false, NULL, 0);
 	if (ret)
-		hns3_err(hw, "vf enable strip failed, ret =%d", ret);
+		hns3_err(hw, "vf %s strip failed, ret = %d.",
+				enable ? "enable" : "disable", ret);
 
 	return ret;
 }
@@ -1921,6 +1921,8 @@ hns3vf_init_vf(struct rte_eth_dev *eth_dev)
 		goto err_cmd_init;
 	}
 
+	hns3_tx_push_init(eth_dev);
+
 	/* Get VF resource */
 	ret = hns3_query_vf_resource(hw);
 	if (ret)
@@ -2107,7 +2109,7 @@ hns3vf_dev_stop(struct rte_eth_dev *dev)
 	/* Disable datapath on secondary process. */
 	hns3_mp_req_stop_rxtx(dev);
 	/* Prevent crashes when queues are still in use. */
-	rte_delay_ms(hw->tqps_num);
+	rte_delay_ms(hw->cfg_max_queues);
 
 	rte_spinlock_lock(&hw->lock);
 	if (__atomic_load_n(&hw->reset.resetting, __ATOMIC_RELAXED) == 0) {
@@ -2558,7 +2560,7 @@ hns3vf_stop_service(struct hns3_adapter *hns)
 	rte_wmb();
 	/* Disable datapath on secondary process. */
 	hns3_mp_req_stop_rxtx(eth_dev);
-	rte_delay_ms(hw->tqps_num);
+	rte_delay_ms(hw->cfg_max_queues);
 
 	rte_spinlock_lock(&hw->lock);
 	if (hw->adapter_state == HNS3_NIC_STARTED ||
@@ -2928,8 +2930,8 @@ hns3vf_dev_init(struct rte_eth_dev *eth_dev)
 					  "process, ret = %d", ret);
 			goto err_mp_init_secondary;
 		}
-
 		hw->secondary_cnt++;
+		hns3_tx_push_init(eth_dev);
 		return 0;
 	}
 

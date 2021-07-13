@@ -244,6 +244,8 @@ struct mlx5_dev_config {
 	unsigned int sys_mem_en:1; /* The default memory allocator. */
 	unsigned int decap_en:1; /* Whether decap will be used or not. */
 	unsigned int dv_miss_info:1; /* restore packet after partial hw miss */
+	unsigned int allow_duplicate_pattern:1;
+	/* Allow/Prevent the duplicate rules pattern. */
 	struct {
 		unsigned int enabled:1; /* Whether MPRQ is enabled. */
 		unsigned int stride_num_n; /* Number of strides. */
@@ -631,6 +633,20 @@ enum mlx5_meter_domain {
 					MLX5_MTR_DOMAIN_EGRESS_BIT | \
 					MLX5_MTR_DOMAIN_TRANSFER_BIT)
 
+/* The color tag rule structure. */
+struct mlx5_sub_policy_color_rule {
+	void *rule;
+	/* The color rule. */
+	struct mlx5_flow_dv_matcher *matcher;
+	/* The color matcher. */
+	TAILQ_ENTRY(mlx5_sub_policy_color_rule) next_port;
+	/**< Pointer to the next color rule structure. */
+	int32_t src_port;
+	/* On which src port this rule applied. */
+};
+
+TAILQ_HEAD(mlx5_sub_policy_color_rules, mlx5_sub_policy_color_rule);
+
 /*
  * Meter sub-policy structure.
  * Each RSS TIR in meter policy need its own sub-policy resource.
@@ -648,10 +664,8 @@ struct mlx5_flow_meter_sub_policy {
 	/* Index to TIR resource. */
 	struct mlx5_flow_tbl_resource *jump_tbl[MLX5_MTR_RTE_COLORS];
 	/* Meter jump/drop table. */
-	struct mlx5_flow_dv_matcher *color_matcher[RTE_COLORS];
-	/* Matcher for Color. */
-	void *color_rule[RTE_COLORS];
-	/* Meter green/yellow/drop rule. */
+	struct mlx5_sub_policy_color_rules color_rules[RTE_COLORS];
+	/* List for the color rules. */
 };
 
 struct mlx5_meter_policy_acts {
@@ -677,11 +691,19 @@ struct mlx5_meter_policy_action_container {
 		/* Jump/drop action per color. */
 		uint16_t queue;
 		/* Queue action configuration. */
+		struct {
+			uint32_t next_mtr_id;
+			/* The next meter id. */
+			void *next_sub_policy;
+			/* Next meter's sub-policy. */
+		};
 	};
 };
 
 /* Flow meter policy parameter structure. */
 struct mlx5_flow_meter_policy {
+	struct rte_eth_dev *dev;
+	/* The port dev on which policy is created. */
 	uint32_t is_rss:1;
 	/* Is RSS policy table. */
 	uint32_t ingress:1;
@@ -692,6 +714,8 @@ struct mlx5_flow_meter_policy {
 	/* Rule applies to transfer domain. */
 	uint32_t is_queue:1;
 	/* Is queue action in policy table. */
+	uint32_t is_hierarchy:1;
+	/* Is meter action in policy table. */
 	rte_spinlock_t sl;
 	uint32_t ref_cnt;
 	/* Use count. */
@@ -710,6 +734,7 @@ struct mlx5_flow_meter_policy {
 #define MLX5_MTR_SUB_POLICY_NUM_SHIFT  3
 #define MLX5_MTR_SUB_POLICY_NUM_MASK  0x7
 #define MLX5_MTRS_DEFAULT_RULE_PRIORITY 0xFFFF
+#define MLX5_MTR_CHAIN_MAX_NUM 8
 
 /* Flow meter default policy parameter structure.
  * Policy index 0 is reserved by default policy table.
@@ -870,8 +895,6 @@ struct mlx5_flow_mtr_mng {
 	/* Default policy id. */
 	uint32_t def_policy_ref_cnt;
 	/** def_policy meter use count. */
-	struct mlx5_l3t_tbl *policy_idx_tbl;
-	/* Policy index lookup table. */
 	struct mlx5_flow_tbl_resource *drop_tbl[MLX5_MTR_DOMAIN_MAX];
 	/* Meter drop table. */
 	struct mlx5_flow_dv_matcher *
@@ -1331,7 +1354,7 @@ struct mlx5_priv {
 	uint16_t vport_id; /* Associated VF vport index (if any). */
 	uint32_t vport_meta_tag; /* Used for vport index match ove VF LAG. */
 	uint32_t vport_meta_mask; /* Used for vport index field match mask. */
-	int32_t representor_id; /* -1 if not a representor. */
+	uint16_t representor_id; /* UINT16_MAX if not a representor. */
 	int32_t pf_bond; /* >=0, representor owner PF index in bonding. */
 	unsigned int if_index; /* Associated kernel network device index. */
 	/* RX/TX queues. */
@@ -1373,8 +1396,9 @@ struct mlx5_priv {
 	/* Hash table of Rx metadata register copy table. */
 	uint8_t mtr_sfx_reg; /* Meter prefix-suffix flow match REG_C. */
 	uint8_t mtr_color_reg; /* Meter color match REG_C. */
-	struct mlx5_mtr_profiles flow_meter_profiles; /* MTR profile list. */
 	struct mlx5_legacy_flow_meters flow_meters; /* MTR list. */
+	struct mlx5_l3t_tbl *mtr_profile_tbl; /* Meter index lookup table. */
+	struct mlx5_l3t_tbl *policy_idx_tbl; /* Policy index lookup table. */
 	struct mlx5_l3t_tbl *mtr_idx_tbl; /* Meter index lookup table. */
 	uint8_t skip_default_rss_reta; /* Skip configuration of default reta. */
 	uint8_t fdb_def_rule; /* Whether fdb jump to table 1 is configured. */
@@ -1395,6 +1419,13 @@ struct rte_hairpin_peer_info {
 	uint16_t peer_q;
 	uint16_t tx_explicit;
 	uint16_t manual_bind;
+};
+
+#define BUF_SIZE 1024
+enum dr_dump_rec_type {
+	DR_DUMP_REC_TYPE_PMD_PKT_REFORMAT = 4410,
+	DR_DUMP_REC_TYPE_PMD_MODIFY_HDR = 4420,
+	DR_DUMP_REC_TYPE_PMD_COUNTER = 4430,
 };
 
 /* mlx5.c */
@@ -1628,6 +1659,14 @@ int mlx5_counter_query(struct rte_eth_dev *dev, uint32_t cnt,
 		       bool clear, uint64_t *pkts, uint64_t *bytes);
 int mlx5_flow_dev_dump(struct rte_eth_dev *dev, struct rte_flow *flow,
 			FILE *file, struct rte_flow_error *error);
+int save_dump_file(const unsigned char *data, uint32_t size,
+		uint32_t type, uint32_t id, void *arg, FILE *file);
+int mlx5_flow_query_counter(struct rte_eth_dev *dev, struct rte_flow *flow,
+	struct rte_flow_query_count *count, struct rte_flow_error *error);
+#ifdef HAVE_IBV_FLOW_DV_SUPPORT
+int mlx5_flow_dev_dump_ipool(struct rte_eth_dev *dev, struct rte_flow *flow,
+		FILE *file, struct rte_flow_error *error);
+#endif
 void mlx5_flow_rxq_dynf_metadata_set(struct rte_eth_dev *dev);
 int mlx5_flow_get_aged_flows(struct rte_eth_dev *dev, void **contexts,
 			uint32_t nb_contexts, struct rte_flow_error *error);
@@ -1668,6 +1707,9 @@ struct mlx5_flow_meter_policy *mlx5_flow_meter_policy_find
 		(struct rte_eth_dev *dev,
 		uint32_t policy_id,
 		uint32_t *policy_idx);
+struct mlx5_flow_meter_policy *
+mlx5_flow_meter_hierarchy_get_final_policy(struct rte_eth_dev *dev,
+					struct mlx5_flow_meter_policy *policy);
 int mlx5_flow_meter_flush(struct rte_eth_dev *dev,
 			  struct rte_mtr_error *error);
 void mlx5_flow_meter_rxq_flush(struct rte_eth_dev *dev);

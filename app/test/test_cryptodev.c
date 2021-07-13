@@ -61,10 +61,6 @@
 #define IN_PLACE 0
 #define OUT_OF_PLACE 1
 
-#ifndef ARRAY_SIZE
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-#endif
-
 static int gbl_driver_id;
 
 static enum rte_security_session_action_type gbl_action_type =
@@ -135,10 +131,11 @@ setup_test_string(struct rte_mempool *mpool,
 	struct rte_mbuf *m = rte_pktmbuf_alloc(mpool);
 	size_t t_len = len - (blocksize ? (len % blocksize) : 0);
 
-	memset(m->buf_addr, 0, m->buf_len);
 	if (m) {
-		char *dst = rte_pktmbuf_append(m, t_len);
+		char *dst;
 
+		memset(m->buf_addr, 0, m->buf_len);
+		dst = rte_pktmbuf_append(m, t_len);
 		if (!dst) {
 			rte_pktmbuf_free(m);
 			return NULL;
@@ -8736,7 +8733,7 @@ test_PDCP_SDAP_PROTO_encap_all(void)
 	int err, all_err = TEST_SUCCESS;
 	const struct pdcp_sdap_test *cur_test;
 
-	size = ARRAY_SIZE(list_pdcp_sdap_tests);
+	size = RTE_DIM(list_pdcp_sdap_tests);
 
 	for (i = 0; i < size; i++) {
 		cur_test = &list_pdcp_sdap_tests[i];
@@ -8778,7 +8775,7 @@ test_PDCP_SDAP_PROTO_decap_all(void)
 	int err, all_err = TEST_SUCCESS;
 	const struct pdcp_sdap_test *cur_test;
 
-	size = ARRAY_SIZE(list_pdcp_sdap_tests);
+	size = RTE_DIM(list_pdcp_sdap_tests);
 
 	for (i = 0; i < size; i++) {
 		cur_test = &list_pdcp_sdap_tests[i];
@@ -12601,7 +12598,7 @@ test_authenticated_decryption_fail_when_corruption(
 }
 
 static int
-test_authenticated_encryt_with_esn(
+test_authenticated_encrypt_with_esn(
 		struct crypto_testsuite_params *ts_params,
 		struct crypto_unittest_params *ut_params,
 		const struct test_crypto_vector *reference)
@@ -13388,7 +13385,7 @@ auth_decryption_AES128CBC_HMAC_SHA1_fail_tag_corrupt(void)
 static int
 auth_encrypt_AES128CBC_HMAC_SHA1_esn_check(void)
 {
-	return test_authenticated_encryt_with_esn(
+	return test_authenticated_encrypt_with_esn(
 			&testsuite_params,
 			&unittest_params,
 			&aes128cbc_hmac_sha1_aad_test_vector);
@@ -13474,7 +13471,7 @@ scheduler_testsuite_setup(void)
 }
 
 static int
-test_scheduler_attach_slave_op(void)
+test_scheduler_attach_worker_op(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	uint8_t sched_id = ts_params->valid_devs[0];
@@ -13584,7 +13581,7 @@ test_scheduler_attach_slave_op(void)
 }
 
 static int
-test_scheduler_detach_slave_op(void)
+test_scheduler_detach_worker_op(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	uint8_t sched_id = ts_params->valid_devs[0];
@@ -13650,7 +13647,7 @@ test_scheduler_mode_pkt_size_distr_op(void)
 static int
 scheduler_multicore_testsuite_setup(void)
 {
-	if (test_scheduler_attach_slave_op() < 0)
+	if (test_scheduler_attach_worker_op() < 0)
 		return TEST_SKIPPED;
 	if (test_scheduler_mode_op(CDEV_SCHED_MODE_MULTICORE) < 0)
 		return TEST_SKIPPED;
@@ -13660,7 +13657,7 @@ scheduler_multicore_testsuite_setup(void)
 static int
 scheduler_roundrobin_testsuite_setup(void)
 {
-	if (test_scheduler_attach_slave_op() < 0)
+	if (test_scheduler_attach_worker_op() < 0)
 		return TEST_SKIPPED;
 	if (test_scheduler_mode_op(CDEV_SCHED_MODE_ROUNDROBIN) < 0)
 		return TEST_SKIPPED;
@@ -13670,7 +13667,7 @@ scheduler_roundrobin_testsuite_setup(void)
 static int
 scheduler_failover_testsuite_setup(void)
 {
-	if (test_scheduler_attach_slave_op() < 0)
+	if (test_scheduler_attach_worker_op() < 0)
 		return TEST_SKIPPED;
 	if (test_scheduler_mode_op(CDEV_SCHED_MODE_FAILOVER) < 0)
 		return TEST_SKIPPED;
@@ -13680,7 +13677,7 @@ scheduler_failover_testsuite_setup(void)
 static int
 scheduler_pkt_size_distr_testsuite_setup(void)
 {
-	if (test_scheduler_attach_slave_op() < 0)
+	if (test_scheduler_attach_worker_op() < 0)
 		return TEST_SKIPPED;
 	if (test_scheduler_mode_op(CDEV_SCHED_MODE_PKT_SIZE_DISTR) < 0)
 		return TEST_SKIPPED;
@@ -13690,7 +13687,7 @@ scheduler_pkt_size_distr_testsuite_setup(void)
 static void
 scheduler_mode_testsuite_teardown(void)
 {
-	test_scheduler_detach_slave_op();
+	test_scheduler_detach_worker_op();
 }
 
 #endif /* RTE_CRYPTO_SCHEDULER */
@@ -14521,19 +14518,19 @@ run_cryptodev_testsuite(const char *pmd_name)
 }
 
 static int
-test_cryptodev_qat(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_qat(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_QAT_SYM_PMD));
 }
 
 static int
-test_cryptodev_virtio(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_virtio(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_VIRTIO_PMD));
 }
 
 static int
-test_cryptodev_aesni_mb(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_aesni_mb(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_AESNI_MB_PMD));
 }
@@ -14579,19 +14576,19 @@ test_cryptodev_null(void)
 }
 
 static int
-test_cryptodev_sw_snow3g(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_sw_snow3g(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_SNOW3G_PMD));
 }
 
 static int
-test_cryptodev_sw_kasumi(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_sw_kasumi(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_KASUMI_PMD));
 }
 
 static int
-test_cryptodev_sw_zuc(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_sw_zuc(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_ZUC_PMD));
 }
@@ -14611,7 +14608,7 @@ test_cryptodev_mrvl(void)
 #ifdef RTE_CRYPTO_SCHEDULER
 
 static int
-test_cryptodev_scheduler(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_scheduler(void)
 {
 	uint8_t ret, sched_i, j, i = 0, blk_start_idx = 0;
 	const enum blockcipher_test_type blk_suites[] = {
@@ -14652,12 +14649,12 @@ test_cryptodev_scheduler(void /*argv __rte_unused, int argc __rte_unused*/)
 	static struct unit_test_suite scheduler_config = {
 		.suite_name = "Crypto Device Scheduler Config Unit Test Suite",
 		.unit_test_cases = {
-			TEST_CASE(test_scheduler_attach_slave_op),
+			TEST_CASE(test_scheduler_attach_worker_op),
 			TEST_CASE(test_scheduler_mode_multicore_op),
 			TEST_CASE(test_scheduler_mode_roundrobin_op),
 			TEST_CASE(test_scheduler_mode_failover_op),
 			TEST_CASE(test_scheduler_mode_pkt_size_distr_op),
-			TEST_CASE(test_scheduler_detach_slave_op),
+			TEST_CASE(test_scheduler_detach_worker_op),
 
 			TEST_CASES_END() /**< NULL terminate array */
 		}
@@ -14719,13 +14716,13 @@ REGISTER_TEST_COMMAND(cryptodev_scheduler_autotest, test_cryptodev_scheduler);
 #endif
 
 static int
-test_cryptodev_dpaa2_sec(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_dpaa2_sec(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_DPAA2_SEC_PMD));
 }
 
 static int
-test_cryptodev_dpaa_sec(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_dpaa_sec(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD));
 }
@@ -14749,7 +14746,7 @@ test_cryptodev_octeontx2(void)
 }
 
 static int
-test_cryptodev_caam_jr(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_caam_jr(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_CAAM_JR_PMD));
 }
@@ -14767,7 +14764,7 @@ test_cryptodev_bcmfs(void)
 }
 
 static int
-test_cryptodev_qat_raw_api(void /*argv __rte_unused, int argc __rte_unused*/)
+test_cryptodev_qat_raw_api(void)
 {
 	int ret;
 
@@ -14776,6 +14773,18 @@ test_cryptodev_qat_raw_api(void /*argv __rte_unused, int argc __rte_unused*/)
 	global_api_test_type = CRYPTODEV_API_TEST;
 
 	return ret;
+}
+
+static int
+test_cryptodev_cn9k(void)
+{
+	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_CN9K_PMD));
+}
+
+static int
+test_cryptodev_cn10k(void)
+{
+	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_CN10K_PMD));
 }
 
 REGISTER_TEST_COMMAND(cryptodev_qat_raw_api_autotest,
@@ -14803,3 +14812,5 @@ REGISTER_TEST_COMMAND(cryptodev_octeontx2_autotest, test_cryptodev_octeontx2);
 REGISTER_TEST_COMMAND(cryptodev_caam_jr_autotest, test_cryptodev_caam_jr);
 REGISTER_TEST_COMMAND(cryptodev_nitrox_autotest, test_cryptodev_nitrox);
 REGISTER_TEST_COMMAND(cryptodev_bcmfs_autotest, test_cryptodev_bcmfs);
+REGISTER_TEST_COMMAND(cryptodev_cn9k_autotest, test_cryptodev_cn9k);
+REGISTER_TEST_COMMAND(cryptodev_cn10k_autotest, test_cryptodev_cn10k);

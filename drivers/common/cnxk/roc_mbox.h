@@ -403,6 +403,9 @@ struct lmtst_tbl_setup_req {
 	uint64_t __io dis_line_pref : 1;
 	uint64_t __io ssow_pf_func : 13;
 	uint16_t __io pcifunc;
+	uint8_t __io use_local_lmt_region;
+	uint64_t __io lmt_iova;
+	uint64_t __io rsvd[2]; /* Future use */
 };
 
 /* CGX mbox message formats */
@@ -1328,6 +1331,9 @@ struct cpt_rxc_time_cfg_req {
 struct cpt_rx_inline_lf_cfg_msg {
 	struct mbox_msghdr hdr;
 	uint16_t __io sso_pf_func;
+	uint16_t __io param1;
+	uint16_t __io param2;
+	uint16_t __io reserved;
 };
 
 enum cpt_eng_type {

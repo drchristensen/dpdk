@@ -107,6 +107,7 @@ Features
 - 21844 flow priorities for ingress or egress flow groups greater than 0 and for any transfer
   flow group.
 - Flow metering, including meter policy API.
+- Flow meter hierarchy.
 - Flow integrity offload API.
 - Connection tracking.
 - Sub-Function representors.
@@ -123,6 +124,11 @@ Limitations
 
     - IPv4/UDP with CVLAN filtering
     - Unicast MAC filtering
+
+  - Additional rules are supported from WinOF2 version 2.70:
+
+    - IPv4/TCP with CVLAN filtering
+    - L4 steering rules for port RSS of UDP, TCP and IP
 
 - For secondary process:
 
@@ -695,6 +701,13 @@ Driver options
   it is not recommended and may prevent NIC from sending packets over
   some configurations.
 
+  For ConnectX-4 and ConnectX-4 Lx NICs, automatically configured value
+  is insufficient for some traffic, because they require at least all L2 headers
+  to be inlined. For example, Q-in-Q adds 4 bytes to default 18 bytes
+  of Ethernet and VLAN, thus ``txq_inline_min`` must be set to 22.
+  MPLS would add 4 bytes per label. Final value must account for all possible
+  L2 encapsulation headers used in particular environment.
+
   Please, note, this minimal data inlining disengages eMPW feature (Enhanced
   Multi-Packet Write), because last one does not support partial packet inlining.
   This is not very critical due to minimal data inlining is mostly required
@@ -1055,6 +1068,20 @@ Driver options
   tunnel-decapsulated packets.
   If set to 0, this option forces the FCS feature and rejects tunnel
   decapsulation in the flow engine for such devices.
+
+  By default, the PMD will set this value to 1.
+
+- ``allow_duplicate_pattern`` parameter [int]
+
+  There are two options to choose:
+
+  - 0. Prevent insertion of rules with the same pattern items on non-root table.
+    In this case, only the first rule is inserted and the following rules are
+    rejected and error code EEXIST is returned.
+
+  - 1. Allow insertion of rules with the same pattern items.
+    In this case, all rules are inserted but only the first rule takes effect,
+    the next rule takes effect only if the previous rules are deleted.
 
   By default, the PMD will set this value to 1.
 
@@ -1909,3 +1936,29 @@ all flows with assistance of external tools.
    .. code-block:: console
 
        mlx_steering_dump.py -f <output_file> -flowptr <flow_ptr>
+
+How to share a meter between ports in the same switch domain
+------------------------------------------------------------
+
+This section demonstrates how to use the shared meter. A meter M can be created
+on port X and to be shared with a port Y on the same switch domain by the next way:
+
+.. code-block:: console
+
+   flow create X ingress transfer pattern eth / port_id id is Y / end actions meter mtr_id M / end
+
+How to use meter hierarchy
+--------------------------
+
+This section demonstrates how to create and use a meter hierarchy.
+A termination meter M can be the policy green action of another termination meter N.
+The two meters are chained together as a chain. Using meter N in a flow will apply
+both the meters in hierarchy on that flow.
+
+.. code-block:: console
+
+   add port meter policy 0 1 g_actions queue index 0 / end y_actions end r_actions drop / end
+   create port meter 0 M 1 1 yes 0xffff 1 0
+   add port meter policy 0 2 g_actions meter mtr_id M / end y_actions end r_actions drop / end
+   create port meter 0 N 2 2 yes 0xffff 1 0
+   flow create 0 ingress group 1 pattern eth / end actions meter mtr_id N / end

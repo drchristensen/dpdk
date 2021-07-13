@@ -57,6 +57,18 @@ iavf_proto_xtr_type_to_rxdid(uint8_t flex_type)
 				rxdid_map[flex_type] : IAVF_RXDID_COMMS_OVS_1;
 }
 
+static int
+iavf_monitor_callback(const uint64_t value,
+		const uint64_t arg[RTE_POWER_MONITOR_OPAQUE_SZ] __rte_unused)
+{
+	const uint64_t m = rte_cpu_to_le_64(1 << IAVF_RX_DESC_STATUS_DD_SHIFT);
+	/*
+	 * we expect the DD bit to be set to 1 if this descriptor was already
+	 * written to.
+	 */
+	return (value & m) == m ? -1 : 0;
+}
+
 int
 iavf_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
 {
@@ -69,12 +81,8 @@ iavf_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
 	/* watch for changes in status bit */
 	pmc->addr = &rxdp->wb.qword1.status_error_len;
 
-	/*
-	 * we expect the DD bit to be set to 1 if this descriptor was already
-	 * written to.
-	 */
-	pmc->val = rte_cpu_to_le_64(1 << IAVF_RX_DESC_STATUS_DD_SHIFT);
-	pmc->mask = rte_cpu_to_le_64(1 << IAVF_RX_DESC_STATUS_DD_SHIFT);
+	/* comparison callback */
+	pmc->fn = iavf_monitor_callback;
 
 	/* registers are 64-bit */
 	pmc->size = sizeof(uint64_t);
@@ -783,6 +791,22 @@ iavf_dev_tx_queue_setup(struct rte_eth_dev *dev,
 		struct iavf_adapter *ad =
 			IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 		ad->tx_vec_allowed = false;
+	}
+
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_QOS &&
+	    vf->tm_conf.committed) {
+		int tc;
+		for (tc = 0; tc < vf->qos_cap->num_elem; tc++) {
+			if (txq->queue_id >= vf->qtc_map[tc].start_queue_id &&
+			    txq->queue_id < (vf->qtc_map[tc].start_queue_id +
+			    vf->qtc_map[tc].queue_count))
+				break;
+		}
+		if (tc >= vf->qos_cap->num_elem) {
+			PMD_INIT_LOG(ERR, "Queue TC mapping is not correct");
+			return -EINVAL;
+		}
+		txq->tc = tc;
 	}
 
 	return 0;
@@ -2342,6 +2366,27 @@ end_of_tx:
 	return nb_tx;
 }
 
+/* Check if the packet with vlan user priority is transmitted in the
+ * correct queue.
+ */
+static int
+iavf_check_vlan_up2tc(struct iavf_tx_queue *txq, struct rte_mbuf *m)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[txq->port_id];
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	uint16_t up;
+
+	up = m->vlan_tci >> IAVF_VLAN_TAG_PCP_OFFSET;
+
+	if (!(vf->qos_cap->cap[txq->tc].tc_prio & BIT(up))) {
+		PMD_TX_LOG(ERR, "packet with vlan pcp %u cannot transmit in queue %u\n",
+			up, txq->queue_id);
+		return -1;
+	} else {
+		return 0;
+	}
+}
+
 /* TX prep functions */
 uint16_t
 iavf_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
@@ -2350,6 +2395,9 @@ iavf_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 	int i, ret;
 	uint64_t ol_flags;
 	struct rte_mbuf *m;
+	struct iavf_tx_queue *txq = tx_queue;
+	struct rte_eth_dev *dev = &rte_eth_devices[txq->port_id];
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 
 	for (i = 0; i < nb_pkts; i++) {
 		m = tx_pkts[i];
@@ -2384,6 +2432,15 @@ iavf_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 		if (ret != 0) {
 			rte_errno = -ret;
 			return i;
+		}
+
+		if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_QOS &&
+		    ol_flags & (PKT_RX_VLAN_STRIPPED | PKT_RX_VLAN)) {
+			ret = iavf_check_vlan_up2tc(txq, m);
+			if (ret != 0) {
+				rte_errno = -ret;
+				return i;
+			}
 		}
 	}
 

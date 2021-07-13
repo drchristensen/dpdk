@@ -8,12 +8,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-#include <termios.h>
 #include <unistd.h>
 #include <inttypes.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-
 #include <sys/queue.h>
 
 #include <rte_common.h>
@@ -1623,13 +1619,13 @@ cmd_config_speed_specific_parsed(void *parsed_result,
 	struct cmd_config_speed_specific *res = parsed_result;
 	uint32_t link_speed;
 
-	if (!all_ports_stopped()) {
-		printf("Please stop all ports first\n");
-		return;
-	}
-
 	if (port_id_is_invalid(res->id, ENABLED_WARN))
 		return;
+
+	if (!port_is_stopped(res->id)) {
+		printf("Please stop port %d first\n", res->id);
+		return;
+	}
 
 	if (parse_and_check_speed_duplex(res->value1, res->value2,
 			&link_speed) < 0)
@@ -3614,7 +3610,7 @@ cmdline_parse_inst_t cmd_stop = {
 /* *** SET CORELIST and PORTLIST CONFIGURATION *** */
 
 unsigned int
-parse_item_list(char* str, const char* item_name, unsigned int max_items,
+parse_item_list(const char *str, const char *item_name, unsigned int max_items,
 		unsigned int *parsed_items, int check_unique_values)
 {
 	unsigned int nb_item;
@@ -16997,17 +16993,17 @@ cmd_set_port_fec_mode_parsed(
 {
 	struct cmd_set_port_fec_mode *res = parsed_result;
 	uint16_t port_id = res->port_id;
-	uint32_t mode;
+	uint32_t fec_capa;
 	int ret;
 
-	ret = parse_fec_mode(res->fec_value, &mode);
+	ret = parse_fec_mode(res->fec_value, &fec_capa);
 	if (ret < 0) {
 		printf("Unknown fec mode: %s for Port %d\n", res->fec_value,
 			port_id);
 		return;
 	}
 
-	ret = rte_eth_fec_set(port_id, mode);
+	ret = rte_eth_fec_set(port_id, fec_capa);
 	if (ret == -ENOTSUP) {
 		printf("Function not implemented\n");
 		return;

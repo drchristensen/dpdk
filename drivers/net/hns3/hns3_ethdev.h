@@ -862,11 +862,13 @@ enum {
 	HNS3_DEV_SUPPORT_COPPER_B,
 	HNS3_DEV_SUPPORT_FD_QUEUE_REGION_B,
 	HNS3_DEV_SUPPORT_PTP_B,
+	HNS3_DEV_SUPPORT_TX_PUSH_B,
 	HNS3_DEV_SUPPORT_INDEP_TXRX_B,
 	HNS3_DEV_SUPPORT_STASH_B,
 	HNS3_DEV_SUPPORT_RXD_ADV_LAYOUT_B,
 	HNS3_DEV_SUPPORT_OUTER_UDP_CKSUM_B,
 	HNS3_DEV_SUPPORT_RAS_IMP_B,
+	HNS3_DEV_SUPPORT_TM_B,
 };
 
 #define hns3_dev_dcb_supported(hw) \
@@ -899,6 +901,12 @@ enum {
 
 #define hns3_dev_ras_imp_supported(hw) \
 	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_RAS_IMP_B)
+
+#define hns3_dev_tx_push_supported(hw) \
+		hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_TX_PUSH_B)
+
+#define hns3_dev_tm_supported(hw) \
+	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_TM_B)
 
 #define HNS3_DEV_PRIVATE_TO_HW(adapter) \
 	(&((struct hns3_adapter *)adapter)->hw)

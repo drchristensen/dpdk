@@ -188,7 +188,7 @@ vhost_backend_cleanup(struct virtio_net *dev)
 			dev->inflight_info->fd = -1;
 		}
 
-		free(dev->inflight_info);
+		rte_free(dev->inflight_info);
 		dev->inflight_info = NULL;
 	}
 
@@ -433,10 +433,10 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 	if (vq_is_packed(dev)) {
 		if (vq->shadow_used_packed)
 			rte_free(vq->shadow_used_packed);
-		vq->shadow_used_packed = rte_malloc(NULL,
+		vq->shadow_used_packed = rte_malloc_socket(NULL,
 				vq->size *
 				sizeof(struct vring_used_elem_packed),
-				RTE_CACHE_LINE_SIZE);
+				RTE_CACHE_LINE_SIZE, vq->numa_node);
 		if (!vq->shadow_used_packed) {
 			VHOST_LOG_CONFIG(ERR,
 					"failed to allocate memory for shadow used ring.\n");
@@ -447,9 +447,9 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 		if (vq->shadow_used_split)
 			rte_free(vq->shadow_used_split);
 
-		vq->shadow_used_split = rte_malloc(NULL,
+		vq->shadow_used_split = rte_malloc_socket(NULL,
 				vq->size * sizeof(struct vring_used_elem),
-				RTE_CACHE_LINE_SIZE);
+				RTE_CACHE_LINE_SIZE, vq->numa_node);
 
 		if (!vq->shadow_used_split) {
 			VHOST_LOG_CONFIG(ERR,
@@ -460,9 +460,9 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 
 	if (vq->batch_copy_elems)
 		rte_free(vq->batch_copy_elems);
-	vq->batch_copy_elems = rte_malloc(NULL,
+	vq->batch_copy_elems = rte_malloc_socket(NULL,
 				vq->size * sizeof(struct batch_copy_elem),
-				RTE_CACHE_LINE_SIZE);
+				RTE_CACHE_LINE_SIZE, vq->numa_node);
 	if (!vq->batch_copy_elems) {
 		VHOST_LOG_CONFIG(ERR,
 			"failed to allocate memory for batching copy.\n");
@@ -473,109 +473,161 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 }
 
 /*
- * Reallocate virtio_dev and vhost_virtqueue data structure to make them on the
- * same numa node as the memory of vring descriptor.
+ * Reallocate virtio_dev, vhost_virtqueue and related data structures to
+ * make them on the same numa node as the memory of vring descriptor.
  */
 #ifdef RTE_LIBRTE_VHOST_NUMA
 static struct virtio_net*
 numa_realloc(struct virtio_net *dev, int index)
 {
-	int oldnode, newnode;
+	int node, dev_node;
 	struct virtio_net *old_dev;
-	struct vhost_virtqueue *old_vq, *vq;
-	struct vring_used_elem *new_shadow_used_split;
-	struct vring_used_elem_packed *new_shadow_used_packed;
-	struct batch_copy_elem *new_batch_copy_elems;
+	struct vhost_virtqueue *vq;
+	struct batch_copy_elem *bce;
+	struct guest_page *gp;
+	struct rte_vhost_memory *mem;
+	size_t mem_size;
 	int ret;
+
+	old_dev = dev;
+	vq = dev->virtqueue[index];
+
+	/*
+	 * If VQ is ready, it is too late to reallocate, it certainly already
+	 * happened anyway on VHOST_USER_SET_VRING_ADRR.
+	 */
+	if (vq->ready)
+		return dev;
+
+	ret = get_mempolicy(&node, NULL, 0, vq->desc, MPOL_F_NODE | MPOL_F_ADDR);
+	if (ret) {
+		VHOST_LOG_CONFIG(ERR, "Unable to get virtqueue %d numa information.\n", index);
+		return dev;
+	}
+
+	if (node == vq->numa_node)
+		goto out_dev_realloc;
+
+	vq = rte_realloc_socket(vq, sizeof(*vq), 0, node);
+	if (!vq) {
+		VHOST_LOG_CONFIG(ERR, "Failed to realloc virtqueue %d on node %d\n",
+				index, node);
+		return dev;
+	}
+
+	if (vq != dev->virtqueue[index]) {
+		VHOST_LOG_CONFIG(INFO, "reallocated virtqueue on node %d\n", node);
+		dev->virtqueue[index] = vq;
+		vhost_user_iotlb_init(dev, index);
+	}
+
+	if (vq_is_packed(dev)) {
+		struct vring_used_elem_packed *sup;
+
+		sup = rte_realloc_socket(vq->shadow_used_packed, vq->size * sizeof(*sup),
+				RTE_CACHE_LINE_SIZE, node);
+		if (!sup) {
+			VHOST_LOG_CONFIG(ERR, "Failed to realloc shadow packed on node %d\n", node);
+			return dev;
+		}
+		vq->shadow_used_packed = sup;
+	} else {
+		struct vring_used_elem *sus;
+
+		sus = rte_realloc_socket(vq->shadow_used_split, vq->size * sizeof(*sus),
+				RTE_CACHE_LINE_SIZE, node);
+		if (!sus) {
+			VHOST_LOG_CONFIG(ERR, "Failed to realloc shadow split on node %d\n", node);
+			return dev;
+		}
+		vq->shadow_used_split = sus;
+	}
+
+	bce = rte_realloc_socket(vq->batch_copy_elems, vq->size * sizeof(*bce),
+			RTE_CACHE_LINE_SIZE, node);
+	if (!bce) {
+		VHOST_LOG_CONFIG(ERR, "Failed to realloc batch copy elem on node %d\n", node);
+		return dev;
+	}
+	vq->batch_copy_elems = bce;
+
+	if (vq->log_cache) {
+		struct log_cache_entry *lc;
+
+		lc = rte_realloc_socket(vq->log_cache, sizeof(*lc) * VHOST_LOG_CACHE_NR, 0, node);
+		if (!lc) {
+			VHOST_LOG_CONFIG(ERR, "Failed to realloc log cache on node %d\n", node);
+			return dev;
+		}
+		vq->log_cache = lc;
+	}
+
+	if (vq->resubmit_inflight) {
+		struct rte_vhost_resubmit_info *ri;
+
+		ri = rte_realloc_socket(vq->resubmit_inflight, sizeof(*ri), 0, node);
+		if (!ri) {
+			VHOST_LOG_CONFIG(ERR, "Failed to realloc resubmit inflight on node %d\n",
+					node);
+			return dev;
+		}
+		vq->resubmit_inflight = ri;
+
+		if (ri->resubmit_list) {
+			struct rte_vhost_resubmit_desc *rd;
+
+			rd = rte_realloc_socket(ri->resubmit_list, sizeof(*rd) * ri->resubmit_num,
+					0, node);
+			if (!rd) {
+				VHOST_LOG_CONFIG(ERR, "Failed to realloc resubmit list on node %d\n",
+						node);
+				return dev;
+			}
+			ri->resubmit_list = rd;
+		}
+	}
+
+	vq->numa_node = node;
+
+out_dev_realloc:
 
 	if (dev->flags & VIRTIO_DEV_RUNNING)
 		return dev;
 
-	old_dev = dev;
-	vq = old_vq = dev->virtqueue[index];
-
-	ret = get_mempolicy(&newnode, NULL, 0, old_vq->desc,
-			    MPOL_F_NODE | MPOL_F_ADDR);
-
-	/* check if we need to reallocate vq */
-	ret |= get_mempolicy(&oldnode, NULL, 0, old_vq,
-			     MPOL_F_NODE | MPOL_F_ADDR);
+	ret = get_mempolicy(&dev_node, NULL, 0, dev, MPOL_F_NODE | MPOL_F_ADDR);
 	if (ret) {
-		VHOST_LOG_CONFIG(ERR,
-			"Unable to get vq numa information.\n");
+		VHOST_LOG_CONFIG(ERR, "Unable to get Virtio dev %d numa information.\n", dev->vid);
 		return dev;
 	}
-	if (oldnode != newnode) {
-		VHOST_LOG_CONFIG(INFO,
-			"reallocate vq from %d to %d node\n", oldnode, newnode);
-		vq = rte_malloc_socket(NULL, sizeof(*vq), 0, newnode);
-		if (!vq)
-			return dev;
 
-		memcpy(vq, old_vq, sizeof(*vq));
+	if (dev_node == node)
+		return dev;
 
-		if (vq_is_packed(dev)) {
-			new_shadow_used_packed = rte_malloc_socket(NULL,
-					vq->size *
-					sizeof(struct vring_used_elem_packed),
-					RTE_CACHE_LINE_SIZE,
-					newnode);
-			if (new_shadow_used_packed) {
-				rte_free(vq->shadow_used_packed);
-				vq->shadow_used_packed = new_shadow_used_packed;
-			}
-		} else {
-			new_shadow_used_split = rte_malloc_socket(NULL,
-					vq->size *
-					sizeof(struct vring_used_elem),
-					RTE_CACHE_LINE_SIZE,
-					newnode);
-			if (new_shadow_used_split) {
-				rte_free(vq->shadow_used_split);
-				vq->shadow_used_split = new_shadow_used_split;
-			}
-		}
-
-		new_batch_copy_elems = rte_malloc_socket(NULL,
-			vq->size * sizeof(struct batch_copy_elem),
-			RTE_CACHE_LINE_SIZE,
-			newnode);
-		if (new_batch_copy_elems) {
-			rte_free(vq->batch_copy_elems);
-			vq->batch_copy_elems = new_batch_copy_elems;
-		}
-
-		rte_free(old_vq);
+	dev = rte_realloc_socket(old_dev, sizeof(*dev), 0, node);
+	if (!dev) {
+		VHOST_LOG_CONFIG(ERR, "Failed to realloc dev on node %d\n", node);
+		return old_dev;
 	}
 
-	/* check if we need to reallocate dev */
-	ret = get_mempolicy(&oldnode, NULL, 0, old_dev,
-			    MPOL_F_NODE | MPOL_F_ADDR);
-	if (ret) {
-		VHOST_LOG_CONFIG(ERR,
-			"Unable to get dev numa information.\n");
-		goto out;
-	}
-	if (oldnode != newnode) {
-		VHOST_LOG_CONFIG(INFO,
-			"reallocate dev from %d to %d node\n",
-			oldnode, newnode);
-		dev = rte_malloc_socket(NULL, sizeof(*dev), 0, newnode);
-		if (!dev) {
-			dev = old_dev;
-			goto out;
-		}
-
-		memcpy(dev, old_dev, sizeof(*dev));
-		rte_free(old_dev);
-	}
-
-out:
-	dev->virtqueue[index] = vq;
+	VHOST_LOG_CONFIG(INFO, "reallocated device on node %d\n", node);
 	vhost_devices[dev->vid] = dev;
 
-	if (old_vq != vq)
-		vhost_user_iotlb_init(dev, index);
+	mem_size = sizeof(struct rte_vhost_memory) +
+		sizeof(struct rte_vhost_mem_region) * dev->mem->nregions;
+	mem = rte_realloc_socket(dev->mem, mem_size, 0, node);
+	if (!mem) {
+		VHOST_LOG_CONFIG(ERR, "Failed to realloc mem table on node %d\n", node);
+		return dev;
+	}
+	dev->mem = mem;
+
+	gp = rte_realloc_socket(dev->guest_pages, dev->max_guest_pages * sizeof(*gp),
+			RTE_CACHE_LINE_SIZE, node);
+	if (!gp) {
+		VHOST_LOG_CONFIG(ERR, "Failed to realloc guest pages on node %d\n", node);
+		return dev;
+	}
+	dev->guest_pages = gp;
 
 	return dev;
 }
@@ -1193,7 +1245,7 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	struct virtio_net *dev = *pdev;
 	struct VhostUserMemory *memory = &msg->payload.memory;
 	struct rte_vhost_mem_region *reg;
-
+	int numa_node = SOCKET_ID_ANY;
 	uint64_t mmap_offset;
 	uint32_t i;
 
@@ -1233,13 +1285,21 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		for (i = 0; i < dev->nr_vring; i++)
 			vhost_user_iotlb_flush_all(dev->virtqueue[i]);
 
+	/*
+	 * If VQ 0 has already been allocated, try to allocate on the same
+	 * NUMA node. It can be reallocated later in numa_realloc().
+	 */
+	if (dev->nr_vring > 0)
+		numa_node = dev->virtqueue[0]->numa_node;
+
 	dev->nr_guest_pages = 0;
 	if (dev->guest_pages == NULL) {
 		dev->max_guest_pages = 8;
-		dev->guest_pages = rte_zmalloc(NULL,
+		dev->guest_pages = rte_zmalloc_socket(NULL,
 					dev->max_guest_pages *
 					sizeof(struct guest_page),
-					RTE_CACHE_LINE_SIZE);
+					RTE_CACHE_LINE_SIZE,
+					numa_node);
 		if (dev->guest_pages == NULL) {
 			VHOST_LOG_CONFIG(ERR,
 				"(%d) failed to allocate memory "
@@ -1249,8 +1309,8 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		}
 	}
 
-	dev->mem = rte_zmalloc("vhost-mem-table", sizeof(struct rte_vhost_memory) +
-		sizeof(struct rte_vhost_mem_region) * memory->nregions, 0);
+	dev->mem = rte_zmalloc_socket("vhost-mem-table", sizeof(struct rte_vhost_memory) +
+		sizeof(struct rte_vhost_mem_region) * memory->nregions, 0, numa_node);
 	if (dev->mem == NULL) {
 		VHOST_LOG_CONFIG(ERR,
 			"(%d) failed to allocate memory for dev->mem\n",
@@ -1456,6 +1516,7 @@ vhost_user_get_inflight_fd(struct virtio_net **pdev,
 	uint16_t num_queues, queue_size;
 	struct virtio_net *dev = *pdev;
 	int fd, i, j;
+	int numa_node = SOCKET_ID_ANY;
 	void *addr;
 
 	if (msg->size != sizeof(msg->payload.inflight)) {
@@ -1465,9 +1526,16 @@ vhost_user_get_inflight_fd(struct virtio_net **pdev,
 		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 
+	/*
+	 * If VQ 0 has already been allocated, try to allocate on the same
+	 * NUMA node. It can be reallocated later in numa_realloc().
+	 */
+	if (dev->nr_vring > 0)
+		numa_node = dev->virtqueue[0]->numa_node;
+
 	if (dev->inflight_info == NULL) {
-		dev->inflight_info = calloc(1,
-					    sizeof(struct inflight_mem_info));
+		dev->inflight_info = rte_zmalloc_socket("inflight_info",
+				sizeof(struct inflight_mem_info), 0, numa_node);
 		if (!dev->inflight_info) {
 			VHOST_LOG_CONFIG(ERR,
 				"failed to alloc dev inflight area\n");
@@ -1550,6 +1618,7 @@ vhost_user_set_inflight_fd(struct virtio_net **pdev, VhostUserMsg *msg,
 	struct vhost_virtqueue *vq;
 	void *addr;
 	int fd, i;
+	int numa_node = SOCKET_ID_ANY;
 
 	fd = msg->fds[0];
 	if (msg->size != sizeof(msg->payload.inflight) || fd < 0) {
@@ -1583,9 +1652,16 @@ vhost_user_set_inflight_fd(struct virtio_net **pdev, VhostUserMsg *msg,
 		"set_inflight_fd pervq_inflight_size: %d\n",
 		pervq_inflight_size);
 
+	/*
+	 * If VQ 0 has already been allocated, try to allocate on the same
+	 * NUMA node. It can be reallocated later in numa_realloc().
+	 */
+	if (dev->nr_vring > 0)
+		numa_node = dev->virtqueue[0]->numa_node;
+
 	if (!dev->inflight_info) {
-		dev->inflight_info = calloc(1,
-					    sizeof(struct inflight_mem_info));
+		dev->inflight_info = rte_zmalloc_socket("inflight_info",
+				sizeof(struct inflight_mem_info), 0, numa_node);
 		if (dev->inflight_info == NULL) {
 			VHOST_LOG_CONFIG(ERR,
 				"failed to alloc dev inflight area\n");
@@ -1744,19 +1820,21 @@ vhost_check_queue_inflights_split(struct virtio_net *dev,
 	vq->last_avail_idx += resubmit_num;
 
 	if (resubmit_num) {
-		resubmit  = calloc(1, sizeof(struct rte_vhost_resubmit_info));
+		resubmit = rte_zmalloc_socket("resubmit", sizeof(struct rte_vhost_resubmit_info),
+				0, vq->numa_node);
 		if (!resubmit) {
 			VHOST_LOG_CONFIG(ERR,
 				"failed to allocate memory for resubmit info.\n");
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}
 
-		resubmit->resubmit_list = calloc(resubmit_num,
-			sizeof(struct rte_vhost_resubmit_desc));
+		resubmit->resubmit_list = rte_zmalloc_socket("resubmit_list",
+				resubmit_num * sizeof(struct rte_vhost_resubmit_desc),
+				0, vq->numa_node);
 		if (!resubmit->resubmit_list) {
 			VHOST_LOG_CONFIG(ERR,
 				"failed to allocate memory for inflight desc.\n");
-			free(resubmit);
+			rte_free(resubmit);
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}
 
@@ -1838,19 +1916,21 @@ vhost_check_queue_inflights_packed(struct virtio_net *dev,
 	}
 
 	if (resubmit_num) {
-		resubmit = calloc(1, sizeof(struct rte_vhost_resubmit_info));
+		resubmit = rte_zmalloc_socket("resubmit", sizeof(struct rte_vhost_resubmit_info),
+				0, vq->numa_node);
 		if (resubmit == NULL) {
 			VHOST_LOG_CONFIG(ERR,
 				"failed to allocate memory for resubmit info.\n");
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}
 
-		resubmit->resubmit_list = calloc(resubmit_num,
-			sizeof(struct rte_vhost_resubmit_desc));
+		resubmit->resubmit_list = rte_zmalloc_socket("resubmit_list",
+				resubmit_num * sizeof(struct rte_vhost_resubmit_desc),
+				0, vq->numa_node);
 		if (resubmit->resubmit_list == NULL) {
 			VHOST_LOG_CONFIG(ERR,
 				"failed to allocate memory for resubmit desc.\n");
-			free(resubmit);
+			rte_free(resubmit);
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}
 
@@ -2173,9 +2253,9 @@ vhost_user_set_log_base(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		rte_free(vq->log_cache);
 		vq->log_cache = NULL;
 		vq->log_cache_nb_elem = 0;
-		vq->log_cache = rte_zmalloc("vq log cache",
+		vq->log_cache = rte_malloc_socket("vq log cache",
 				sizeof(struct log_cache_entry) * VHOST_LOG_CACHE_NR,
-				0);
+				0, vq->numa_node);
 		/*
 		 * If log cache alloc fail, don't fail migration, but no
 		 * caching will be done, which will impact performance

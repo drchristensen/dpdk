@@ -54,13 +54,14 @@ ice_dcf_init_rxq(struct rte_eth_dev *dev, struct ice_rx_queue *rxq)
 	struct ice_dcf_adapter *dcf_ad = dev->data->dev_private;
 	struct rte_eth_dev_data *dev_data = dev->data;
 	struct iavf_hw *hw = &dcf_ad->real_hw.avf;
-	uint16_t buf_size, max_pkt_len, len;
+	uint16_t buf_size, max_pkt_len;
 
 	buf_size = rte_pktmbuf_data_room_size(rxq->mp) - RTE_PKTMBUF_HEADROOM;
 	rxq->rx_hdr_len = 0;
 	rxq->rx_buf_len = RTE_ALIGN(buf_size, (1 << ICE_RLAN_CTX_DBUF_S));
-	len = ICE_SUPPORT_CHAIN_NUM * rxq->rx_buf_len;
-	max_pkt_len = RTE_MIN(len, dev->data->dev_conf.rxmode.max_rx_pkt_len);
+	max_pkt_len = RTE_MIN((uint32_t)
+			      ICE_SUPPORT_CHAIN_NUM * rxq->rx_buf_len,
+			      dev->data->dev_conf.rxmode.max_rx_pkt_len);
 
 	/* Check if the jumbo frame and maximum packet length are set
 	 * correctly.
@@ -880,11 +881,59 @@ ice_dcf_dev_close(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static int
-ice_dcf_link_update(__rte_unused struct rte_eth_dev *dev,
+int
+ice_dcf_link_update(struct rte_eth_dev *dev,
 		    __rte_unused int wait_to_complete)
 {
-	return 0;
+	struct ice_dcf_adapter *ad = dev->data->dev_private;
+	struct ice_dcf_hw *hw = &ad->real_hw;
+	struct rte_eth_link new_link;
+
+	memset(&new_link, 0, sizeof(new_link));
+
+	/* Only read status info stored in VF, and the info is updated
+	 * when receive LINK_CHANGE event from PF by virtchnl.
+	 */
+	switch (hw->link_speed) {
+	case 10:
+		new_link.link_speed = ETH_SPEED_NUM_10M;
+		break;
+	case 100:
+		new_link.link_speed = ETH_SPEED_NUM_100M;
+		break;
+	case 1000:
+		new_link.link_speed = ETH_SPEED_NUM_1G;
+		break;
+	case 10000:
+		new_link.link_speed = ETH_SPEED_NUM_10G;
+		break;
+	case 20000:
+		new_link.link_speed = ETH_SPEED_NUM_20G;
+		break;
+	case 25000:
+		new_link.link_speed = ETH_SPEED_NUM_25G;
+		break;
+	case 40000:
+		new_link.link_speed = ETH_SPEED_NUM_40G;
+		break;
+	case 50000:
+		new_link.link_speed = ETH_SPEED_NUM_50G;
+		break;
+	case 100000:
+		new_link.link_speed = ETH_SPEED_NUM_100G;
+		break;
+	default:
+		new_link.link_speed = ETH_SPEED_NUM_NONE;
+		break;
+	}
+
+	new_link.link_duplex = ETH_LINK_FULL_DUPLEX;
+	new_link.link_status = hw->link_up ? ETH_LINK_UP :
+					     ETH_LINK_DOWN;
+	new_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
+				ETH_LINK_SPEED_FIXED);
+
+	return rte_eth_linkstatus_set(dev, &new_link);
 }
 
 /* Add UDP tunneling port */
@@ -945,6 +994,18 @@ ice_dcf_dev_udp_tunnel_port_del(struct rte_eth_dev *dev,
 	return ret;
 }
 
+static int
+ice_dcf_tm_ops_get(struct rte_eth_dev *dev __rte_unused,
+		void *arg)
+{
+	if (!arg)
+		return -EINVAL;
+
+	*(const void **)arg = &ice_dcf_tm_ops;
+
+	return 0;
+}
+
 static const struct eth_dev_ops ice_dcf_eth_dev_ops = {
 	.dev_start               = ice_dcf_dev_start,
 	.dev_stop                = ice_dcf_dev_stop,
@@ -969,6 +1030,7 @@ static const struct eth_dev_ops ice_dcf_eth_dev_ops = {
 	.flow_ops_get            = ice_dcf_dev_flow_ops_get,
 	.udp_tunnel_port_add	 = ice_dcf_dev_udp_tunnel_port_add,
 	.udp_tunnel_port_del	 = ice_dcf_dev_udp_tunnel_port_del,
+	.tm_ops_get              = ice_dcf_tm_ops_get,
 };
 
 static int

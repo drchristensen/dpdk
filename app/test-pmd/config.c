@@ -3617,13 +3617,14 @@ set_tx_pkt_split(const char *name)
 }
 
 int
-parse_fec_mode(const char *name, uint32_t *mode)
+parse_fec_mode(const char *name, uint32_t *fec_capa)
 {
 	uint8_t i;
 
 	for (i = 0; i < RTE_DIM(fec_mode_name); i++) {
 		if (strcmp(fec_mode_name[i].name, name) == 0) {
-			*mode = RTE_ETH_FEC_MODE_TO_CAPA(fec_mode_name[i].mode);
+			*fec_capa =
+				RTE_ETH_FEC_MODE_TO_CAPA(fec_mode_name[i].mode);
 			return 0;
 		}
 	}
@@ -4449,6 +4450,47 @@ set_record_burst_stats(uint8_t on_off)
 	record_burst_stats = on_off;
 }
 
+static char*
+flowtype_to_str(uint16_t flow_type)
+{
+	struct flow_type_info {
+		char str[32];
+		uint16_t ftype;
+	};
+
+	uint8_t i;
+	static struct flow_type_info flowtype_str_table[] = {
+		{"raw", RTE_ETH_FLOW_RAW},
+		{"ipv4", RTE_ETH_FLOW_IPV4},
+		{"ipv4-frag", RTE_ETH_FLOW_FRAG_IPV4},
+		{"ipv4-tcp", RTE_ETH_FLOW_NONFRAG_IPV4_TCP},
+		{"ipv4-udp", RTE_ETH_FLOW_NONFRAG_IPV4_UDP},
+		{"ipv4-sctp", RTE_ETH_FLOW_NONFRAG_IPV4_SCTP},
+		{"ipv4-other", RTE_ETH_FLOW_NONFRAG_IPV4_OTHER},
+		{"ipv6", RTE_ETH_FLOW_IPV6},
+		{"ipv6-frag", RTE_ETH_FLOW_FRAG_IPV6},
+		{"ipv6-tcp", RTE_ETH_FLOW_NONFRAG_IPV6_TCP},
+		{"ipv6-udp", RTE_ETH_FLOW_NONFRAG_IPV6_UDP},
+		{"ipv6-sctp", RTE_ETH_FLOW_NONFRAG_IPV6_SCTP},
+		{"ipv6-other", RTE_ETH_FLOW_NONFRAG_IPV6_OTHER},
+		{"l2_payload", RTE_ETH_FLOW_L2_PAYLOAD},
+		{"port", RTE_ETH_FLOW_PORT},
+		{"vxlan", RTE_ETH_FLOW_VXLAN},
+		{"geneve", RTE_ETH_FLOW_GENEVE},
+		{"nvgre", RTE_ETH_FLOW_NVGRE},
+		{"vxlan-gpe", RTE_ETH_FLOW_VXLAN_GPE},
+	};
+
+	for (i = 0; i < RTE_DIM(flowtype_str_table); i++) {
+		if (flowtype_str_table[i].ftype == flow_type)
+			return flowtype_str_table[i].str;
+	}
+
+	return NULL;
+}
+
+#if defined(RTE_NET_I40E) || defined(RTE_NET_IXGBE)
+
 static inline void
 print_fdir_mask(struct rte_eth_fdir_masks *mask)
 {
@@ -4507,47 +4549,6 @@ print_fdir_flex_payload(struct rte_eth_fdir_flex_conf *flex_conf, uint32_t num)
 	}
 	printf("\n");
 }
-
-static char *
-flowtype_to_str(uint16_t flow_type)
-{
-	struct flow_type_info {
-		char str[32];
-		uint16_t ftype;
-	};
-
-	uint8_t i;
-	static struct flow_type_info flowtype_str_table[] = {
-		{"raw", RTE_ETH_FLOW_RAW},
-		{"ipv4", RTE_ETH_FLOW_IPV4},
-		{"ipv4-frag", RTE_ETH_FLOW_FRAG_IPV4},
-		{"ipv4-tcp", RTE_ETH_FLOW_NONFRAG_IPV4_TCP},
-		{"ipv4-udp", RTE_ETH_FLOW_NONFRAG_IPV4_UDP},
-		{"ipv4-sctp", RTE_ETH_FLOW_NONFRAG_IPV4_SCTP},
-		{"ipv4-other", RTE_ETH_FLOW_NONFRAG_IPV4_OTHER},
-		{"ipv6", RTE_ETH_FLOW_IPV6},
-		{"ipv6-frag", RTE_ETH_FLOW_FRAG_IPV6},
-		{"ipv6-tcp", RTE_ETH_FLOW_NONFRAG_IPV6_TCP},
-		{"ipv6-udp", RTE_ETH_FLOW_NONFRAG_IPV6_UDP},
-		{"ipv6-sctp", RTE_ETH_FLOW_NONFRAG_IPV6_SCTP},
-		{"ipv6-other", RTE_ETH_FLOW_NONFRAG_IPV6_OTHER},
-		{"l2_payload", RTE_ETH_FLOW_L2_PAYLOAD},
-		{"port", RTE_ETH_FLOW_PORT},
-		{"vxlan", RTE_ETH_FLOW_VXLAN},
-		{"geneve", RTE_ETH_FLOW_GENEVE},
-		{"nvgre", RTE_ETH_FLOW_NVGRE},
-		{"vxlan-gpe", RTE_ETH_FLOW_VXLAN_GPE},
-	};
-
-	for (i = 0; i < RTE_DIM(flowtype_str_table); i++) {
-		if (flowtype_str_table[i].ftype == flow_type)
-			return flowtype_str_table[i].str;
-	}
-
-	return NULL;
-}
-
-#if defined(RTE_NET_I40E) || defined(RTE_NET_IXGBE)
 
 static inline void
 print_fdir_flex_mask(struct rte_eth_fdir_flex_conf *flex_conf, uint32_t num)

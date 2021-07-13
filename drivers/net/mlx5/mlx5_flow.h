@@ -454,6 +454,7 @@ enum mlx5_flow_fate_type {
 	MLX5_FLOW_FATE_DROP,
 	MLX5_FLOW_FATE_DEFAULT_MISS,
 	MLX5_FLOW_FATE_SHARED_RSS,
+	MLX5_FLOW_FATE_MTR,
 	MLX5_FLOW_FATE_MAX,
 };
 
@@ -1102,6 +1103,10 @@ struct mlx5_flow_workspace {
 	uint32_t rssq_num; /* Allocated queue num in rss_desc. */
 	uint32_t flow_idx; /* Intermediate device flow index. */
 	struct mlx5_flow_meter_info *fm; /* Pointer to the meter in flow. */
+	struct mlx5_flow_meter_policy *policy;
+	/* The meter policy used by meter in flow. */
+	struct mlx5_flow_meter_policy *final_policy;
+	/* The final policy when meter policy is hierarchy. */
 	uint32_t skip_matcher_reg:1;
 	/* Indicates if need to skip matcher register in translate. */
 };
@@ -1156,6 +1161,12 @@ typedef struct mlx5_flow_meter_sub_policy *
 		(struct rte_eth_dev *dev,
 		struct mlx5_flow_meter_policy *mtr_policy,
 		struct mlx5_flow_rss_desc *rss_desc[MLX5_MTR_RTE_COLORS]);
+typedef int (*mlx5_flow_meter_hierarchy_rule_create_t)
+		(struct rte_eth_dev *dev,
+		struct mlx5_flow_meter_info *fm,
+		int32_t src_port,
+		const struct rte_flow_item *item,
+		struct rte_flow_error *error);
 typedef void (*mlx5_flow_destroy_sub_policy_with_rxq_t)
 	(struct rte_eth_dev *dev,
 	struct mlx5_flow_meter_policy *mtr_policy);
@@ -1252,6 +1263,7 @@ struct mlx5_flow_driver_ops {
 	mlx5_flow_create_def_policy_t create_def_policy;
 	mlx5_flow_destroy_def_policy_t destroy_def_policy;
 	mlx5_flow_meter_sub_policy_rss_prepare_t meter_sub_policy_rss_prepare;
+	mlx5_flow_meter_hierarchy_rule_create_t meter_hierarchy_rule_create;
 	mlx5_flow_destroy_sub_policy_with_rxq_t destroy_sub_policy_with_rxq;
 	mlx5_flow_counter_alloc_t counter_alloc;
 	mlx5_flow_counter_free_t counter_free;

@@ -253,8 +253,8 @@ static void
 hns3_clear_all_event_cause(struct hns3_hw *hw)
 {
 	uint32_t vector0_int_stats;
-	vector0_int_stats = hns3_read_dev(hw, HNS3_VECTOR0_OTHER_INT_STS_REG);
 
+	vector0_int_stats = hns3_read_dev(hw, HNS3_VECTOR0_OTHER_INT_STS_REG);
 	if (BIT(HNS3_VECTOR0_IMPRESET_INT_B) & vector0_int_stats)
 		hns3_warn(hw, "Probe during IMP reset interrupt");
 
@@ -640,7 +640,8 @@ hns3_en_hw_strip_rxvtag(struct hns3_adapter *hns, bool enable)
 
 	ret = hns3_set_vlan_rx_offload_cfg(hns, &rxvlan_cfg);
 	if (ret) {
-		hns3_err(hw, "enable strip rx vtag failed, ret =%d", ret);
+		hns3_err(hw, "%s strip rx vtag failed, ret = %d.",
+				enable ? "enable" : "disable", ret);
 		return ret;
 	}
 
@@ -2497,13 +2498,11 @@ hns3_dev_configure(struct rte_eth_dev *dev)
 	 * work as usual. But these fake queues are imperceptible, and can not
 	 * be used by upper applications.
 	 */
-	if (!hns3_dev_indep_txrx_supported(hw)) {
-		ret = hns3_set_fake_rx_or_tx_queues(dev, nb_rx_q, nb_tx_q);
-		if (ret) {
-			hns3_err(hw, "fail to set Rx/Tx fake queues, ret = %d.",
-				 ret);
-			return ret;
-		}
+	ret = hns3_set_fake_rx_or_tx_queues(dev, nb_rx_q, nb_tx_q);
+	if (ret) {
+		hns3_err(hw, "fail to set Rx/Tx fake queues, ret = %d.", ret);
+		hw->cfg_max_queues = 0;
+		return ret;
 	}
 
 	hw->adapter_state = HNS3_NIC_CONFIGURING;
@@ -2551,6 +2550,7 @@ hns3_dev_configure(struct rte_eth_dev *dev)
 	return 0;
 
 cfg_err:
+	hw->cfg_max_queues = 0;
 	(void)hns3_set_fake_rx_or_tx_queues(dev, 0, 0);
 	hw->adapter_state = HNS3_NIC_INITIALIZED;
 
@@ -3127,7 +3127,6 @@ hns3_parse_cfg(struct hns3_cfg *cfg, struct hns3_cmd_desc *desc)
 	ext_rss_size_max = hns3_get_field(rte_le_to_cpu_32(req->param[2]),
 					       HNS3_CFG_EXT_RSS_SIZE_M,
 					       HNS3_CFG_EXT_RSS_SIZE_S);
-
 	/*
 	 * Field ext_rss_size_max obtained from firmware will be more flexible
 	 * for future changes and expansions, which is an exponent of 2, instead
@@ -3846,7 +3845,6 @@ hns3_drop_nopfc_buf_till_fit(struct hns3_hw *hw,
 	for (i = HNS3_MAX_TC_NUM - 1; i >= 0; i--) {
 		priv = &buf_alloc->priv_buf[i];
 		mask = BIT((uint8_t)i);
-
 		if (hw->hw_tc_map & mask &&
 		    !(hw->dcb_info.hw_pfc_map & mask)) {
 			/* Clear the no pfc TC private buffer */
@@ -3932,7 +3930,6 @@ hns3_only_alloc_priv_buff(struct hns3_hw *hw,
 			COMPENSATE_HALF_MPS_NUM * half_mps;
 	min_rx_priv = roundup(min_rx_priv, HNS3_BUF_SIZE_UNIT);
 	rx_priv = rounddown(rx_priv, HNS3_BUF_SIZE_UNIT);
-
 	if (rx_priv < min_rx_priv)
 		return false;
 
@@ -5177,6 +5174,8 @@ hns3_init_pf(struct rte_eth_dev *eth_dev)
 		goto err_cmd_init;
 	}
 
+	hns3_tx_push_init(eth_dev);
+
 	/*
 	 * To ensure that the hardware environment is clean during
 	 * initialization, the driver actively clear the hardware environment
@@ -5895,7 +5894,7 @@ hns3_dev_stop(struct rte_eth_dev *dev)
 	/* Disable datapath on secondary process. */
 	hns3_mp_req_stop_rxtx(dev);
 	/* Prevent crashes when queues are still in use. */
-	rte_delay_ms(hw->tqps_num);
+	rte_delay_ms(hw->cfg_max_queues);
 
 	rte_spinlock_lock(&hw->lock);
 	if (__atomic_load_n(&hw->reset.resetting, __ATOMIC_RELAXED) == 0) {
@@ -6297,7 +6296,6 @@ hns3_is_reset_pending(struct hns3_adapter *hns)
 
 	hns3_check_event_cause(hns, NULL);
 	reset = hns3_get_reset_level(hns, &hw->reset.pending);
-
 	if (reset != HNS3_NONE_RESET && hw->reset.level != HNS3_NONE_RESET &&
 	    hw->reset.level < reset) {
 		hns3_warn(hw, "High level reset %d is pending", reset);
@@ -6511,7 +6509,7 @@ hns3_stop_service(struct hns3_adapter *hns)
 	rte_wmb();
 	/* Disable datapath on secondary process. */
 	hns3_mp_req_stop_rxtx(eth_dev);
-	rte_delay_ms(hw->tqps_num);
+	rte_delay_ms(hw->cfg_max_queues);
 
 	rte_spinlock_lock(&hw->lock);
 	if (hns->hw.adapter_state == HNS3_NIC_STARTED ||
@@ -7422,8 +7420,8 @@ hns3_dev_init(struct rte_eth_dev *eth_dev)
 				     "process, ret = %d", ret);
 			goto err_mp_init_secondary;
 		}
-
 		hw->secondary_cnt++;
+		hns3_tx_push_init(eth_dev);
 		return 0;
 	}
 

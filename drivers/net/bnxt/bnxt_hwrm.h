@@ -301,4 +301,10 @@ int bnxt_hwrm_poll_ver_get(struct bnxt *bp);
 int bnxt_hwrm_rx_ring_reset(struct bnxt *bp, int queue_index);
 int bnxt_hwrm_ring_stats(struct bnxt *bp, uint32_t cid, int idx,
 			 struct bnxt_ring_stats *stats, bool rx);
+int bnxt_hwrm_read_sfp_module_eeprom_info(struct bnxt *bp, uint16_t i2c_addr,
+					  uint16_t page_number, uint16_t start_addr,
+					  uint16_t data_length, uint8_t *buf);
+int bnxt_hwrm_stat_ctx_alloc(struct bnxt *bp, struct bnxt_cp_ring_info *cpr);
+void bnxt_free_hwrm_tx_ring(struct bnxt *bp, int queue_index);
+int bnxt_alloc_hwrm_tx_ring(struct bnxt *bp, int queue_index);
 #endif

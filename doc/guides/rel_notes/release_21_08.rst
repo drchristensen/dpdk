@@ -61,12 +61,61 @@ New Features
   representing sub-domains of functionality. Each auxiliary device
   represents a part of its parent functionality.
 
+* **Added XZ compressed firmware support.**
+
+  Using ``rte_firmware_read``, a driver can now handle XZ compressed firmware
+  in a transparent way, with EAL uncompressing using libarchive if this library
+  is available when building DPDK.
+
+* **Updated Intel iavf driver.**
+
+  * Added Tx QoS VF queue TC mapping.
+
+* **Updated Intel ice driver.**
+
+  * In AVX2 code, added the new RX and TX paths to use the HW offload
+    features. When the HW offload features are configured to be used, the
+    offload paths are chosen automatically. In parallel the support for HW
+    offload features was removed from the legacy AVX2 paths.
+  * Added Tx QoS TC bandwidth configuration in DCF.
+
+* **Added support for Marvell CN10K SoC ethernet device.**
+
+  * Added net/cnxk driver which provides the support for the integrated ethernet
+    device.
+
+* **Updated Mellanox mlx5 driver.**
+
+  * Added support for meter hierarchy.
+  * Added devargs options ``allow_duplicate_pattern``.
+
+* **Added support for Marvell CNXK crypto driver.**
+
+  * Added cnxk crypto PMD which provides support for an integrated
+    crypto driver for CN9K and CN10K series of SOCs. Support for
+    symmetric crypto algorithms is added to both the PMDs.
+  * Added support for lookaside protocol (IPsec) offload in cn10k PMD.
+  * Added support for asymmetric crypto operations in cn9k and cn10k PMD.
+
+* **Updated Marvell OCTEON TX crypto PMD.**
+
+  Added support for crypto adapter OP_FORWARD mode.
+
 * **Added Baseband PHY CNXK PMD.**
 
   Added Baseband PHY PMD which allows to configure BPHY hardware block
   comprising accelerators and DSPs specifically tailored for 5G/LTE inline
   usecases. Configuration happens via standard rawdev enq/deq operations. See
   the :doc:`../rawdevs/cnxk_bphy` rawdev guide for more details on this driver.
+
+* **Added cppc_cpufreq support to Power Management library.**
+
+  Added support for cppc_cpufreq driver which works on most arm64 platforms.
+
+* **Added multi-queue support to Ethernet PMD Power Management**
+
+  The experimental PMD power management API now supports managing
+  multiple Ethernet Rx queues per lcore.
 
 
 Removed Items
@@ -99,6 +148,13 @@ API Changes
 
 * eal: ``rte_strscpy`` sets ``rte_errno`` to ``E2BIG`` in case of string
   truncation.
+
+* eal: ``rte_power_monitor`` and the ``rte_power_monitor_cond`` struct changed
+  to use a callback mechanism.
+
+* rte_power: The experimental PMD power management API is no longer considered
+  to be thread safe; all Rx queues affected by the API will now need to be
+  stopped before making any changes to the power management scheme.
 
 
 ABI Changes

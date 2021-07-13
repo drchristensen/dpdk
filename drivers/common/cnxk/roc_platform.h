@@ -49,6 +49,7 @@
 #define PLT_MODEL_MZ_NAME	 "roc_model_mz"
 #define PLT_CACHE_LINE_SIZE      RTE_CACHE_LINE_SIZE
 #define BITMASK_ULL		 GENMASK_ULL
+#define PLT_ALIGN_CEIL		 RTE_ALIGN_CEIL
 
 /** Divide ceil */
 #define PLT_DIV_CEIL(x, y)			\
@@ -127,6 +128,8 @@
 #define plt_memzone_reserve_cache_align(name, sz)                              \
 	rte_memzone_reserve_aligned(name, sz, 0, 0, RTE_CACHE_LINE_SIZE)
 #define plt_memzone_free rte_memzone_free
+#define plt_memzone_reserve_aligned(name, len, flags, align)                   \
+	rte_memzone_reserve_aligned((name), (len), 0, (flags), (align))
 
 #define plt_tsc_hz   rte_get_tsc_hz
 #define plt_delay_ms rte_delay_ms
@@ -139,6 +142,7 @@
 /* Log */
 extern int cnxk_logtype_base;
 extern int cnxk_logtype_mbox;
+extern int cnxk_logtype_cpt;
 extern int cnxk_logtype_npa;
 extern int cnxk_logtype_nix;
 extern int cnxk_logtype_npc;
@@ -161,6 +165,7 @@ extern int cnxk_logtype_tm;
 		##args)
 
 #define plt_base_dbg(fmt, ...)	plt_dbg(base, fmt, ##__VA_ARGS__)
+#define plt_cpt_dbg(fmt, ...)	plt_dbg(cpt, fmt, ##__VA_ARGS__)
 #define plt_mbox_dbg(fmt, ...)	plt_dbg(mbox, fmt, ##__VA_ARGS__)
 #define plt_npa_dbg(fmt, ...)	plt_dbg(npa, fmt, ##__VA_ARGS__)
 #define plt_nix_dbg(fmt, ...)	plt_dbg(nix, fmt, ##__VA_ARGS__)
@@ -168,6 +173,12 @@ extern int cnxk_logtype_tm;
 #define plt_sso_dbg(fmt, ...)	plt_dbg(sso, fmt, ##__VA_ARGS__)
 #define plt_tim_dbg(fmt, ...)	plt_dbg(tim, fmt, ##__VA_ARGS__)
 #define plt_tm_dbg(fmt, ...)	plt_dbg(tm, fmt, ##__VA_ARGS__)
+
+/* Datapath logs */
+#define plt_dp_err(fmt, args...)                                               \
+	RTE_LOG_DP(ERR, PMD, "%s():%u " fmt "\n", __func__, __LINE__, ##args)
+#define plt_dp_info(fmt, args...)                                              \
+	RTE_LOG_DP(INFO, PMD, "%s():%u " fmt "\n", __func__, __LINE__, ##args)
 
 #ifdef __cplusplus
 #define CNXK_PCI_ID(subsystem_dev, dev)                                        \
@@ -191,5 +202,16 @@ int roc_plt_init(void);
 /* Init callbacks */
 typedef int (*roc_plt_init_cb_t)(void);
 int __roc_api roc_plt_init_cb_register(roc_plt_init_cb_t cb);
+
+static inline const void *
+plt_lmt_region_reserve_aligned(const char *name, size_t len, uint32_t align)
+{
+	/* To ensure returned memory is physically contiguous, bounding
+	 * the start and end address in 2M range.
+	 */
+	return rte_memzone_reserve_bounded(name, len, SOCKET_ID_ANY,
+					   RTE_MEMZONE_IOVA_CONTIG,
+					   align, RTE_PGSIZE_2M);
+}
 
 #endif /* _ROC_PLATFORM_H_ */

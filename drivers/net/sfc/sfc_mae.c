@@ -728,6 +728,7 @@ sfc_mae_rule_process_pattern_data(struct sfc_mae_parse_ctx *ctx,
 		RTE_BE16(RTE_ETHER_TYPE_QINQ2),
 		RTE_BE16(RTE_ETHER_TYPE_QINQ3),
 	};
+	bool enforce_tag_presence[SFC_MAE_MATCH_VLAN_MAX_NTAGS] = {0};
 	unsigned int nb_supported_tpids = RTE_DIM(supported_tpids);
 	unsigned int ethertype_idx;
 	const uint8_t *valuep;
@@ -752,6 +753,22 @@ sfc_mae_rule_process_pattern_data(struct sfc_mae_parse_ctx *ctx,
 	for (ethertype_idx = 0;
 	     ethertype_idx < pdata->nb_vlan_tags; ++ethertype_idx) {
 		unsigned int tpid_idx;
+
+		/*
+		 * This loop can have only two iterations. On the second one,
+		 * drop outer tag presence enforcement bit because the inner
+		 * tag presence automatically assumes that for the outer tag.
+		 */
+		enforce_tag_presence[0] = B_FALSE;
+
+		if (ethertypes[ethertype_idx].mask == RTE_BE16(0)) {
+			if (pdata->tci_masks[ethertype_idx] == RTE_BE16(0))
+				enforce_tag_presence[ethertype_idx] = B_TRUE;
+
+			/* No match on this field, and no value check. */
+			nb_supported_tpids = 1;
+			continue;
+		}
 
 		/* Exact match is supported only. */
 		if (ethertypes[ethertype_idx].mask != RTE_BE16(0xffff)) {
@@ -810,6 +827,24 @@ sfc_mae_rule_process_pattern_data(struct sfc_mae_parse_ctx *ctx,
 			rc = EINVAL;
 			goto fail;
 		}
+	}
+
+	if (enforce_tag_presence[0] || pdata->has_ovlan_mask) {
+		rc = efx_mae_match_spec_bit_set(ctx->match_spec,
+						fremap[EFX_MAE_FIELD_HAS_OVLAN],
+						enforce_tag_presence[0] ||
+						pdata->has_ovlan_value);
+		if (rc != 0)
+			goto fail;
+	}
+
+	if (enforce_tag_presence[1] || pdata->has_ivlan_mask) {
+		rc = efx_mae_match_spec_bit_set(ctx->match_spec,
+						fremap[EFX_MAE_FIELD_HAS_IVLAN],
+						enforce_tag_presence[1] ||
+						pdata->has_ivlan_value);
+		if (rc != 0)
+			goto fail;
 	}
 
 	valuep = (const uint8_t *)&pdata->l3_next_proto_value;
@@ -1154,6 +1189,7 @@ sfc_mae_rule_parse_item_eth(const struct rte_flow_item *item,
 
 	sfc_mae_item_build_supp_mask(flocs_eth, RTE_DIM(flocs_eth),
 				     &supp_mask, sizeof(supp_mask));
+	supp_mask.has_vlan = 1;
 
 	rc = sfc_flow_parse_init(item,
 				 (const void **)&spec, (const void **)&mask,
@@ -1172,14 +1208,23 @@ sfc_mae_rule_parse_item_eth(const struct rte_flow_item *item,
 		item_spec = (const struct rte_flow_item_eth *)spec;
 		item_mask = (const struct rte_flow_item_eth *)mask;
 
+		/*
+		 * Remember various match criteria in the parsing context.
+		 * sfc_mae_rule_process_pattern_data() will consider them
+		 * altogether when the rest of the items have been parsed.
+		 */
 		ethertypes[0].value = item_spec->type;
 		ethertypes[0].mask = item_mask->type;
+		if (item_mask->has_vlan) {
+			pdata->has_ovlan_mask = B_TRUE;
+			if (item_spec->has_vlan)
+				pdata->has_ovlan_value = B_TRUE;
+		}
 	} else {
 		/*
-		 * The specification is empty. This is wrong in the case
-		 * when there are more network patterns in line. Other
-		 * than that, any Ethernet can match. All of that is
-		 * checked at the end of parsing.
+		 * The specification is empty. The overall pattern
+		 * validity will be enforced at the end of parsing.
+		 * See sfc_mae_rule_process_pattern_data().
 		 */
 		return 0;
 	}
@@ -1229,6 +1274,16 @@ sfc_mae_rule_parse_item_vlan(const struct rte_flow_item *item,
 {
 	struct sfc_mae_parse_ctx *ctx_mae = ctx->mae;
 	struct sfc_mae_pattern_data *pdata = &ctx_mae->pattern_data;
+	boolean_t *has_vlan_mp_by_nb_tags[SFC_MAE_MATCH_VLAN_MAX_NTAGS] = {
+		&pdata->has_ovlan_mask,
+		&pdata->has_ivlan_mask,
+	};
+	boolean_t *has_vlan_vp_by_nb_tags[SFC_MAE_MATCH_VLAN_MAX_NTAGS] = {
+		&pdata->has_ovlan_value,
+		&pdata->has_ivlan_value,
+	};
+	boolean_t *cur_tag_presence_bit_mp;
+	boolean_t *cur_tag_presence_bit_vp;
 	const struct sfc_mae_field_locator *flocs;
 	struct rte_flow_item_vlan supp_mask;
 	const uint8_t *spec = NULL;
@@ -1244,14 +1299,27 @@ sfc_mae_rule_parse_item_vlan(const struct rte_flow_item *item,
 				"Can't match that many VLAN tags");
 	}
 
+	cur_tag_presence_bit_mp = has_vlan_mp_by_nb_tags[pdata->nb_vlan_tags];
+	cur_tag_presence_bit_vp = has_vlan_vp_by_nb_tags[pdata->nb_vlan_tags];
+
+	if (*cur_tag_presence_bit_mp == B_TRUE &&
+	    *cur_tag_presence_bit_vp == B_FALSE) {
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ITEM, item,
+				"The previous item enforces no (more) VLAN, "
+				"so the current item (VLAN) must not exist");
+	}
+
 	nb_flocs = RTE_DIM(flocs_vlan) / SFC_MAE_MATCH_VLAN_MAX_NTAGS;
 	flocs = flocs_vlan + pdata->nb_vlan_tags * nb_flocs;
 
-	/* If parsing fails, this can remain incremented. */
-	++pdata->nb_vlan_tags;
-
 	sfc_mae_item_build_supp_mask(flocs, nb_flocs,
 				     &supp_mask, sizeof(supp_mask));
+	/*
+	 * This only means that the field is supported by the driver and libefx.
+	 * Support on NIC level will be checked when all items have been parsed.
+	 */
+	supp_mask.has_more_vlan = 1;
 
 	rc = sfc_flow_parse_init(item,
 				 (const void **)&spec, (const void **)&mask,
@@ -1262,26 +1330,44 @@ sfc_mae_rule_parse_item_vlan(const struct rte_flow_item *item,
 		return rc;
 
 	if (spec != NULL) {
-		struct sfc_mae_ethertype *ethertypes = pdata->ethertypes;
+		struct sfc_mae_ethertype *et = pdata->ethertypes;
 		const struct rte_flow_item_vlan *item_spec;
 		const struct rte_flow_item_vlan *item_mask;
 
 		item_spec = (const struct rte_flow_item_vlan *)spec;
 		item_mask = (const struct rte_flow_item_vlan *)mask;
 
-		ethertypes[pdata->nb_vlan_tags].value = item_spec->inner_type;
-		ethertypes[pdata->nb_vlan_tags].mask = item_mask->inner_type;
-	} else {
 		/*
-		 * The specification is empty. This is wrong in the case
-		 * when there are more network patterns in line. Other
-		 * than that, any Ethernet can match. All of that is
-		 * checked at the end of parsing.
+		 * Remember various match criteria in the parsing context.
+		 * sfc_mae_rule_process_pattern_data() will consider them
+		 * altogether when the rest of the items have been parsed.
 		 */
-		return 0;
+		et[pdata->nb_vlan_tags + 1].value = item_spec->inner_type;
+		et[pdata->nb_vlan_tags + 1].mask = item_mask->inner_type;
+		pdata->tci_masks[pdata->nb_vlan_tags] = item_mask->tci;
+		if (item_mask->has_more_vlan) {
+			if (pdata->nb_vlan_tags ==
+			    SFC_MAE_MATCH_VLAN_MAX_NTAGS) {
+				return rte_flow_error_set(error, ENOTSUP,
+					RTE_FLOW_ERROR_TYPE_ITEM, item,
+					"Can't use 'has_more_vlan' in "
+					"the second item VLAN");
+			}
+			pdata->has_ivlan_mask = B_TRUE;
+			if (item_spec->has_more_vlan)
+				pdata->has_ivlan_value = B_TRUE;
+		}
+
+		/* Convert TCI to MAE representation right now. */
+		rc = sfc_mae_parse_item(flocs, nb_flocs, spec, mask,
+					ctx_mae, error);
+		if (rc != 0)
+			return rc;
 	}
 
-	return sfc_mae_parse_item(flocs, nb_flocs, spec, mask, ctx_mae, error);
+	++(pdata->nb_vlan_tags);
+
+	return 0;
 }
 
 static const struct sfc_mae_field_locator flocs_ipv4[] = {
@@ -1612,6 +1698,8 @@ static const efx_mae_field_id_t field_ids_no_remap[] = {
 	FIELD_ID_NO_REMAP(L4_SPORT_BE),
 	FIELD_ID_NO_REMAP(L4_DPORT_BE),
 	FIELD_ID_NO_REMAP(TCP_FLAGS_BE),
+	FIELD_ID_NO_REMAP(HAS_OVLAN),
+	FIELD_ID_NO_REMAP(HAS_IVLAN),
 
 #undef FIELD_ID_NO_REMAP
 };
@@ -1642,6 +1730,8 @@ static const efx_mae_field_id_t field_ids_remap_to_encap[] = {
 	FIELD_ID_REMAP_TO_ENCAP(DST_IP6_BE),
 	FIELD_ID_REMAP_TO_ENCAP(L4_SPORT_BE),
 	FIELD_ID_REMAP_TO_ENCAP(L4_DPORT_BE),
+	FIELD_ID_REMAP_TO_ENCAP(HAS_OVLAN),
+	FIELD_ID_REMAP_TO_ENCAP(HAS_IVLAN),
 
 #undef FIELD_ID_REMAP_TO_ENCAP
 };
@@ -1838,12 +1928,12 @@ sfc_mae_rule_process_outer(struct sfc_adapter *sa,
 			   struct sfc_mae_outer_rule **rulep,
 			   struct rte_flow_error *error)
 {
-	struct sfc_mae_outer_rule *rule;
+	efx_mae_rule_id_t invalid_rule_id = { .id = EFX_MAE_RSRC_ID_INVALID };
 	int rc;
 
 	if (ctx->encap_type == EFX_TUNNEL_PROTOCOL_NONE) {
 		*rulep = NULL;
-		return 0;
+		goto no_or_id;
 	}
 
 	SFC_ASSERT(ctx->match_spec_outer != NULL);
@@ -1871,21 +1961,27 @@ sfc_mae_rule_process_outer(struct sfc_adapter *sa,
 	/* The spec has now been tracked by the outer rule entry. */
 	ctx->match_spec_outer = NULL;
 
+no_or_id:
 	/*
-	 * Depending on whether we reuse an existing outer rule or create a
-	 * new one (see above), outer rule ID is either a valid value or
-	 * EFX_MAE_RSRC_ID_INVALID. Set it in the action rule match
-	 * specification (and the full mask, too) in order to have correct
-	 * class comparisons of the new rule with existing ones.
-	 * Also, action rule match specification will be validated shortly,
-	 * and having the full mask set for outer rule ID indicates that we
-	 * will use this field, and support for this field has to be checked.
+	 * In MAE, lookup sequence comprises outer parse, outer rule lookup,
+	 * inner parse (when some outer rule is hit) and action rule lookup.
+	 * If the currently processed flow does not come with an outer rule,
+	 * its action rule must be available only for packets which miss in
+	 * outer rule table. Set OR_ID match field to 0xffffffff/0xffffffff
+	 * in the action rule specification; this ensures correct behaviour.
+	 *
+	 * If, on the other hand, this flow does have an outer rule, its ID
+	 * may be unknown at the moment (not yet allocated), but OR_ID mask
+	 * has to be set to 0xffffffff anyway for correct class comparisons.
+	 * When the outer rule has been allocated, this match field will be
+	 * overridden by sfc_mae_outer_rule_enable() to use the right value.
 	 */
-	rule = *rulep;
 	rc = efx_mae_match_spec_outer_rule_id_set(ctx->match_spec_action,
-						  &rule->fw_rsrc.rule_id);
+						  &invalid_rule_id);
 	if (rc != 0) {
-		sfc_mae_outer_rule_del(sa, *rulep);
+		if (*rulep != NULL)
+			sfc_mae_outer_rule_del(sa, *rulep);
+
 		*rulep = NULL;
 
 		return rte_flow_error_set(error, rc,
@@ -2562,6 +2658,9 @@ sfc_mae_rule_parse_action_port_id(struct sfc_adapter *sa,
 	efx_mport_sel_t mport;
 	uint16_t port_id;
 	int rc;
+
+	if (conf->id > UINT16_MAX)
+		return EOVERFLOW;
 
 	port_id = (conf->original != 0) ? sas->port_id : conf->id;
 

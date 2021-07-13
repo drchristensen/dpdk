@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
+if is_windows
+	build = false
+	reason = 'not supported on Windows'
+	subdir_done()
+endif
+
 if not get_option('tests')
     subdir_done()
 endif
@@ -17,6 +23,7 @@ test_sources = files(
         'test_bitmap.c',
         'test_bpf.c',
         'test_byteorder.c',
+        'test_cksum.c',
         'test_cmdline.c',
         'test_cmdline_cirbuf.c',
         'test_cmdline_etheraddr.c',
@@ -188,6 +195,7 @@ fast_tests = [
         ['atomic_autotest', false],
         ['bitops_autotest', true],
         ['byteorder_autotest', true],
+        ['cksum_autotest', true],
         ['cmdline_autotest', true],
         ['common_autotest', true],
         ['cpuflags_autotest', true],
@@ -311,6 +319,8 @@ perf_test_names = [
 driver_test_names = [
         'cryptodev_aesni_mb_autotest',
         'cryptodev_aesni_gcm_autotest',
+        'cryptodev_cn9k_autotest',
+        'cryptodev_cn10k_autotest',
         'cryptodev_dpaa_sec_autotest',
         'cryptodev_dpaa2_sec_autotest',
         'cryptodev_null_autotest',

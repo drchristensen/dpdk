@@ -9,6 +9,7 @@ sources = files(
         'guest_channel.c',
         'power_acpi_cpufreq.c',
         'power_common.c',
+        'power_cppc_cpufreq.c',
         'power_kvm_vm.c',
         'power_pstate_cpufreq.c',
         'rte_power.c',
@@ -21,4 +22,7 @@ headers = files(
         'rte_power_pmd_mgmt.h',
         'rte_power_guest_channel.h',
 )
+if cc.has_argument('-Wno-cast-qual')
+    cflags += '-Wno-cast-qual'
+endif
 deps += ['timer', 'ethdev']

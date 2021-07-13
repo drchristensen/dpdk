@@ -30,6 +30,8 @@
 #include <rte_spinlock.h>
 #include <rte_service_component.h>
 
+#include "eal_firmware.h"
+
 #include "nfpcore/nfp_cpp.h"
 #include "nfpcore/nfp_nffw.h"
 #include "nfpcore/nfp_hwinfo.h"
@@ -58,7 +60,8 @@ static int nfp_net_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 static int nfp_net_infos_get(struct rte_eth_dev *dev,
 			     struct rte_eth_dev_info *dev_info);
 static int nfp_net_init(struct rte_eth_dev *eth_dev);
-static int nfp_pf_init(struct rte_eth_dev *eth_dev);
+static int nfp_pf_init(struct rte_pci_device *pci_dev);
+static int nfp_pf_secondary_init(struct rte_pci_device *pci_dev);
 static int nfp_pci_uninit(struct rte_eth_dev *eth_dev);
 static int nfp_init_phyports(struct nfp_pf_dev *pf_dev);
 static int nfp_net_link_update(struct rte_eth_dev *dev, int wait_to_complete);
@@ -98,6 +101,7 @@ static int nfp_net_rss_hash_write(struct rte_eth_dev *dev,
 static int nfp_set_mac_addr(struct rte_eth_dev *dev,
 			     struct rte_ether_addr *mac_addr);
 static int32_t nfp_cpp_bridge_service_func(void *args);
+static void nfp_register_cpp_service(struct nfp_cpp *cpp);
 static int nfp_fw_setup(struct rte_pci_device *dev,
 			struct nfp_cpp *cpp,
 			struct nfp_eth_table *nfp_eth_table,
@@ -3366,12 +3370,10 @@ static int
 nfp_fw_upload(struct rte_pci_device *dev, struct nfp_nsp *nsp, char *card)
 {
 	struct nfp_cpp *cpp = nsp->cpp;
-	int fw_f;
-	char *fw_buf;
+	void *fw_buf;
 	char fw_name[125];
 	char serial[40];
-	struct stat file_stat;
-	off_t fsize, bytes;
+	size_t fsize;
 
 	/* Looking for firmware file in order of priority */
 
@@ -3384,66 +3386,34 @@ nfp_fw_upload(struct rte_pci_device *dev, struct nfp_nsp *nsp, char *card)
 
 	snprintf(fw_name, sizeof(fw_name), "%s/%s.nffw", DEFAULT_FW_PATH,
 			serial);
-
 	PMD_DRV_LOG(DEBUG, "Trying with fw file: %s", fw_name);
-	fw_f = open(fw_name, O_RDONLY);
-	if (fw_f >= 0)
-		goto read_fw;
+	if (rte_firmware_read(fw_name, &fw_buf, &fsize) == 0)
+		goto load_fw;
 
 	/* Then try the PCI name */
 	snprintf(fw_name, sizeof(fw_name), "%s/pci-%s.nffw", DEFAULT_FW_PATH,
 			dev->device.name);
-
 	PMD_DRV_LOG(DEBUG, "Trying with fw file: %s", fw_name);
-	fw_f = open(fw_name, O_RDONLY);
-	if (fw_f >= 0)
-		goto read_fw;
+	if (rte_firmware_read(fw_name, &fw_buf, &fsize) == 0)
+		goto load_fw;
 
 	/* Finally try the card type and media */
 	snprintf(fw_name, sizeof(fw_name), "%s/%s", DEFAULT_FW_PATH, card);
 	PMD_DRV_LOG(DEBUG, "Trying with fw file: %s", fw_name);
-	fw_f = open(fw_name, O_RDONLY);
-	if (fw_f < 0) {
+	if (rte_firmware_read(fw_name, &fw_buf, &fsize) < 0) {
 		PMD_DRV_LOG(INFO, "Firmware file %s not found.", fw_name);
 		return -ENOENT;
 	}
 
-read_fw:
-	if (fstat(fw_f, &file_stat) < 0) {
-		PMD_DRV_LOG(INFO, "Firmware file %s size is unknown", fw_name);
-		close(fw_f);
-		return -ENOENT;
-	}
-
-	fsize = file_stat.st_size;
-	PMD_DRV_LOG(INFO, "Firmware file found at %s with size: %" PRIu64 "",
-			    fw_name, (uint64_t)fsize);
-
-	fw_buf = malloc((size_t)fsize);
-	if (!fw_buf) {
-		PMD_DRV_LOG(INFO, "malloc failed for fw buffer");
-		close(fw_f);
-		return -ENOMEM;
-	}
-	memset(fw_buf, 0, fsize);
-
-	bytes = read(fw_f, fw_buf, fsize);
-	if (bytes != fsize) {
-		PMD_DRV_LOG(INFO, "Reading fw to buffer failed."
-				   "Just %" PRIu64 " of %" PRIu64 " bytes read",
-				   (uint64_t)bytes, (uint64_t)fsize);
-		free(fw_buf);
-		close(fw_f);
-		return -EIO;
-	}
+load_fw:
+	PMD_DRV_LOG(INFO, "Firmware file found at %s with size: %zu",
+		fw_name, fsize);
 
 	PMD_DRV_LOG(INFO, "Uploading the firmware ...");
-	nfp_nsp_load_fw(nsp, fw_buf, bytes);
+	nfp_nsp_load_fw(nsp, fw_buf, fsize);
 	PMD_DRV_LOG(INFO, "Done");
 
 	free(fw_buf);
-	close(fw_f);
-
 	return 0;
 }
 
@@ -3516,34 +3486,14 @@ static int nfp_init_phyports(struct nfp_pf_dev *pf_dev)
 		snprintf(port_name, sizeof(port_name), "%s_port%d",
 			 pf_dev->pci_dev->device.name, i);
 
-		if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
-			eth_dev = rte_eth_dev_attach_secondary(port_name);
-			if (!eth_dev) {
-				RTE_LOG(ERR, EAL,
-				"secondary process attach failed, "
-				"ethdev doesn't exist");
-				ret = -ENODEV;
-				goto error;
-			}
-
-			eth_dev->process_private = pf_dev->cpp;
-			goto nfp_net_init;
-		}
-
-		/* First port has already been initialized */
-		if (i == 0) {
-			eth_dev = pf_dev->eth_dev;
-			goto skip_dev_alloc;
-		}
-
-		/* Allocate a eth_dev for remaining ports */
+		/* Allocate a eth_dev for this phyport */
 		eth_dev = rte_eth_dev_allocate(port_name);
 		if (!eth_dev) {
 			ret = -ENODEV;
 			goto port_cleanup;
 		}
 
-		/* Allocate memory for remaining ports */
+		/* Allocate memory for this phyport */
 		eth_dev->data->dev_private =
 			rte_zmalloc_socket(port_name, sizeof(struct nfp_net_hw),
 					   RTE_CACHE_LINE_SIZE, numa_node);
@@ -3553,7 +3503,6 @@ static int nfp_init_phyports(struct nfp_pf_dev *pf_dev)
 			goto port_cleanup;
 		}
 
-skip_dev_alloc:
 		hw = NFP_NET_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 
 		/* Add this device to the PF's array of physical ports */
@@ -3566,7 +3515,6 @@ skip_dev_alloc:
 		hw->nfp_idx = nfp_eth_table->ports[i].index;
 		hw->is_phyport = true;
 
-nfp_net_init:
 		eth_dev->device = &pf_dev->pci_dev->device;
 
 		/* ctrl/tx/rx BAR mappings and remaining init happens in
@@ -3600,23 +3548,34 @@ error:
 	return ret;
 }
 
-static int nfp_pf_init(struct rte_eth_dev *eth_dev)
+static void nfp_register_cpp_service(struct nfp_cpp *cpp)
 {
-	struct rte_pci_device *pci_dev;
-	struct nfp_net_hw *hw = NULL;
+	uint32_t *cpp_service_id = NULL;
+	struct rte_service_spec service;
+
+	memset(&service, 0, sizeof(struct rte_service_spec));
+	snprintf(service.name, sizeof(service.name), "nfp_cpp_service");
+	service.callback = nfp_cpp_bridge_service_func;
+	service.callback_userdata = (void *)cpp;
+
+	if (rte_service_component_register(&service,
+					   cpp_service_id))
+		RTE_LOG(WARNING, PMD, "NFP CPP bridge service register() failed");
+	else
+		RTE_LOG(DEBUG, PMD, "NFP CPP bridge service registered");
+}
+
+static int nfp_pf_init(struct rte_pci_device *pci_dev)
+{
 	struct nfp_pf_dev *pf_dev = NULL;
 	struct nfp_cpp *cpp;
 	struct nfp_hwinfo *hwinfo;
 	struct nfp_rtsym_table *sym_tbl;
 	struct nfp_eth_table *nfp_eth_table = NULL;
-	struct rte_service_spec service;
 	char name[RTE_ETH_NAME_MAX_LEN];
 	int total_ports;
 	int ret = -ENODEV;
 	int err;
-
-	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
-	hw = NFP_NET_DEV_PRIVATE_TO_HW(eth_dev);
 
 	if (!pci_dev)
 		return ret;
@@ -3653,12 +3612,10 @@ static int nfp_pf_init(struct rte_eth_dev *eth_dev)
 		goto hwinfo_cleanup;
 	}
 
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		if (nfp_fw_setup(pci_dev, cpp, nfp_eth_table, hwinfo)) {
-			PMD_INIT_LOG(ERR, "Error when uploading firmware");
-			ret = -EIO;
-			goto eth_table_cleanup;
-		}
+	if (nfp_fw_setup(pci_dev, cpp, nfp_eth_table, hwinfo)) {
+		PMD_INIT_LOG(ERR, "Error when uploading firmware");
+		ret = -EIO;
+		goto eth_table_cleanup;
 	}
 
 	/* Now the symbol table should be there */
@@ -3685,7 +3642,7 @@ static int nfp_pf_init(struct rte_eth_dev *eth_dev)
 		goto sym_tbl_cleanup;
 	}
 	/* Allocate memory for the PF "device" */
-	snprintf(name, sizeof(name), "nfp_pf%d", eth_dev->data->port_id);
+	snprintf(name, sizeof(name), "nfp_pf%d", 0);
 	pf_dev = rte_zmalloc(name, sizeof(*pf_dev), 0);
 	if (!pf_dev) {
 		ret = -ENOMEM;
@@ -3702,9 +3659,6 @@ static int nfp_pf_init(struct rte_eth_dev *eth_dev)
 		pf_dev->multiport = true;
 
 	pf_dev->pci_dev = pci_dev;
-
-	/* The first eth_dev is part of the PF struct */
-	pf_dev->eth_dev = eth_dev;
 
 	/* Map the symbol table */
 	pf_dev->ctrl_bar = nfp_rtsym_map(pf_dev->sym_tbl, "_pf0_net_bar0",
@@ -3740,24 +3694,8 @@ static int nfp_pf_init(struct rte_eth_dev *eth_dev)
 		goto hwqueues_cleanup;
 	}
 
-	/*
-	 * The rte_service needs to be created just once per PMD.
-	 * And the cpp handler needs to be linked to the service.
-	 * Secondary processes will be used for debugging DPDK apps
-	 * when requiring to use the CPP interface for accessing NFP
-	 * components. And the cpp handler for secondary processes is
-	 * available at this point.
-	 */
-	memset(&service, 0, sizeof(struct rte_service_spec));
-	snprintf(service.name, sizeof(service.name), "nfp_cpp_service");
-	service.callback = nfp_cpp_bridge_service_func;
-	service.callback_userdata = (void *)cpp;
-
-	if (rte_service_component_register(&service,
-					   &hw->nfp_cpp_service_id))
-		RTE_LOG(ERR, PMD, "NFP CPP bridge service register() failed");
-	else
-		RTE_LOG(DEBUG, PMD, "NFP CPP bridge service registered");
+	/* register the CPP bridge service here for primary use */
+	nfp_register_cpp_service(pf_dev->cpp);
 
 	return 0;
 
@@ -3777,11 +3715,89 @@ error:
 	return ret;
 }
 
+/*
+ * When attaching to the NFP4000/6000 PF on a secondary process there
+ * is no need to initialize the PF again. Only minimal work is required
+ * here
+ */
+static int nfp_pf_secondary_init(struct rte_pci_device *pci_dev)
+{
+	struct nfp_cpp *cpp;
+	struct nfp_rtsym_table *sym_tbl;
+	int total_ports;
+	int i;
+	int err;
+
+	if (!pci_dev)
+		return -ENODEV;
+
+	/*
+	 * When device bound to UIO, the device could be used, by mistake,
+	 * by two DPDK apps, and the UIO driver does not avoid it. This
+	 * could lead to a serious problem when configuring the NFP CPP
+	 * interface. Here we avoid this telling to the CPP init code to
+	 * use a lock file if UIO is being used.
+	 */
+	if (pci_dev->kdrv == RTE_PCI_KDRV_VFIO)
+		cpp = nfp_cpp_from_device_name(pci_dev, 0);
+	else
+		cpp = nfp_cpp_from_device_name(pci_dev, 1);
+
+	if (!cpp) {
+		PMD_INIT_LOG(ERR, "A CPP handle can not be obtained");
+		return -EIO;
+	}
+
+	/*
+	 * We don't have access to the PF created in the primary process
+	 * here so we have to read the number of ports from firmware
+	 */
+	sym_tbl = nfp_rtsym_table_read(cpp);
+	if (!sym_tbl) {
+		PMD_INIT_LOG(ERR, "Something is wrong with the firmware"
+				" symbol table");
+		return -EIO;
+	}
+
+	total_ports = nfp_rtsym_read_le(sym_tbl, "nfd_cfg_pf0_num_ports", &err);
+
+	for (i = 0; i < total_ports; i++) {
+		struct rte_eth_dev *eth_dev;
+		char port_name[RTE_ETH_NAME_MAX_LEN];
+
+		snprintf(port_name, sizeof(port_name), "%s_port%d",
+			 pci_dev->device.name, i);
+
+		PMD_DRV_LOG(DEBUG, "Secondary attaching to port %s",
+		    port_name);
+		eth_dev = rte_eth_dev_attach_secondary(port_name);
+		if (!eth_dev) {
+			RTE_LOG(ERR, EAL,
+			"secondary process attach failed, "
+			"ethdev doesn't exist");
+			return -ENODEV;
+		}
+		eth_dev->process_private = cpp;
+		eth_dev->dev_ops = &nfp_net_eth_dev_ops;
+		eth_dev->rx_queue_count = nfp_net_rx_queue_count;
+		eth_dev->rx_pkt_burst = &nfp_net_recv_pkts;
+		eth_dev->tx_pkt_burst = &nfp_net_xmit_pkts;
+		rte_eth_dev_probing_finish(eth_dev);
+	}
+
+	/* Register the CPP bridge service for the secondary too */
+	nfp_register_cpp_service(cpp);
+
+	return 0;
+}
+
 static int nfp_pf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			    struct rte_pci_device *dev)
 {
-	return rte_eth_dev_pci_generic_probe(dev,
-		sizeof(struct nfp_net_hw), nfp_pf_init);
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+		return nfp_pf_init(dev);
+	else
+		return nfp_pf_secondary_init(dev);
 }
 
 static const struct rte_pci_id pci_id_nfp_pf_net_map[] = {

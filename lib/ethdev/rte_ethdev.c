@@ -1356,6 +1356,13 @@ rte_eth_dev_configure(uint16_t port_id, uint16_t nb_rx_q, uint16_t nb_tx_q,
 		return -EBUSY;
 	}
 
+	/*
+	 * Ensure that "dev_configured" is always 0 each time prepare to do
+	 * dev_configure() to avoid any non-anticipated behaviour.
+	 * And set to 1 when dev_configure() is executed successfully.
+	 */
+	dev->data->dev_configured = 0;
+
 	 /* Store original config, as rollback required on failure */
 	memcpy(&orig_conf, &dev->data->dev_conf, sizeof(dev->data->dev_conf));
 
@@ -1605,6 +1612,7 @@ rte_eth_dev_configure(uint16_t port_id, uint16_t nb_rx_q, uint16_t nb_tx_q,
 		goto reset_queues;
 	}
 
+	dev->data->dev_configured = 1;
 	rte_ethdev_trace_configure(port_id, nb_rx_q, nb_tx_q, dev_conf, 0);
 	return 0;
 reset_queues:
@@ -1750,6 +1758,13 @@ rte_eth_dev_start(uint16_t port_id)
 	dev = &rte_eth_devices[port_id];
 
 	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_start, -ENOTSUP);
+
+	if (dev->data->dev_configured == 0) {
+		RTE_ETHDEV_LOG(INFO,
+			"Device with port_id=%"PRIu16" is not configured.\n",
+			port_id);
+		return -EINVAL;
+	}
 
 	if (dev->data->dev_started != 0) {
 		RTE_ETHDEV_LOG(INFO,
@@ -5987,7 +6002,8 @@ rte_eth_representor_id_get(const struct rte_eth_dev *ethdev,
 			   int controller, int pf, int representor_port,
 			   uint16_t *repr_id)
 {
-	int ret, n, i, count;
+	int ret, n, count;
+	uint32_t i;
 	struct rte_eth_representor_info *info = NULL;
 	size_t size;
 
@@ -6011,6 +6027,7 @@ rte_eth_representor_id_get(const struct rte_eth_dev *ethdev,
 	info = calloc(1, size);
 	if (info == NULL)
 		return -ENOMEM;
+	info->nb_ranges_alloc = n;
 	ret = rte_eth_representor_info_get(ethdev->data->port_id, info);
 	if (ret < 0)
 		goto out;
@@ -6023,7 +6040,7 @@ rte_eth_representor_id_get(const struct rte_eth_dev *ethdev,
 
 	/* Locate representor ID. */
 	ret = -ENOENT;
-	for (i = 0; i < n; ++i) {
+	for (i = 0; i < info->nb_ranges; ++i) {
 		if (info->ranges[i].type != type)
 			continue;
 		if (info->ranges[i].controller != controller)

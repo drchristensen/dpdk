@@ -8,6 +8,7 @@
 #include <rte_malloc.h>
 
 #include "bnxt.h"
+#include "bnxt_hwrm.h"
 #include "bnxt_ring.h"
 #include "bnxt_txq.h"
 #include "bnxt_txr.h"
@@ -61,6 +62,7 @@ void bnxt_tx_queue_release_op(void *tx_queue)
 			return;
 
 		/* Free TX ring hardware descriptors */
+		bnxt_free_hwrm_tx_ring(txq->bp, txq->queue_id);
 		bnxt_tx_queue_release_mbufs(txq);
 		if (txq->tx_ring) {
 			bnxt_free_ring(txq->tx_ring->tx_ring_struct);
@@ -149,8 +151,8 @@ int bnxt_tx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	txq->port_id = eth_dev->data->port_id;
 
 	/* Allocate TX ring hardware descriptors */
-	if (bnxt_alloc_rings(bp, queue_idx, txq, NULL, txq->cp_ring, NULL,
-			     "txr")) {
+	if (bnxt_alloc_rings(bp, socket_id, queue_idx, txq, NULL, txq->cp_ring,
+			     NULL, "txr")) {
 		PMD_DRV_LOG(ERR, "ring_dma_zone_reserve for tx_ring failed!");
 		rc = -ENOMEM;
 		goto err;
